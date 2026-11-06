@@ -346,21 +346,27 @@ built-in verb (`Preview*`, `Recalculate*`, …).
   redacted as the page is read, so a page that displays a secret never reaches a model and never
   ends the run.
 - Code, not the model, types a bound secret into a field. The model sees `«secret:VAR»`.
-- An MCP request never carries a secret parameter's value: it is refused by name with
-  `E_SECRET_PARAM_OVER_MCP` before anything runs. On a replay the value comes from an environment
-  variable through `journey run --secret-field` or `secretFields` in `targets.json`; `--param` on the
-  CLI still works and warns on stderr
+- Over MCP a Journey that needs a secret parameter doesn't run: `E_SECRET_PARAM_OVER_MCP`, by name,
+  before anything runs. A person runs it on the CLI, where the value comes from an environment variable
+  through `journey run --secret-field` or `secretFields` in `targets.json`; `--param` still works and
+  warns on stderr. Or it uses a stored session and needs no secret
   ([Secret parameters on a replay](./journeys.md#secret-parameters-on-a-replay)).
 - A credential-like name is refused however it is spelt, broadly on purpose. `secret: false` lifts that
-  only when a person approved that Journey; an approval over MCP does not, per Journey. Provenance is
+  only when a person approved that Journey and the approval still matches it; per Journey. Provenance is
   detection, not proof: an agent that can edit the Journey file can also write the channel, and git
   review of `.jevitate/` is what catches that.
-- A value from a binding is typed only on the binding's origin, read with the field in hand, or the
-  step fails with `E_SECRET_ORIGIN_REFUSED`. Limit: a page that navigates in the instant between that
-  read and the value going in can't be excluded, though an element handle dies with its document.
-- Everything a self-heal sends a model is redacted with the run's whole set: secret parameters,
-  fixture secrets and credential-named outputs, and credentials extracted so far. Its evidence
-  screenshots use the same set. A secret the page transforms (lower-cased, say) is not recognised.
+- A value from a binding goes in only at a field, on the binding's origin, read with the field in hand,
+  or the run fails with `E_SECRET_ORIGIN_REFUSED`; a `navigate` URL or `http` check holding one refuses
+  before anything runs. Limit: a page that navigates in the instant between that read and the value
+  going in can't be excluded, though an element handle dies with its document and `editText` inserts
+  the whole value at once.
+- Every model call passes one point, the gateway (`OpenRouterGenerationGateway`, `JevJudgmentGateway`).
+  It masks every value the process's runs registered, whoever the caller is: secret parameters, fixture
+  secrets and credential-named outputs, credentials extracted so far. A secret the page transforms
+  (lower-cased, say) is not recognised. Evidence screenshots mask the same values.
+- Redaction is for what a person or a model reads, never for what a page gets: a run that would type
+  masked text fails (`E_REDACTED_VALUE`). `journey chain` hands on what the producer extracted, except
+  a value under a name the narrower rule refuses (`apiKey`, `token`), so that consumer fails instead.
 - `--storage-state` files go only to the browser. Artifacts record their path, never their
   contents.
 - `jevitate login` (#427, #449) reads credentials only from the environment variables its flags

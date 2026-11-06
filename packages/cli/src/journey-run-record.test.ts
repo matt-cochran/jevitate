@@ -30,6 +30,7 @@ let server: Server;
 let origin: string;
 let root: string;
 let journeysDir: string;
+let mcpJourneysDir: string;
 let logs: string;
 
 function journey(id: string, last: "ok" | "fails"): Journey {
@@ -76,12 +77,9 @@ function records(): Array<{ path: string; text: string; record: JourneyRunRecord
 }
 
 const mcpRun = async (id: string): Promise<{ text: string; body: Record<string, unknown> }> => {
-  // The secret parameter comes from the operator's targets.json: an MCP request never carries one.
-  vi.stubEnv("JEV_RECORD_API_KEY", SECRET);
-  writeFileSync(join(root, "environments.json"), JSON.stringify({ local: { baseUrl: origin } }));
-  writeFileSync(join(root, "targets.json"), JSON.stringify({ [origin]: { secretFields: ["testId=note=env:JEV_RECORD_API_KEY"] } }));
-  const tool = buildMcpTools({ journeysDir, pathRoots: [root], runRecordLogsRoot: logs, environmentsFile: join(root, "environments.json"), targetsConfigPath: join(root, "targets.json") }).find((t) => t.name === "run_journey")!;
-  const text = (await tool.handler({ id, env: "local", params: { customer: PLAIN } })).content[0]!.text;
+  // Over MCP a Journey needing a secret doesn't run, so these take the same value as a plain parameter.
+  const tool = buildMcpTools({ journeysDir: mcpJourneysDir, pathRoots: [root], runRecordLogsRoot: logs }).find((t) => t.name === "run_journey")!;
+  const text = (await tool.handler({ id, params: { note: SECRET, customer: PLAIN } })).content[0]!.text;
   return { text, body: JSON.parse(text) as Record<string, unknown> };
 };
 
@@ -125,6 +123,13 @@ beforeAll(async () => {
   mkdirSync(journeysDir, { recursive: true });
   logs = join(root, "logs");
   for (const j of [journey("good", "ok"), journey("bad", "fails")]) writeFileSync(join(journeysDir, `${j.metadata.id}.json`), JSON.stringify(j));
+  mcpJourneysDir = join(root, "mcp-journeys");
+  mkdirSync(mcpJourneysDir, { recursive: true });
+  for (const name of ["good", "bad", "draft"]) {
+    const j = JSON.parse(JSON.stringify(name === "draft" ? { ...journey("draft", "ok"), metadata: { ...journey("draft", "ok").metadata, promoted: false, approval: undefined } } : journey(name, name === "good" ? "ok" : "fails")).replaceAll('"apiKey"', '"note"').replace('"secret":true', '"secret":false')) as Journey;
+    if (name !== "draft") j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z" };
+    writeFileSync(join(mcpJourneysDir, `${name}.json`), JSON.stringify(j));
+  }
   writeFileSync(join(journeysDir, "draft.json"), JSON.stringify({ ...journey("draft", "ok"), metadata: { ...journey("draft", "ok").metadata, promoted: false, approval: undefined } }));
 });
 
@@ -154,7 +159,7 @@ describe("#790 the record over MCP", () => {
     expect(r.body.outcome, r.text).toBe("ok");
     const [one, ...rest] = records();
     expect(rest).toEqual([]);
-    expect(one!.record).toMatchObject({ kind: "journey-run", channel: "mcp", journey: { id: "good", hash: journeyReviewHash(journey("good", "ok")) }, origin, outcome: "ok", stepCount: 4 });
+    expect(one!.record).toMatchObject({ kind: "journey-run", channel: "mcp", journey: { id: "good", hash: journeyReviewHash(JSON.parse(readFileSync(join(mcpJourneysDir, "good.json"), "utf8")) as Journey) }, origin, outcome: "ok", stepCount: 4 });
     expect(one!.record.writes).toEqual({ count: 1, refused: 0, shapes: [{ method: "POST", path: "/api/v2/customers/:param/notes/:id", count: 1 }] });
     expect(Date.parse(one!.record.endedAt)).toBeGreaterThanOrEqual(Date.parse(one!.record.startedAt));
     expectValueFree(one!.text);

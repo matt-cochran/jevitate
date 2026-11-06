@@ -138,3 +138,42 @@ export function redactCredentialShapes(text: string): string {
   const found = revealedSecretsIn(text);
   return found.length === 0 ? text : redactText(text, found);
 }
+
+/** The most values held: a long-lived server's oldest fall out first, which is what any bound has to give up. */
+const MAX_MODEL_SECRETS = 2000;
+const modelSecrets = new Set<string>();
+
+/**
+ * The values no model call from this process may carry from now on: a run's secret parameters,
+ * fixture secrets, extracted credentials. The gateways read this, so a new caller can't forget it.
+ * Held in memory only, for the process, whichever run registered them: more redaction is always safe.
+ */
+export function registerModelSecrets(values: readonly string[]): void {
+  for (const v of values) if (typeof v === "string" && v.trim() !== "") modelSecrets.add(v);
+  for (const oldest of modelSecrets) {
+    if (modelSecrets.size <= MAX_MODEL_SECRETS) break;
+    modelSecrets.delete(oldest);
+  }
+}
+
+/** Test seam. */
+export function clearModelSecrets(): void {
+  modelSecrets.clear();
+}
+
+function redactStrings(value: unknown, secrets: readonly string[]): unknown {
+  if (typeof value === "string") return redactText(value, secrets);
+  if (Array.isArray(value)) return value.map((v) => redactStrings(v, secrets));
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).map(([k, v]) => [redactText(k, secrets), redactStrings(v, secrets)]));
+}
+
+/** The one point a payload passes on its way to a model: every registered value masked in every string, then proved gone. */
+export function redactModelPayload<T>(payload: T): T {
+  if (modelSecrets.size === 0) return payload;
+  const secrets = [...modelSecrets];
+  const redacted = redactStrings(payload, secrets) as T;
+  assertNoSecretInPayload(redacted, secrets);
+  return redacted;
+}
+

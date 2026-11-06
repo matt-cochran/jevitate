@@ -109,9 +109,11 @@ function placeSelection(
  * Performs `edit` inside the contenteditable `locator` resolves to. Throws (fail-closed) when the
  * target is not a contenteditable or the anchor cannot be placed; the page is untouched then.
  */
-export async function applyTextEdit(page: Page, locator: Locator, edit: TextEdit & { readonly beforeType?: () => void }): Promise<void> {
+export async function applyTextEdit(page: Page, locator: Locator, edit: TextEdit & { readonly beforeType?: () => void; readonly insertWhole?: boolean }): Promise<void> {
   const caret: "start" | "end" | null = edit.action === "insertBefore" ? "start" : edit.action === "insertAfter" ? "end" : null;
-  const placed = await locator.evaluate(placeSelection, { anchor: edit.anchor, caret });
+  // A bound secret stays on this element's document: a handle dies with it, where a locator would find the next page's.
+  const bound = edit.insertWhole === true ? await locator.elementHandle() : null;
+  const placed = bound !== null ? await bound.evaluate(placeSelection, { anchor: edit.anchor, caret }) : await locator.evaluate(placeSelection, { anchor: edit.anchor, caret });
   if (!placed.ok) throw new Error(`editText refused: ${placed.reason}`);
   if (edit.action === "format") {
     if (edit.format === undefined) throw new Error("editText refused: format has no `format`");
@@ -126,7 +128,18 @@ export async function applyTextEdit(page: Page, locator: Locator, edit: TextEdit
     return;
   }
   edit.beforeType?.();
-  await page.keyboard.type(value);
+  if (edit.insertWhole !== true) {
+    await page.keyboard.type(value);
+    return;
+  }
+  // One insert into that document, not keys to whatever has focus: typed key by key, a page that moves
+  // mid-way gets the rest, and an input event sent to a renderer mid-navigation may never be answered.
+  if (bound === null) throw new Error("editText refused: the field to type a secret parameter into is gone");
+  const inserted = await bound.evaluate((el, text) => el.ownerDocument.execCommand("insertText", false, text), value).catch(() => {
+    edit.beforeType?.();
+    throw new Error("editText refused: the page left before a secret parameter went in; it was not typed");
+  });
+  if (!inserted) throw new Error("editText refused: the page would not take a secret parameter; it was not typed");
 }
 
 /** A short human description of an edit (transcript/history), without the typed value. */

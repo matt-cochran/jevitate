@@ -13,7 +13,6 @@ import { safeRunPolicy as defaultRunPolicy, type RunPolicy } from "@jevitate/dom
 import { runJourneyProgrammatically } from "./journey-api.js";
 import { assertMcpRunnable } from "./journey-stale-api.js";
 import { runAsMcpInvocation } from "./approval-provenance.js";
-import type { BoundSecretParams } from "./secret-params.js";
 import { withJourneyRunRecord } from "./journey-run-record.js";
 import { runVerifyFix, type RunVerifyFixOptions, type VerifyFixReport } from "./verify-fix-api.js";
 import { type BrowserRunOptions } from "./browser-run-options.js";
@@ -60,8 +59,6 @@ export interface McpTool {
 
 /** #255: what an extended `run_journey` call adds — every field resolved and validated by the handler. */
 export interface McpJourneyRunOptions {
-  /** The secret parameters targets.json supplied → the origin each may be typed on. */
-  readonly boundSecretParams?: BoundSecretParams;
   readonly policy?: RunPolicy;
   readonly selfHealer?: SelfHealer;
   /** #453: the change context a hybrid/full self-heal is explained by (`changes`/`changeNote`). */
@@ -247,7 +244,6 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           policy: o?.policy ?? defaultRunPolicy(),
           ...(storageState !== undefined ? { storageState } : {}),
           ...(siteGate === undefined ? {} : { siteGate }),
-          ...(o?.boundSecretParams === undefined ? {} : { boundSecretParams: o.boundSecretParams }),
           ...(o?.selfHealer === undefined ? {} : { selfHealer: o.selfHealer }),
           ...(o?.heal === undefined ? {} : { heal: o.heal }),
           ...(o?.environment === undefined ? {} : { environment: o.environment }),

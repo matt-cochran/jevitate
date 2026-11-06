@@ -172,10 +172,12 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // #497: the labels backfill replays with its own label-reading observer, never a whole interpreter.
   "journey-labels-migrate-api.ts runJourneyProgrammatically": { interpreter: OBSERVER_NOT_INTERPRETER },
   "run.ts runJourneyProgrammatically": {
+    onRawOutput: "only `journey chain` hands a run's output on to a page",
     assertRunnable: MCP_RUN_GATE,
     runGuardTargetsFile: GUARD_TARGETS_SEAM, fixtureBaseDir: FIXTURE_BASE_DIR, account: SITE_ACCOUNT, interpreter: ANNOTATE_OBSERVER, mask: MASK_INTERNAL, observer: OBSERVER_INTERNAL, session: WHOLE_JOURNEY, stopAfterStep: WHOLE_JOURNEY },
   "journey-prefix.ts runJourneyProgrammatically": {
-    boundSecretParams: "only `journey run` and `run_journey` resolve a secret from an operator binding; this path takes values through params",
+    onRawOutput: "only `journey chain` hands a run's output on to a page",
+    boundSecretParams: "only `journey run` resolves a secret from an operator binding; this path takes values through params",
     assertRunnable: MCP_RUN_GATE,
     runGuardTargetsFile: GUARD_TARGETS_SEAM,
     runRecorder: RUN_RECORD_ELSEWHERE,
@@ -207,7 +209,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     selfHealer: "a demo never self-heals: a Journey that no longer replays is a stale demo (exit 1)",
   },
   "demo-aspect-api.ts runJourneyProgrammatically": {
-    boundSecretParams: "only `journey run` and `run_journey` resolve a secret from an operator binding; this path takes values through params",
+    onRawOutput: "only `journey chain` hands a run's output on to a page",
+    boundSecretParams: "only `journey run` resolves a secret from an operator binding; this path takes values through params",
     assertRunnable: MCP_RUN_GATE,
     runGuardTargetsFile: GUARD_TARGETS_SEAM,
     runRecorder: RUN_RECORD_ELSEWHERE,
@@ -228,6 +231,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
   "load-cli.ts runJourneyLoadTest": { policy: "a load run replays with the fail-closed safeRunPolicy()" },
   "mcp-api.ts runJourneyProgrammatically": {
+    onRawOutput: "only `journey chain` hands a run's output on to a page",
+    boundSecretParams: "a Journey that needs a secret doesn't run over MCP",
     allow: REPLAY_ALLOW,
     fixtureBaseDir: FIXTURE_BASE_DIR,
     mask: MASK_INTERNAL,
@@ -239,7 +244,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     stopAfterStep: WHOLE_JOURNEY,
   },
   "check-execute.ts runJourneyProgrammatically": {
-    boundSecretParams: "only `journey run` and `run_journey` resolve a secret from an operator binding; this path takes values through params",
+    onRawOutput: "only `journey chain` hands a run's output on to a page",
+    boundSecretParams: "only `journey run` resolves a secret from an operator binding; this path takes values through params",
     assertRunnable: MCP_RUN_GATE,
     runGuardTargetsFile: GUARD_TARGETS_SEAM,
     runRecorder: RUN_RECORD_ELSEWHERE,

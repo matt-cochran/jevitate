@@ -18,6 +18,8 @@ import {
   type HandoffOutputsDecl,
   type HandoffRecord,
   type HandoffRejection,
+  isLoadRefusedName,
+  secretParamValues,
   type Journey,
 } from "@jevitate/journey";
 import { clock } from "@jevitate/domain";
@@ -25,7 +27,7 @@ import type { JourneyRunResult, SiteGateDeps } from "@jevitate/runtime";
 import type { BrowserPort, EmulationSpec } from "@jevitate/playwright";
 import type { BrowserRunOptions } from "./browser-run-options.js";
 import type { ResolvedJourneyEnvironment } from "./environments.js";
-import { runJourneyProgrammatically, UnknownJourneyError, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
+import { redactSecretValues, runJourneyProgrammatically, UnknownJourneyError, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import { inMcpInvocation } from "./approval-provenance.js";
 import { assertMcpRunnable } from "./journey-stale-api.js";
 import { RunGuardRefusedError } from "./mcp-run-guard.js";
@@ -407,6 +409,18 @@ async function runHandoffChain(
  * run. A failed `from` stops the chain (`E_CHAIN_FROM_FAILED`); a missing/zero record count stops it
  * (`E_CHAIN_EMPTY`); a malformed request refuses the whole file (`E_CHAIN_REQUEST`).
  */
+/**
+ * What a chain hands on: the producer's output as extracted, since redaction is for reports and a
+ * consumer types these values into a page. A secret parameter's value and an output the older,
+ * narrower name rule refuses (`apiKey`) stay masked: a record doesn't hand on a credential, and the
+ * interpreter fails a run that would type one.
+ */
+function recordsOutput(reported: unknown, raw: unknown, journey: Journey, params: Readonly<Record<string, string>>): unknown {
+  if (raw === null || typeof raw !== "object" || reported === null || typeof reported !== "object") return reported;
+  const clean = redactSecretValues(raw as Record<string, unknown>, secretParamValues(journey, params));
+  return Object.fromEntries(Object.entries(clean).map(([k, v]) => [k, isLoadRefusedName(k) ? (reported as Record<string, unknown>)[k] : v]));
+}
+
 export async function runJourneyChain(opts: RunJourneyChainOptions, deps: JourneyChainDeps = {}): Promise<JourneyChainResult> {
   const runner = deps.runJourney ?? runJourneyProgrammatically;
   const shared = sharedRunOptions(opts);
@@ -453,7 +467,8 @@ export async function runJourneyChain(opts: RunJourneyChainOptions, deps: Journe
   // JSON Lines objects after the record set is known (§4 step 5).
   const requests = handoff === undefined ? parseChainRequests(opts.requests) : undefined;
 
-  const fromResult = await runner({ ...shared, id: opts.from, params: producerParams });
+  let rawOutput: unknown;
+  const fromResult = await runner({ ...shared, id: opts.from, params: producerParams, onRawOutput: (o) => { rawOutput = o; } });
   if (fromResult.outcome !== "ok") {
     const reason = "reason" in fromResult ? redactProducerParams(fromResult.reason, opts.params) : undefined;
     throw new JourneyChainError(
@@ -464,10 +479,10 @@ export async function runJourneyChain(opts: RunJourneyChainOptions, deps: Journe
 
   if (handoff !== undefined) {
     // §5: `capturedAt` is when the producing run finished, from the injectable clock.
-    return runHandoffChain(handoff.inputs, handoff.outputs, fromJourney as Journey, fromResult.output, opts.requests, clock.nowIso(), opts, shared, runner);
+    return runHandoffChain(handoff.inputs, handoff.outputs, fromJourney as Journey, recordsOutput(fromResult.output, rawOutput, fromJourney as Journey, producerParams), opts.requests, clock.nowIso(), opts, shared, runner);
   }
 
-  const { count, records } = readRecords(fromResult.output);
+  const { count, records } = readRecords(recordsOutput(fromResult.output, rawOutput, fromJourney as Journey, producerParams));
 
   // §3: the reply Journey's declared params decide the one conditional mapping (`expected_parentid`).
   const declared = new Set(journeyParamSchema(toJourney).required);

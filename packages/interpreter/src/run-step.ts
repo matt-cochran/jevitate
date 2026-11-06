@@ -81,10 +81,15 @@ async function selectAlternativeValue(locator: Locator, avoid: string): Promise<
  * outside a variable binding is a Poka-Yoke guardrail failure, not a
  * postcondition failure: it always throws.
  */
+/** What a redactor writes in place of a value (`@jevitate/ai-core`'s REDACTION_MASK). */
+const REDACTION_MASK = "«redacted»";
+
 export function resolveValue(value: ValueOrVar, vars: Map<string, string>): string {
   if ("var" in value) {
     const v = vars.get(value.var);
     if (v === undefined) throw new Error(`unknown variable: ${value.var}`);
+    // Redaction is for what a person or a model reads. Masked text is never what the page should get.
+    if (v.includes(REDACTION_MASK)) throw new Error(`E_REDACTED_VALUE: ${value.var} holds a redacted value, and a run never types one; the value was lost on the way here`);
     return v;
   }
   if (value.redacted) {
@@ -406,7 +411,7 @@ export async function runStep(
         action: step.action,
         ...(value === undefined ? {} : { value }),
         ...(step.format === undefined ? {} : { format: step.format }),
-        ...(step.value === undefined ? {} : { beforeType: () => assertBoundSecretOrigin(actor, step.value!, targetOpts.boundSecretParams) }),
+        ...(step.value === undefined ? {} : { beforeType: () => assertBoundSecretOrigin(actor, step.value!, targetOpts.boundSecretParams), insertWhole: isBoundSecret(step.value, targetOpts.boundSecretParams) }),
       });
       await postcondition(actor, expected(step.expect), step.waitFor, "editText", index, targetOpts);
       return { kind: "done" };

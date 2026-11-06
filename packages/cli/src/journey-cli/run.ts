@@ -30,7 +30,7 @@ import { withEngine } from "../engine.js";
 import { BoundaryNoHealError, handbackExitCode, handbackLine } from "../journey-handback.js";
 import { type EmulationSpec } from "@jevitate/playwright";
 import { SecretFieldSpecError } from "@jevitate/explore";
-import { SecretFieldAmbiguousError, withSecretParams, warnSecretParamsOnArgv, type BoundSecretParams } from "../secret-params.js";
+import { BoundSecretOutsideFieldError, SecretFieldAmbiguousError, withSecretParams, warnSecretParamsOnArgv, type BoundSecretParams } from "../secret-params.js";
 import { environmentFromFlags, fixtureRebaseUrl, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
 
 /** Registers `jevitate journey run`. */
@@ -133,6 +133,10 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
       try {
         ({ params: param, bound: boundSecretParams } = await withSecretParams({ dir: runJourneysDir, id, params: paramFlags, flags: secretField, targetFields: environment?.secretFields, targetOrigin: environment?.baseUrl, env: deps.explore?.env ?? process.env }));
       } catch (err) {
+        if (err instanceof BoundSecretOutsideFieldError) {
+          emitJson(program, fail(err.code, err.message));
+          return;
+        }
         if (!(err instanceof SecretFieldSpecError || err instanceof SecretFieldAmbiguousError)) throw err;
         emitJson(program, fail("E_JOURNEY_RUN_ARGS", err.message));
         return;

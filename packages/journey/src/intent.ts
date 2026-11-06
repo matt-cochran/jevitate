@@ -1,3 +1,4 @@
+import { contentHash, legacyContentHash } from "@jevitate/domain";
 import { z } from "zod";
 import type { RecordedStep, Step, TargetDescriptor } from "@jevitate/recording";
 import { describeNavigateUrl, isLoadRefusedName, isSecretName } from "@jevitate/recording";
@@ -48,18 +49,44 @@ export function intentCoverage(journey: Journey): IntentCoverage {
 
 export { isLoadRefusedName, isSecretName };
 
+/** The approval bookkeeping a review hash leaves out: promoting writes them, so they cannot be part of what was reviewed. */
+const BOOKKEEPING = ["promoted", "approval", "acceptedWeak"] as const;
+
+/**
+ * #432: the content hash a review sheet shows and an approval binds to — `contentHash` (the same
+ * function annotation drafts are bound with) of the Journey WITHOUT its approval bookkeeping
+ * (`promoted`, `approval`, `acceptedWeak`), so promoting does not itself change what was approved.
+ */
+export function journeyReviewHash(journey: Journey): string {
+  const metadata: Record<string, unknown> = { ...journey.metadata };
+  for (const k of BOOKKEEPING) delete metadata[k];
+  return contentHash({ metadata, recording: journey.recording });
+}
+
+/** Pre-portable-key-order hash, used only to honor an approval written by an older Jevitate. */
+export function journeyLegacyReviewHash(journey: Journey): string {
+  const metadata: Record<string, unknown> = { ...journey.metadata };
+  for (const k of BOOKKEEPING) delete metadata[k];
+  return legacyContentHash({ metadata, recording: journey.recording });
+}
+
+export function journeyApprovalMatches(journey: Journey): boolean {
+  const approved = journey.metadata.approval?.contentHash;
+  return approved !== undefined && (approved === journeyReviewHash(journey) || approved === journeyLegacyReviewHash(journey));
+}
+
 /** The approval channels a person made. `mcp` is an agent's; `non-interactive` and `ci` are scripts'. Absent: not known to be a person's. */
 const PERSON_APPROVAL_CHANNELS: ReadonlySet<string> = new Set(["tty", "pr-review"]);
 
 /**
  * The parameters this Journey's `secret: false` lifts a credential-like name for: declared so, and
- * the Journey's own approval came from a person. An agent can write the declaration and approve it
+ * the Journey's own approval came from a person and still matches it. An agent can write the declaration and approve it
  * over MCP, so that lifts nothing. Provenance is detection, not proof (docs/catalog.md): whoever can
  * edit the Journey file can also write the channel. Enforcement is git review of `.jevitate/`.
  */
 export function declaredNonSecretParams(journey: Journey): Set<string> {
   const channel = journey.metadata.approval?.provenance?.channel;
-  if (channel === undefined || !PERSON_APPROVAL_CHANNELS.has(channel)) return new Set();
+  if (channel === undefined || !PERSON_APPROVAL_CHANNELS.has(channel) || !journeyApprovalMatches(journey)) return new Set();
   return new Set((journey.metadata.parameters ?? []).filter((p) => p.secret === false).map((p) => p.name));
 }
 

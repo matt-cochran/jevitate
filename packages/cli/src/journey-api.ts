@@ -1,3 +1,4 @@
+import { registerModelSecrets } from "@jevitate/ai-core";
 import type { BoundSecretParams } from "./secret-params.js";
 import type { JourneyRunRecorder } from "./journey-run-record.js";
 import { allowedOriginSet, offAllowlistWriteOrigin, prepareMcpRunGuard } from "./mcp-run-guard.js";
@@ -100,6 +101,8 @@ export interface RunJourneyProgrammaticallyOptions {
    * typed: its origins, or `allowlist` for this run's allowlist. Checked at type time.
    */
   boundSecretParams?: BoundSecretParams;
+  /** Told the run's `output` before it is redacted, for a caller that hands it on to a page (`journey chain`). Never reported. */
+  onRawOutput?: (output: unknown) => void;
   /** Defaults to `safeRunPolicy()` (Slice 1: fail-closed secret mode) when omitted. */
   policy?: RunPolicy;
   /**
@@ -621,7 +624,8 @@ export async function runJourneyProgrammatically(
     // #140 order: fixture setup (above) → open the browser (#137 launch options, #118 storageState) → run → restore.
     // #250/#251: a recorded or screenshotted run carries the live pixel mask from its first paint.
     // A fixture's credential-named output is redacted by name, wherever a param carried it.
-    const secrets = [...new Set([...secretParamValues(journey, params), ...(fx?.secrets() ?? [])])];
+    const secrets = [...new Set([...secretParamValues(stored, params), ...(fx?.secrets() ?? [])])];
+    registerModelSecrets(secrets);
     const mask = opts.mask ?? new SecretPixelMask(secrets);
     const capturing = opts.session === undefined && (opts.browser?.recordVideo !== undefined || opts.screenshots !== undefined);
     const openPort = (): BrowserPort => {
@@ -715,11 +719,12 @@ export async function runJourneyProgrammatically(
       // A value extracted before the run throws has no `output` to be read from, and must still be masked. The guard hears it through the interpreter.
       // #564: a credential the run extracts joins the redaction set as it binds: the heal payload, the evidence screenshots.
       const extractedCredentials = new Set<string>();
-      const nonSecretParams = declaredNonSecretParams(journey);
+      const nonSecretParams = declaredNonSecretParams(stored);
       const onExtracted = async (value: string, name?: string): Promise<void> => {
         opts.runRecorder?.noteValue(value);
         if (name === undefined || !isSecretName(name) || nonSecretParams.has(name) || value.trim() === "") return;
         extractedCredentials.add(value);
+        registerModelSecrets([value]);
         await mask.addSecret(value);
       };
       const interpreter =
@@ -739,7 +744,7 @@ export async function runJourneyProgrammatically(
       const heal: JourneyHealOptions | undefined =
         opts.heal === undefined || healGuard === undefined
           ? undefined
-          : { scope: opts.heal.scope, riskOf: journeyStepRisk(), writeGuard: healGuard.guard, allowedOrigins, runSecrets: () => [...secrets, ...extractedCredentials], observe: healObserver(healDir, mask) };
+          : { scope: opts.heal.scope, riskOf: journeyStepRisk(), writeGuard: healGuard.guard, allowedOrigins, observe: healObserver(healDir, mask) };
       const runner = new JourneyRunner(actor, interpreter, undefined, undefined, opts.selfHealer, heal);
       let result: JourneyRunResult;
       // #564: the run's secrets also cover every value it bound under a credential-like name (an
@@ -756,6 +761,7 @@ export async function runJourneyProgrammatically(
           ...(mutation.afterEndState === undefined ? {} : { afterEndState: mutation.afterEndState }),
         });
         runGuard?.check();
+        if ("output" in raw) opts.onRawOutput?.(raw.output);
         runSecrets = [...new Set([...runSecretValues(secrets, raw, nonSecretParams), ...extractedCredentials])];
         result = redactSecretValues(raw, runSecrets);
       } finally {

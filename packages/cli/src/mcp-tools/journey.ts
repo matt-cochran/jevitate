@@ -14,7 +14,7 @@ import { ExtensionMismatchError, type BrowserRunOptions } from "../browser-run-o
 import { browserRunFromFlags, emulationFromFlags } from "../cli-shared.js";
 import { environmentFromFlags, isEnvironmentError } from "../environments.js";
 import { buildMissionFixtures, checkSetupRefs } from "../fixture-cli.js";
-import { SecretFieldAmbiguousError, secretParamRefusalBody, secretParamsCarried, withSecretParams } from "../secret-params.js";
+import { secretParamRefusalBody, secretParamsCarried } from "../secret-params.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError, type MissionFixtures } from "../mission-fixtures.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "../run-screenshots.js";
 import { makeEvidenceSelfHealer } from "../self-heal-adapter.js";
@@ -45,15 +45,13 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
     args: Record<string, unknown>,
   ): Promise<{ params: Record<string, string>; storageState?: string; options: McpJourneyRunOptions; usage?: UsageTracker }> => {
     // Params keep their historical leniency for a non-object (treated as none); a non-string VALUE is refused.
-    const requested = args.params && typeof args.params === "object" && !Array.isArray(args.params) ? (optStringMap(args, "params") ?? {}) : {};
+    const params = args.params && typeof args.params === "object" && !Array.isArray(args.params) ? (optStringMap(args, "params") ?? {}) : {};
     const envName = optString(args, "env");
     const baseUrl = optString(args, "baseUrl");
     const environment = environmentFromFlags(
       { ...(envName === undefined ? {} : { env: envName }), ...(baseUrl === undefined ? {} : { baseUrl }) },
       { ...(deps.environmentsFile === undefined ? {} : { environmentsFile: deps.environmentsFile }), ...(deps.targetsConfigPath === undefined ? {} : { targetsFile: deps.targetsConfigPath }) },
     );
-    // A secret parameter's value comes only from the operator's targets.json, read here by code.
-    const { params, bound } = await withSecretParams({ dir: deps.journeysDir, id: args.id as string, params: requested, flags: [], targetFields: environment?.secretFields, targetOrigin: environment?.baseUrl, env: process.env });
     // --storage-state wins; else the environment's own session (~/.jevitate/targets.json[<origin>]).
     const storageState = optPath(args, "storageState", pathRoots, { session: true }) ?? environment?.storageState;
     if (args.storageState !== undefined && storageState !== undefined && !existsSync(storageState)) throw new McpArgError(`storage state not found: ${storageState}`);
@@ -145,7 +143,6 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
       options: {
         policy,
         fixtures,
-        ...(bound === undefined ? {} : { boundSecretParams: bound }),
         ...(selfHealer === undefined ? {} : { selfHealer }),
         ...(healScope === undefined ? {} : { heal: { scope: healScope } }),
         ...(environment === undefined ? {} : { environment }),
@@ -168,7 +165,7 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
     run_journey: {
       description:
         "Run a PUBLISHED Journey by id with string params (fail-closed policy) — `jevitate journey run`. Never accepts inline steps. " +
-        "A secret parameter's value is refused ({error: invalid_args, code: E_SECRET_PARAM_OVER_MCP, params}): never send one. With 'env' or 'baseUrl', the operator's targets.json secretFields supply it; leave it out. " +
+        "A Journey that needs a secret parameter is refused ({error: invalid_args, code: E_SECRET_PARAM_OVER_MCP, params}): never send a value. A person runs it on the CLI (`journey run --secret-field`), or the Journey uses a stored session ('storageState'). " +
         "#788: an unpromoted Journey, or one changed since its approval, is refused before any browser ({error: refused, code: E_JOURNEY_NOT_PROMOTED | E_JOURNEY_APPROVAL_STALE | E_JOURNEY_APPROVAL_UNKNOWN, fix}): promote it with promote_journey, or try a draft on the CLI (`jevitate journey run`). " +
         "#789: a click on a session-ending, destructive or paid control, a write to an origin outside the run's allowlist and a production environment are refused before anything is sent ({error: refused, outcome: refused, code: E_RUN_REFUSED_DESTRUCTIVE | E_RUN_REFUSED_OFF_ALLOWLIST_WRITE | E_RUN_REFUSED_PRODUCTION, setting, retryable: false}): do not retry; only a person lifts it, in the target's mcpRun section of ~/.jevitate/targets.json. " +
         "Optional 'storageState': a PATH (on the machine running this MCP server; inside the project or ~/.jevitate, never a repo's .jevitate/) to a Playwright storageState " +
@@ -222,7 +219,7 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
         const tagged = tagsArg(args);
         if ("error" in tagged) return errorResult(tagged.error);
         // Before the value reaches anything: a secret parameter's value never travels through a request.
-        const carried = await secretParamsCarried(deps.journeysDir, [args.id], args.params);
+        const carried = await secretParamsCarried(deps.journeysDir, [args.id], args.params, { needed: true });
         if (carried.length > 0) return errorResult(secretParamRefusalBody(carried));
         // Invariant #5: only id + params (+ a storageState PATH and the run options below) are
         // threaded through — any inline `steps`/`recording` in the arguments is deliberately ignored.
@@ -236,7 +233,6 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
             return errorResult({ error: "invalid_args", code: err.code, message: err.message });
           }
           if (err instanceof SetupRequired) return errorResult({ error: "setup_required", message: err.message });
-          if (err instanceof SecretFieldAmbiguousError) return errorResult({ error: "invalid_args", code: err.code, params: err.params, message: err.message });
           throw err;
         }
         // #205: the same pre-run checks as `jevitate journey run` (orphan sweep, starved-host refusal).

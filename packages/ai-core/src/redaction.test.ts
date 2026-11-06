@@ -1,9 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
+  JevJudgmentGateway,
+  OpenRouterGenerationGateway,
   REDACTION_MASK,
+  envCredentialStore,
   SecretLeakError,
   assertNoSecretInPayload,
+  clearModelSecrets,
   redactContext,
+  redactModelPayload,
+  registerModelSecrets,
   redactText,
   redactUrl,
 } from "./index.js";
@@ -140,3 +146,36 @@ describe("short secrets (#454) — matched as whole tokens, never inside ordinar
     expect(() => assertNoSecretInPayload({ text: "line one\nme" }, ["me"])).toThrow(SecretLeakError);
   });
 });
+
+describe("the model boundary: a caller with no redaction of its own", () => {
+  const store = envCredentialStore({ OPENROUTER_API_KEY: "sk-or-test", TYPESAFE_API_KEY: "ts-test" }, {});
+  afterEach(() => clearModelSecrets());
+
+  it("the generation gateway masks a registered value before it leaves, in every string", async () => {
+    registerModelSecrets(["S3ntinel-Bound-Value"]);
+    const bodies: unknown[] = [];
+    const gen = new OpenRouterGenerationGateway({
+      store,
+      catalog: [{ id: "m", promptUsdPer1k: 0.1, completionUsdPer1k: 0.1, regions: ["US"], latencyClass: "fast", capabilities: [] }] as never,
+      constraints: { requireRegion: "US", maxPromptUsdPer1k: 1, requiredCapabilities: [] } as never,
+      call: (async (a: { body: unknown }) => (bodies.push(a.body), { object: { order: [], control: null }, latencyMs: 1 })) as never,
+    });
+    await gen.generate("heal.rank", { step: "click S3ntinel-Bound-Value", evidence: [], candidates: [], controls: [{ index: 0, summary: `button "${encodeURIComponent("S3ntinel-Bound-Value")} x"` }] } as never);
+    expect(JSON.stringify(bodies)).not.toContain("S3ntinel-Bound-Value");
+    expect(JSON.stringify(bodies)).toContain(REDACTION_MASK);
+  });
+
+  it("the judgment gateway does too", async () => {
+    registerModelSecrets(["S3ntinel-Bound-Value"]);
+    const seen: unknown[] = [];
+    const judge = new JevJudgmentGateway(store, (async (a: unknown) => (seen.push(a), {})) as never);
+    await judge.systemOne({ state: { page: "shows S3ntinel-Bound-Value" } as never, questions: {} });
+    expect(JSON.stringify(seen)).not.toContain("S3ntinel-Bound-Value");
+  });
+
+  it("with nothing registered the payload passes untouched", () => {
+    const p = { a: "plain" };
+    expect(redactModelPayload(p)).toBe(p);
+  });
+});
+

@@ -267,6 +267,12 @@ operator's call and is not an MCP argument.
 `jevitate init` creates the app repo's own `.jevitate/` at the git root. Commands find it by
 walking up from the working directory.
 
+With `HOME` moved, the account's own home (its passwd entry) counts as a project only if its
+`.jevitate/` holds an `environments.json`, or the home is the working directory's git root, or, outside
+any repo, it holds no per-user files. So a project at that home with no repo and no `environments.json`
+stops being found once `.jevitate/` holds `db.sqlite` (which `site policy set` creates), `profiles/` or
+`targets.json`, with no message. Add an `environments.json` or a `git init` there to keep it.
+
 | In the repo's `.jevitate/` (committed) | In `~/.jevitate/` (per user, never in a repo) |
 | --- | --- |
 | `journeys/`: named Journeys; shared ones as git submodules under `journeys/<shared>/` | `credentials.json`, `config.json`, `targets.json` |

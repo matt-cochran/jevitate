@@ -2,6 +2,9 @@ import { contentHash, legacyContentHash } from "@jevitate/domain";
 import type { JourneyProposal, JourneyReviewProposal } from "@jevitate/journey";
 import {
   isSecretName,
+  journeyApprovalMatches,
+  journeyLegacyReviewHash,
+  journeyReviewHash,
   describeStep,
   flatJourneySteps,
   isNoClaimExpect,
@@ -64,31 +67,7 @@ import {
  * as a credential is shown «redacted», and a secret reference is listed by field and manager only.
  */
 
-/** The approval bookkeeping a review hash leaves out: promoting writes them, so they cannot be part of what was reviewed. */
-const BOOKKEEPING = ["promoted", "approval", "acceptedWeak"] as const;
-
-/**
- * #432: the content hash a review sheet shows and an approval binds to — `contentHash` (the same
- * function annotation drafts are bound with) of the Journey WITHOUT its approval bookkeeping
- * (`promoted`, `approval`, `acceptedWeak`), so promoting does not itself change what was approved.
- */
-export function journeyReviewHash(journey: Journey): string {
-  const metadata: Record<string, unknown> = { ...journey.metadata };
-  for (const k of BOOKKEEPING) delete metadata[k];
-  return contentHash({ metadata, recording: journey.recording });
-}
-
-/** Pre-portable-key-order hash, used only to honor an approval written by an older Jevitate. */
-export function journeyLegacyReviewHash(journey: Journey): string {
-  const metadata: Record<string, unknown> = { ...journey.metadata };
-  for (const k of BOOKKEEPING) delete metadata[k];
-  return legacyContentHash({ metadata, recording: journey.recording });
-}
-
-export function journeyApprovalMatches(journey: Journey): boolean {
-  const approved = journey.metadata.approval?.contentHash;
-  return approved !== undefined && (approved === journeyReviewHash(journey) || approved === journeyLegacyReviewHash(journey));
-}
+export { journeyApprovalMatches, journeyLegacyReviewHash, journeyReviewHash };
 
 /** #432: the last `journey verify --mutate` verdict, as recorded beside the Journey. */
 export interface JourneyVerifyRecord {

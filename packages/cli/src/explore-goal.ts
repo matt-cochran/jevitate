@@ -1,4 +1,5 @@
 // explore-goal.ts — the goal-directed explore runner (`runExploration`) and its goal-only helpers (#231).
+import { registerModelSecrets } from "@jevitate/ai-core";
 import { sessionLostReason } from "./session-check.js";
 import { assertHttpChecksAllowed, createHttpProbe, httpCheckRefs } from "./http-probe.js";
 import { logsDirFor } from "./project-dir.js";
@@ -418,6 +419,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   // the invariant monitor's own evidence.
   const authTokenValues = [...(opts.invariantAuthTokens?.values() ?? [])];
   const bound = [...secretFieldSecrets(opts.secretFields), ...(opts.fixtures?.secrets() ?? []), ...authTokenValues];
+  registerModelSecrets(bound);
   const hasCmdField = (opts.secretFields ?? []).some((f) => f.kind === "cmd");
   const secrets = opts.secrets === undefined && bound.length === 0 && !hasCmdField ? undefined : [...(opts.secrets ?? []), ...bound];
   // #324: a value a cmd: binding reads mid-run joins this run's secrets at once, so everything this

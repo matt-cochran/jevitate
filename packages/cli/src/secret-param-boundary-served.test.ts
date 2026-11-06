@@ -18,6 +18,8 @@ import { useSkippingTime } from "../../explore/src/testkit.js";
 import { safeRunPolicy } from "@jevitate/domain";
 import { runJourneyProgrammatically } from "./journey-api.js";
 import { makeEvidenceSelfHealer } from "./self-heal-adapter.js";
+import { annotateJourney } from "./journey-annotate-api.js";
+import { OpenRouterGenerationGateway, envCredentialStore, type GenerationPort } from "@jevitate/ai-core";
 import { readJourneyChangeScope } from "./journey-heal.js";
 import { MissionFixtures } from "./mission-fixtures.js";
 
@@ -34,6 +36,7 @@ const MINTED = "minted-tok-9Zq";
 let redirectTo: string | undefined;
 let leavesFor: string | undefined;
 let showsSecrets = "";
+const typedWho: string[] = [];
 
 let server: Server;
 let origin: string;
@@ -155,6 +158,11 @@ async function cli(args: string[]): Promise<{ out: string; err: string; exitCode
 
 beforeAll(async () => {
   server = createServer((req, res) => {
+    if ((req.url ?? "").startsWith("/who?")) {
+      typedWho.push(new URL(req.url ?? "", "http://x").searchParams.get("v") ?? "");
+      res.writeHead(204).end();
+      return;
+    }
     if (req.url === "/mint") {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ tok: MINTED, sec: "SecOutVal9Kx2", order: "ord-1" }));
@@ -162,6 +170,14 @@ beforeAll(async () => {
     }
     if (req.url === "/go" && redirectTo !== undefined) {
       res.writeHead(302, { location: redirectTo }).end();
+      return;
+    }
+    if (leavesFor !== undefined && (req.url ?? "").startsWith("/edit-")) {
+      const leave = `location.href=${JSON.stringify(`${leavesFor}/`)}`;
+      const on = req.url === "/edit-keydown" ? `onkeydown='${leave}' onbeforeinput='${leave}'` : req.url === "/edit-plain" ? `onkeydown='this.dataset.k=+(this.dataset.k||0)+1;document.querySelector("[data-testid=keys]").textContent="keys="+this.dataset.k'` : "";
+      const script = req.url === "/edit-select" ? `<script>document.addEventListener("selectionchange",()=>{if(document.activeElement&&document.activeElement.isContentEditable)${leave}})</script>` : "";
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(`<label>Password <input type=password></label><div data-testid=ed contenteditable ${on}>x</div><p data-testid=keys></p>${script}`);
       return;
     }
     if (leavesFor !== undefined && (req.url ?? "").startsWith("/moves-")) {
@@ -175,7 +191,7 @@ beforeAll(async () => {
     res.writeHead(200, { "content-type": "text/html" });
     res.end(
       showsSecrets +
-      `<h1>Sign in</h1><label>Password <input id=pw data-testid=pw type=password></label><input data-testid=who>` +
+      `<h1>Sign in</h1><label>Password <input id=pw data-testid=pw type=password></label><input data-testid=who oninput="fetch('/who?v='+encodeURIComponent(this.value),{method:'HEAD'})">` +
         `<button onclick="document.querySelector('[data-testid=status]').textContent='len='+document.getElementById('pw').value.length">Sign in</button><p data-testid=status></p>`,
     );
   });
@@ -233,7 +249,7 @@ describe("MCP: a secret parameter's value is refused on every served path", { ti
     const r = await call(name, args());
     expect(r.isError).toBe(true);
     expect(r.body).toMatchObject({ error: "invalid_args", code: SECRET_PARAM_OVER_MCP, params: ["secret1"] });
-    expect(String(r.body["message"])).toContain("secretFields");
+    expect(String(r.body["message"])).toContain("--secret-field");
     expect(r.text).not.toContain(VALUE);
     expect(pageLoads).toBe(0);
     expect(filesHoldingValue()).toEqual([]);
@@ -264,26 +280,12 @@ describe("MCP: a secret parameter's value is refused on every served path", { ti
     expect(r.body["outcome"]).toBe("ok");
   });
 
-  it("run_journey resolves the value from the operator's targets.json: nothing in the request, nothing back", async () => {
-    const r = await call("run_journey", { id: "login", env: "local" });
-    expect(r.isError, r.text).toBe(false);
-    expect(r.body["outcome"]).toBe("ok");
-    expect(r.text).not.toContain(VALUE);
-    expect(allFiles(logs).length).toBeGreaterThan(0); // the run left its record...
-    expect(filesHoldingValue()).toEqual([]); // ...without the value
-  });
-
-  it("a target's variable that is not set contributes nothing: the parameter is reported missing", async () => {
-    vi.stubEnv(VAR, "");
-    const r = await call("run_journey", { id: "login", env: "local" });
-    expect(r.body).toMatchObject({ code: "E_INVALID_PARAMS" });
-    expect(String(r.body["message"])).toContain("secret1");
+  it.each([[{ env: "local" }], [{}]])("a Journey that needs a secret doesn't run, even with none in the request and targets.json binding it (%j)", async (extra) => {
+    const r = await call("run_journey", { id: "login", ...extra });
+    expect(r.body).toMatchObject({ code: SECRET_PARAM_OVER_MCP, params: ["secret1"] });
+    expect(String(r.body["message"])).toContain("--secret-field");
     expect(pageLoads).toBe(0);
-  });
-
-  it("no env means no target: the parameter is reported missing, as before", async () => {
-    const r = await call("run_journey", { id: "login" });
-    expect(r.body).toMatchObject({ code: "E_INVALID_PARAMS" });
+    expect(r.text).not.toContain(VALUE);
   });
 
   it("the served tools still equal ALLOWED_TOOLS", () => {
@@ -523,13 +525,12 @@ describe("a bound secret is typed only on its own origin (M1)", { timeout: 120_0
     expect(otherHits.filter((u) => u.startsWith("/leak"))).toEqual([]); // ...and nothing was typed
   };
 
-  it("targets.json over MCP: the step fails, and the other origin receives nothing", async () => {
-    const r = await call("run_journey", { id: "redirected", env: "local" });
-    expect(r.body["outcome"], r.text).not.toBe("ok");
-    expect(r.text).toContain("E_SECRET_ORIGIN_REFUSED");
-    expect(r.text).toContain(otherOrigin);
-    expect(r.text).toContain("--secret-field and --allow"); // what to do, for a sign-in on another origin
-    expect(r.text).not.toContain(VALUE);
+  it("targets.json on the CLI: the step fails, and the other origin receives nothing", async () => {
+    const r = await cli(["journey", "run", "redirected", "--env", "local", "--json"]);
+    expect(r.out).toContain("E_SECRET_ORIGIN_REFUSED");
+    expect(r.out).toContain(otherOrigin);
+    expect(r.out).toContain("--secret-field and --allow"); // what to do, for a sign-in on another origin
+    expect(r.out + r.err).not.toContain(VALUE);
     noLeak();
   });
 
@@ -541,8 +542,8 @@ describe("a bound secret is typed only on its own origin (M1)", { timeout: 120_0
   });
 
   it("the page's own origin still gets it", async () => {
-    const r = await call("run_journey", { id: "login", env: "local" });
-    expect(r.body["outcome"], r.text).toBe("ok");
+    const r = await cli(["journey", "run", "login", "--env", "local", "--json"]);
+    expect(JSON.parse(r.out)).toMatchObject({ ok: true, data: { outcome: "ok" } });
   });
 });
 
@@ -550,6 +551,7 @@ describe("a bound secret is typed only on its own origin (M1)", { timeout: 120_0
 describe("[realtime] the page moves while the step waits (R1, R2)", { timeout: 120_000 }, () => {
   let other: Server;
   let leaks: string[] = [];
+  let hits: string[] = [];
   const sec = (id: string, url: string, steps: unknown[]): void => {
     const j = journey(id);
     j.recording.pages[0]!.steps = [{ step: { kind: "navigate", url, expect: { kind: "visible", target: { css: "body" } } } }, ...steps] as never;
@@ -561,9 +563,10 @@ describe("[realtime] the page moves while the step waits (R1, R2)", { timeout: 1
   beforeAll(async () => {
     other = createServer((req, res) => {
       if ((req.url ?? "").startsWith("/leak")) leaks.push(req.url ?? "");
+      if ((req.url ?? "").startsWith("/check")) hits.push(req.url ?? "");
       res.writeHead(200, { "content-type": "text/html" });
       res.end(
-        `<label>Password <input type=password oninput="fetch('/leak?v='+encodeURIComponent(this.value))"></label>` +
+        `<label>Password <input type=password autofocus oninput="fetch('/leak?v='+encodeURIComponent(this.value))"></label>` +
           `<div data-testid=ed contenteditable oninput="fetch('/leak?v='+encodeURIComponent(this.textContent))">x</div>` +
           `<label>Plan <select data-testid=plan onchange="fetch('/leak?v='+encodeURIComponent(this.value))"><option>none</option><option value="${VALUE}">p</option></select></label>`,
       );
@@ -577,6 +580,25 @@ describe("[realtime] the page moves while the step waits (R1, R2)", { timeout: 1
     // select binds nothing by itself: a fill on A binds the value, then the page leaves for B before the select.
     sec("moves-select", "/moves-select", [fillStep, { step: { kind: "select", target: { testId: "plan" }, value: { var: "secret1" }, expect: { kind: "visible", target: { css: "body" } } } }]);
     sec("edit-on-b", "/", [fillStep, { step: { kind: "navigate", url: "/go", expect: { kind: "visible", target: { testId: "ed" } } } }, { step: { kind: "editText", target: { testId: "ed" }, anchor: { at: "end" }, action: "insertAfter", value: { var: "secret1" }, expect: { kind: "visible", target: { testId: "ed" } } } }]);
+    const editStep = (name: string, expect: unknown): unknown => ({ step: { kind: "editText", target: { testId: "ed" }, anchor: { at: "end" }, action: "insertAfter", value: { var: name }, expect } });
+    const vis = { kind: "visible", target: { css: "body" } };
+    sec("edit-keydown", "/edit-keydown", [fillStep, editStep("secret1", vis)]);
+    sec("edit-select", "/edit-select", [fillStep, editStep("secret1", vis)]);
+    const plain = journey("edit-plain", "who");
+    plain.metadata.parameters = [{ name: "who" }];
+    plain.recording.pages[0]!.steps = [{ step: { kind: "navigate", url: "/edit-plain", expect: vis } }, editStep("who", { kind: "textIncludes", target: { testId: "keys" }, text: "keys=3" })] as never;
+    approved(plain);
+    writeFileSync(join(journeysDir, "edit-plain.json"), JSON.stringify(plain));
+    sec("bound-navigate", "/", [fillStep, { step: { kind: "navigate", url: `${b}/check?t=\${secret1}`, expect: vis } }]);
+    const http = (id: string, name: string): void => {
+      const j = journey(id, name);
+      j.metadata.parameters = [{ name, secret: name === "secret1" ? true : undefined }] as never;
+      j.metadata.endState = [{ kind: "http", method: "GET", url: `${b}/check?t=\${${name}}`, status: { class: 2 } }] as never;
+      approved(j);
+      writeFileSync(join(journeysDir, `${id}.json`), JSON.stringify(j));
+    };
+    http("bound-http", "secret1");
+    http("bound-http-pwd", "pwd");
     writeFileSync(join(root, "environments.json"), JSON.stringify({ local: { baseUrl: origin }, sso: { baseUrl: origin, allow: [b] } }));
   });
   afterAll(() => {
@@ -588,6 +610,7 @@ describe("[realtime] the page moves while the step waits (R1, R2)", { timeout: 1
   });
   beforeEach(() => {
     leaks = [];
+    hits = [];
   });
 
   it.each([
@@ -597,13 +620,44 @@ describe("[realtime] the page moves while the step waits (R1, R2)", { timeout: 1
     ["editText after a 302, B off the allowlist", "edit-on-b", "local"],
     ["editText after a 302, B on the allowlist: the binding is still A's", "edit-on-b", "sso"],
   ])("%s: refused by name, nothing at B", async (_why, id, env) => {
-    const r = await call("run_journey", { id, env });
-    expect(r.body["outcome"], r.text).not.toBe("ok");
-    expect(r.text).toContain("E_SECRET_ORIGIN_REFUSED");
-    expect(r.text).not.toContain(VALUE);
+    const r = await cli(["journey", "run", id, "--env", env, "--json"]);
+    expect(r.out).toContain("E_SECRET_ORIGIN_REFUSED");
+    expect(r.out + r.err).not.toContain(VALUE);
     expect(leaks).toEqual([]);
   });
+
+  it.each([["the first character", "edit-keydown"], ["placing the selection", "edit-select"]])("editText, the page moves on %s: none of it at B (D1)", async (_when, id) => {
+    const r = await cli(["journey", "run", id, "--env", "local", "--json"]);
+    expect(r.out + r.err).not.toContain(VALUE);
+    expect(leaks).toEqual([]);
+  });
+
+  it("a plain value keeps typing key by key: key events still reach an editor", async () => {
+    const r = await cli(["journey", "run", "edit-plain", "--param", "who=abc", "--json"]);
+    expect(JSON.parse(r.out), r.out).toMatchObject({ ok: true, data: { outcome: "ok" } });
+  });
+
+  it.each([["navigate", "bound-navigate"], ["http check", "bound-http"], ["http check, a name only the broad list reads", "bound-http-pwd"]])("a %s holding a bound secret refuses before anything runs (D2, D3)", async (_w, id) => {
+    const r = await cli(["journey", "run", id, "--env", "sso", "--json"]);
+    expect(JSON.parse(r.out)).toMatchObject({ ok: false, error: { code: "E_SECRET_ORIGIN_REFUSED" } });
+    expect(r.out + r.err).not.toContain(VALUE);
+    expect(leaks).toEqual([]);
+    expect(hits).toEqual([]);
+  });
 });
+
+/** The real gateway with a recording model behind it: what a provider would receive. */
+function gatewayRecording(sent: unknown[], answer: (task: string) => unknown): GenerationPort {
+  return new OpenRouterGenerationGateway({
+    store: envCredentialStore({ OPENROUTER_API_KEY: "sk-or-test" }, {}),
+    catalog: [{ id: "m", promptUsdPer1k: 0.1, completionUsdPer1k: 0.1, regions: ["US"], latencyClass: "fast", capabilities: [] }] as never,
+      constraints: { requireRegion: "US", maxPromptUsdPer1k: 1, requiredCapabilities: [] } as never,
+    call: (async (args: { body: unknown; task?: string }) => {
+      sent.push(args.body);
+      return { object: answer(args.task ?? ""), latencyMs: 1 };
+    }) as never,
+  });
+}
 
 describe("a heal's model payload holds no secret of the run (R3)", { timeout: 120_000 }, () => {
   useSkippingTime();
@@ -622,7 +676,7 @@ describe("a heal's model payload holds no secret of the run (R3)", { timeout: 12
     approved(j);
     writeFileSync(join(journeysDir, "heal-secrets.json"), JSON.stringify(j));
     const inputs: unknown[] = [];
-    const gen = { generate: async (task: string, input: unknown) => (inputs.push({ task, input }), { output: { order: [], control: null } }) } as never;
+    const gen = gatewayRecording(inputs, () => ({ order: [], control: null }));
     const scope = await readJourneyChangeScope({ selfHeal: "hybrid", changeNotes: ["renamed Nowhere to Elsewhere"] } as never, journeysDir);
     const result = await runJourneyProgrammatically({
       dir: journeysDir,
@@ -656,11 +710,13 @@ describe("one label, two secret parameters (M2)", { timeout: 120_000 }, () => {
     writeFileSync(join(journeysDir, "two-on-one.json"), JSON.stringify(j));
   });
 
-  it("targets.json with one binding over MCP: refused by name, nothing typed", async () => {
-    const r = await call("run_journey", { id: "two-on-one", env: "local" });
-    expect(r.body).toMatchObject({ code: "E_SECRET_FIELD_AMBIGUOUS", params: ["secret1", "secret2"] });
+  it("targets.json with one binding on the CLI: refused by name, nothing typed", async () => {
+    const r = await cli(["journey", "run", "two-on-one", "--env", "local", "--json"]);
+    expect(r.exitCode).toBe(64);
+    expect(r.out).toContain("cannot say which value");
+    expect(r.out).toContain("secret2");
     expect(pageLoads).toBe(0);
-    expect(r.text).not.toContain(VALUE);
+    expect(r.out + r.err).not.toContain(VALUE);
   });
 
   it.each([
@@ -712,5 +768,93 @@ describe("verify-fix and regression --param (L2)", () => {
     await prefixFromBranch(branch, { params: { secret1: VALUE }, warn: (l) => lines.push(l) }).catch(() => undefined);
     expect(lines.join("")).toContain("secret1");
     expect(lines.join("")).not.toContain(VALUE);
+  });
+});
+
+describe("the model boundary: a caller with no redaction of its own (D4)", { timeout: 120_000 }, () => {
+  useSkippingTime();
+  it("annotate's model calls hold no fixture secret and no extracted credential", async () => {
+    showsSecrets = `<button>Copy invite SecOutVal9Kx2</button><button>Copy key ${MINTED}</button><button id=minted data-v="ExtractVal5Rt1">Minted ExtractVal5Rt1</button>`;
+    const j = journey("annotate-secrets");
+    j.recording.pages[0]!.steps = [
+      { step: { kind: "navigate", url: "/", expect: { kind: "visible", target: { testId: "pw" } } } },
+      { step: { kind: "fill", target: { label: "Password" }, value: { var: "secret1" }, expect: { kind: "visible", target: { testId: "pw" } } } },
+      { step: { kind: "extract", target: { css: "#minted" }, as: "apiKey", attr: "data-v", expect: { kind: "visible", target: { testId: "pw" } } } },
+    ] as never;
+    approved(j);
+    writeFileSync(join(journeysDir, "annotate-secrets.json"), JSON.stringify(j));
+    const sent: unknown[] = [];
+    const gen = gatewayRecording(sent, (task) => (task === "journey.goal" ? { goal: "g", successCriteria: [] } : { objective: "o", expectedResult: "e" }));
+    await annotateJourney({
+      dir: journeysDir,
+      id: "annotate-secrets",
+      params: { secret1: VALUE },
+      gen,
+      now: () => "2026-11-06T00:00:00.000Z",
+      fixtures: () => new MissionFixtures({ spec: { setup: [{ method: "POST", url: `${origin}/mint`, outputs: { minted: "$.sec", authToken: "$.tok" }, secretOutputs: ["minted"] }] }, auth: {}, allowlist: [origin], baseUrl: origin } as never),
+    } as never).catch(() => undefined).finally(() => {
+      showsSecrets = "";
+    });
+    const payload = JSON.stringify(sent);
+    expect(sent.length).toBeGreaterThan(0);
+    expect(payload).toContain("Copy invite");
+    for (const v of ["SecOutVal9Kx2", MINTED, "ExtractVal5Rt1", VALUE]) expect(payload).not.toContain(v);
+  });
+});
+
+describe("masked text never goes into a field (D5)", { timeout: 120_000 }, () => {
+  useSkippingTime();
+  const CONTRACT = "chk-handoff@1";
+  const chainJourneys = (field: string, value: string): void => {
+    const producer = {
+      metadata: { id: "chain-from", name: "chain-from", params: [], promoted: true, createdAtIso: "2026-10-22T17:00:00Z", outputs: { contract: CONTRACT, key: ["recordId"], fields: { recordId: { type: "id" }, [field]: { type: "text" } } } },
+      recording: { version: "1.0.0", site: origin, pages: [{ url: "/", steps: [
+        { step: { kind: "navigate", url: "/", expect: { kind: "visible", target: { testId: "record" } } }, stepId: "p1" },
+        { step: { kind: "extract", target: { testId: "record" }, as: "recordId", attr: "data-recordid", expect: { kind: "attr", target: { testId: "record" }, name: "data-recordid" } }, stepId: "p2" },
+        { step: { kind: "extract", target: { testId: "record" }, as: field, attr: "data-field", expect: { kind: "attr", target: { testId: "record" }, name: "data-field" } }, stepId: "p3" },
+      ] }] },
+    } as unknown as Journey;
+    const consumer = {
+      metadata: { id: "chain-to", name: "chain-to", params: ["recordId", "reply"], promoted: true, createdAtIso: "2026-10-22T17:00:00Z",
+        inputs: { accepts: CONTRACT, request: { key: ["recordId"], fields: { recordId: { type: "id" } } }, bindings: { recordId: { record: "recordId" }, reply: { record: field } } },
+        boundary: { kind: "prepare-only", stopBefore: { target: { testId: "record" }, label: "rec" }, blockWrites: true, nextStep: "Review." } },
+      recording: { version: "1.0.0", site: origin, pages: [{ url: "/", steps: [
+        { step: { kind: "navigate", url: "/", expect: { kind: "visible", target: { testId: "record" } } }, stepId: "c1" },
+        { step: { kind: "assert", check: { kind: "attr", target: { testId: "record" }, name: "data-recordid", value: { var: "recordId" } } }, stepId: "c0" },
+        { step: { kind: "fill", target: { testId: "who" }, value: { var: "reply" }, expect: { kind: "visible", target: { testId: "who" } } }, stepId: "c3" },
+      ] }] },
+    } as unknown as Journey;
+    showsSecrets = `<div data-testid=record data-recordid="r1" data-field="${value}">rec</div>`;
+    for (const j of [approved(producer), approved(consumer)]) writeFileSync(join(journeysDir, `${j.metadata.id}.json`), JSON.stringify(j));
+    writeFileSync(join(root, "chain-requests.jsonl"), `${JSON.stringify({ recordId: "r1" })}\n`);
+  };
+  afterAll(() => {
+    showsSecrets = "";
+  });
+
+  it("issueKey: the consumer's field gets the value as extracted, as in 0.28", async () => {
+    typedWho.length = 0;
+    chainJourneys("issueKey", "ISS-7");
+    const r = await cli(["journey", "chain", "--from", "chain-from", "--to", "chain-to", "--requests", join(root, "chain-requests.jsonl"), "--json"]);
+    expect(r.exitCode, r.out).toBe(0);
+    expect(typedWho).toEqual(["ISS-7"]);
+  });
+
+  it("apiKey: masked text would be typed, so the consumer's run fails instead of reporting ok", async () => {
+    typedWho.length = 0;
+    chainJourneys("apiKey", "real-key-value-99");
+    const r = await cli(["journey", "chain", "--from", "chain-from", "--to", "chain-to", "--requests", join(root, "chain-requests.jsonl"), "--json"]);
+    expect(r.exitCode, r.out).not.toBe(0);
+    expect(typedWho).toEqual([]);
+    expect(r.out).not.toContain("real-key-value-99");
+  });
+
+  it("a stale secret: false lifts no redaction on the CLI (D6)", async () => {
+    const j = fillNamed("password", false, "tty", "stale-false");
+    j.metadata.name = "edited after the person approved";
+    writeFileSync(join(journeysDir, "stale-false.json"), JSON.stringify(j));
+    const r = await cli(["journey", "run", "stale-false", "--param", `password=${VALUE}`, "--json"]);
+    expect(r.out).not.toContain(VALUE);
+    expect(JSON.parse(r.out)).toMatchObject({ ok: true, data: { output: { password: "«redacted»" } } });
   });
 });

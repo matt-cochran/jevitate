@@ -1518,7 +1518,7 @@ export function mutationProofVerdict(input: {
     return { verdict: "inconclusive", reason: "every mutated replay errored" };
   }
   const paired = input.assertions.filter((a) => a.verdict !== "unpaired");
-  if (paired.length === 0) return { verdict: "inconclusive", reason: "no assertion is paired with a mutation (no write step, no checked fill, no checked parameter, no mutationPairs)" };
+  if (paired.length === 0) return { verdict: "inconclusive", reason: "no assertion is paired with a mutation (no write step, no checked fill, no checked parameter, no mutationPairs). A parameter treated as secret gets no mutation, and a name that reads as a credential counts as one unless it declares secret: false and a person approved the Journey" };
   if (paired.some((a) => a.verdict === "insensitive")) return { verdict: "insensitive" };
   // Every replay counts: relaxed, targeted, a control, a re-run.
   const errored = input.mutations.filter(mutationErrored).length;

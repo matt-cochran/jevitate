@@ -907,8 +907,8 @@ the parameter, by `label`, `testId`, `id` or `name`. `type=` needs a live field,
 on a replay, and a `cmd:` source is for goal runs. A binding that supplies no secret parameter is a
 usage error (`E_JOURNEY_RUN_ARGS`).
 
-With `--env` or `--base-url`, the `secretFields` for that origin in `~/.jevitate/targets.json` apply
-the same way, so no flag is needed. `--param` wins over `--secret-field`, which wins over
+On the CLI, with `--env` or `--base-url`, the `secretFields` for that origin in
+`~/.jevitate/targets.json` apply the same way, so no flag is needed. `--param` wins over `--secret-field`, which wins over
 `targets.json`. A `targets.json` binding whose variable is not set supplies nothing, and the
 parameter is reported missing.
 
@@ -920,26 +920,25 @@ resolution. `journey verify`, `journey readiness`, `journey chain`, `journey dem
 On `journey chain` that means the producer: a consumer's secret parameter can't be supplied at all,
 through `--param` or `targets.json`, and the chain fails closed.
 
-A bound value is typed only where its binding applies. The page must be on the origin the
-`targets.json` entry is keyed by, or for `--secret-field` on the run's allowlist, checked with the
-field in hand on `fill`, `select` and `editText`. Anywhere else, such as after a redirect, nothing is
-typed and the step fails with `E_SECRET_ORIGIN_REFUSED`. For a sign-in on another origin (SSO), run
-`journey run --secret-field … --allow <origin>` on the CLI: `targets.json` binds a secret to its own
-origin only, so over MCP there is no way to send it there. A value given with `--param` has no such
-check.
+A bound value goes in only at a field, on the origin its binding applies to: the one the
+`targets.json` entry is keyed by, or for `--secret-field` the run's allowlist, checked with the field in
+hand on `fill`, `select` and `editText`. Anywhere else, such as after a redirect, nothing is typed and
+the step fails with `E_SECRET_ORIGIN_REFUSED`. A `navigate` URL or an `http` check that holds a bound
+parameter refuses the same way before anything runs. For a sign-in on another origin (SSO), run
+`journey run --secret-field … --allow <origin>`. A value given with `--param` has none of these checks.
 
 A value is never guessed. If two secret parameters match one binding, or one parameter matches two,
-nothing runs: `E_JOURNEY_RUN_ARGS` on the CLI, `E_SECRET_FIELD_AMBIGUOUS` over MCP. Bind each by a
+nothing runs (`E_JOURNEY_RUN_ARGS`). Bind each by a
 target only its own step has, or give all but one with `--param`.
 
-Over MCP a value for a secret parameter is refused by name with `E_SECRET_PARAM_OVER_MCP` before
-anything runs, on `run_journey`, `verify_journey`, `journey_readiness`, `chain_journeys`,
-`demo_journey`, `annotate_journey`, `run_load_test`, `run_exploration` and `sources`. The value would
-have passed through the model, and the refusal, the logs and the run record do not hold it.
-`run_journey` with `env` or `baseUrl` runs such a Journey when `targets.json` binds the field; leave
-the parameter out of the request. A `${setup.x}` reference holds no value and is not refused. A secret
-in a `navigate` URL has no field to bind, so it runs on the CLI only. `run_check` and `run_campaign`
-read `params` from the suite or spec file, not from the request.
+Over MCP a Journey that needs a secret parameter doesn't run. A value for one is refused by name with
+`E_SECRET_PARAM_OVER_MCP` before anything runs, on `run_journey`, `verify_journey`,
+`journey_readiness`, `chain_journeys`, `demo_journey`, `annotate_journey`, `run_load_test`,
+`run_exploration` and `sources`, and `run_journey` refuses the same way when the parameter is left out.
+`targets.json` is not read for this over MCP: an agent can promote a Journey over MCP, so it could
+choose where the value goes. A person runs it on the CLI, or the Journey signs in with a stored session
+(`storageState`) and needs no secret. A `${setup.x}` reference holds no value and is not refused.
+`run_check` and `run_campaign` read `params` from the suite or spec file, not from the request.
 
 **Which names count.** A parameter is secret when it declares `secret: true`, or when its name reads
 as a credential. The name check is deliberately broad, since a credential that slips through has no

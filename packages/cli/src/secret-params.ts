@@ -1,15 +1,14 @@
-import { FsJourneyStore, JourneyRegistry, declaredNonSecretParams, flatJourneySteps, isSecretName, secretParamNames, type Journey } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, flatJourneySteps, isSecretName, journeyParamSchema, secretParamNames, type Journey } from "@jevitate/journey";
+import { navigateUrlParams } from "@jevitate/recording";
 import { SecretFieldSpecError, fieldMatches, parseSecretField, type Control, type SecretField } from "@jevitate/explore";
 import type { TargetDescriptor } from "@jevitate/recording";
-import { journeyApprovalMatches } from "./journey-review.js";
 import { SETUP_REF } from "./mission-fixtures.js";
 
 /**
  * A secret parameter's value (declared `secret: true`, or a credential-like name) and the two
- * surfaces. Over MCP it would pass through the model, so a request's value is refused by name and
- * the value is only ever resolved by code from the operator's own `targets.json`. On the CLI it has
- * a form that stays off the command line: the `--secret-field` binding a goal run or
- * `journey author` already takes.
+ * surfaces. Over MCP a Journey that needs one is refused by name. On the CLI it has a form that stays
+ * off the command line: the `--secret-field` binding a goal run or `journey author` already takes,
+ * or `targets.json`.
  */
 
 /** The code of the refusal: a request carried a value for a secret parameter. */
@@ -20,9 +19,8 @@ const secretFieldHelp = "'<label|testId|id|name>=<value>=env:<VAR>'";
 /** Names only, never a value. Says what to do instead. */
 function refusalMessage(names: readonly string[]): string {
   return (
-    `the value of secret parameter${names.length === 1 ? "" : "s"} ${names.join(", ")} cannot travel through an MCP request, because it would pass through the model; nothing ran. ` +
-    `Ask the operator to bind the field in ~/.jevitate/targets.json under the environment's origin ("secretFields": ["label=<field>=env:<VAR>"]) and call run_journey with 'env' or 'baseUrl' and without this parameter, ` +
-    `or to run it on the CLI: jevitate journey run <id> --secret-field ${secretFieldHelp}. A secret that no field types (one in a navigate URL) runs on the CLI with --param. ` +
+    `secret parameter${names.length === 1 ? "" : "s"} ${names.join(", ")}: a Journey that needs a secret doesn't run over MCP, because the value would pass through the model or be sent by a Journey an agent can promote; nothing ran. ` +
+    `A person runs it on the CLI: jevitate journey run <id> --secret-field ${secretFieldHelp}. Or sign in once and use a stored session ('storageState'), so the Journey needs no secret. ` +
     `If the name only looks like a credential, declare the parameter "secret": false and have a person approve the Journey at a terminal (jevitate journey promote <id>): an approval over MCP lifts nothing, and a source's Journey can't lift it`
   );
 }
@@ -54,28 +52,24 @@ async function loadJourney(dir: string, id: string): Promise<Journey | null> {
   }
 }
 
-/**
- * The secret parameters of `journey` (or by name alone, when there is no such Journey) that `params`
- * gives a value for. An approval that no longer matches the Journey approves nothing, so a
- * `secret: false` added after a person approved lifts nothing.
- */
+/** The secret parameters of `journey` (or by name alone, when there is no such Journey) that `params` gives a value for. */
 export function secretParamsCarriedBy(journey: Journey | null, params: Readonly<Record<string, unknown>>): string[] {
   const strings = Object.fromEntries(Object.entries(params).filter(([, v]) => holdsValue(v))) as Record<string, string>;
   if (journey === null) return Object.keys(strings).filter(isSecretName);
-  const current = journeyApprovalMatches(journey) ? journey : { ...journey, metadata: { ...journey.metadata, approval: undefined } };
-  return secretParamNames(current as Journey, strings).filter((n) => n in strings);
+  return secretParamNames(journey, strings).filter((n) => n in strings);
 }
 
 /**
  * Which of `params` are secret parameters with a value, for any of the Journeys `ids` names. Decided
- * Journey by Journey, so one Journey's `secret: false` never lifts another's refusal.
+ * Journey by Journey, so one Journey's `secret: false` never lifts another's refusal. `needed`: also
+ * the secret parameters a Journey requires and the request leaves out, for a tool that would run it.
  */
-export async function secretParamsCarried(dir: string, ids: readonly unknown[], params: unknown): Promise<string[]> {
-  if (params === null || typeof params !== "object" || Array.isArray(params)) return [];
-  const given = params as Record<string, unknown>;
+export async function secretParamsCarried(dir: string, ids: readonly unknown[], params: unknown, opts: { readonly needed?: boolean } = {}): Promise<string[]> {
+  const given = params !== null && typeof params === "object" && !Array.isArray(params) ? (params as Record<string, unknown>) : {};
   const journeys = await Promise.all(ids.filter((id) => typeof id === "string" && id !== "").map((id) => loadJourney(dir, id as string)));
   const carried = journeys.length === 0 ? secretParamsCarriedBy(null, given) : journeys.flatMap((j) => secretParamsCarriedBy(j, given));
-  return [...new Set(carried)].sort();
+  const needed = opts.needed !== true ? [] : journeys.flatMap((j) => (j === null ? [] : secretParamNames(j).filter((n) => journeyParamSchema(j).required.includes(n) && !(n in given))));
+  return [...new Set([...carried, ...needed])].sort();
 }
 
 /** The warning for these secret parameters on the command line. It names them and never holds a value. */
@@ -102,6 +96,27 @@ export async function warnSecretParamsOnArgv(write: ((line: string) => void) | u
     if (line !== undefined) lines.add(line);
   }
   for (const line of lines) write?.(line);
+}
+
+/** A bound secret goes in at a field op on its origin, nowhere else: `navigate` and `http` send it without one. */
+export class BoundSecretOutsideFieldError extends Error {
+  readonly code = "E_SECRET_ORIGIN_REFUSED";
+  constructor(name: string, where: string) {
+    super(`secret parameter ${name} is bound, and ${where} would send it in a URL, where its origin can't be held to its binding; nothing ran. Take it out of ${where}, or give it with --param if that is what you mean`);
+    this.name = "BoundSecretOutsideFieldError";
+  }
+}
+
+function assertBoundOnlyInFields(journey: Journey, names: readonly string[]): void {
+  for (const name of names) {
+    for (const { recorded: { step } } of flatJourneySteps(journey)) {
+      if (step.kind === "navigate" && navigateUrlParams(step.url).includes(name)) throw new BoundSecretOutsideFieldError(name, "a navigate step");
+    }
+    const ref = `\${${name}}`;
+    for (const c of journey.metadata.endState ?? []) {
+      if (c.kind === "http" && JSON.stringify(c).includes(ref)) throw new BoundSecretOutsideFieldError(name, "an http check");
+    }
+  }
 }
 
 /** A replay's binding: `env:` only (a `cmd:` source is read at type time, which a replay's parameter is not). */
@@ -207,5 +222,6 @@ export async function withSecretParams(req: {
   for (const name of Object.keys(fromFlags.params)) bound[name] = "allowlist";
   // Targets are keyed by origin, so there is one whenever a target's binding applied.
   for (const name of Object.keys(fromTargets.params)) bound[name] = req.targetOrigin === undefined ? [] : [req.targetOrigin];
+  assertBoundOnlyInFields(journey, Object.keys(bound));
   return { params: { ...fromTargets.params, ...fromFlags.params, ...req.params }, ...(Object.keys(bound).length === 0 ? {} : { bound }) };
 }
