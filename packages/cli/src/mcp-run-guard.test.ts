@@ -99,6 +99,12 @@ beforeAll(async () => {
       res.end();
       return;
     }
+    if (req.url === "/rows") {
+      send(res, `<i data-testid=ready>ready</i><main class=rows><ul>
+        <li><button data-testid=row-del onclick="fetch('/delete',{method:'POST'})">Delete account</button><button data-testid=row-open>Open panel</button></li>
+      </ul></main>`);
+      return;
+    }
     if (req.url === "/fetch-off") {
       send(res, `<i data-testid=ready>ready</i><button data-testid=go onclick="fetch('${otherOrigin}/beacon',{method:'POST',body:'x'}).catch(()=>0);document.body.insertAdjacentHTML('beforeend','<p data-testid=clicked>clicked</p>')">Save</button>`);
       return;
@@ -157,6 +163,39 @@ describe("#789 destructive controls over MCP", () => {
     expect(r.isError).toBe(true);
     expect(r.body).toMatchObject({ error: "refused", outcome: "refused", code: "E_RUN_REFUSED_DESTRUCTIVE", rule: "builtin:destructive", at: 2, retryable: false, setting: `targets.json["${appOrigin}"].mcpRun.allowDestructive` });
     expect(hits.delete).toBe(0);
+  });
+
+  describe("in a forEach row", () => {
+    const rows = (id: string, testId: string): Journey =>
+      journey(id, [{ step: { kind: "forEach", items: { css: "main.rows li" }, as: "row", steps: [{ kind: "click", target: { testId }, expect: { kind: "count", target: { testId }, min: 0 } }] } } as RecordedStep], []);
+    const atRows = (j: Journey): Journey => {
+      const again = structuredClone(j);
+      again.recording.pages[0]!.url = "/rows";
+      (again.recording.pages[0]!.steps[0]!.step as { url: string }).url = "/rows";
+      again.metadata.approval = { contentHash: journeyReviewHash({ ...again, metadata: { ...again.metadata, approval: undefined } } as Journey), at: "2026-11-05T00:00:00.000Z" };
+      return again;
+    };
+
+    it("refuses a row's destructive click, as a plain step's: nothing reaches the server", async () => {
+      seed(atRows(rows("rows-del", "row-del")));
+      const r = await run("rows-del");
+      expect(r.body).toMatchObject({ error: "refused", outcome: "refused", code: "E_RUN_REFUSED_DESTRUCTIVE", rule: "builtin:destructive", at: 2, retryable: false });
+      expect(hits.delete).toBe(0);
+    });
+
+    it("judges the row's control by what it is called, not the step that holds it", async () => {
+      seed(atRows(rows("rows-open", "row-open")));
+      const r = await run("rows-open");
+      expect(r.body).toMatchObject({ outcome: "ok" });
+      expect(hits.delete).toBe(0);
+    });
+
+    it("a person's mcpRun.allowDestructive lets it through", async () => {
+      seed(atRows(rows("rows-del-ok", "row-del")));
+      configure({ allowDestructive: true });
+      await run("rows-del-ok");
+      expect(hits.delete).toBeGreaterThan(0);
+    });
   });
 
   it("a person's mcpRun.allowDestructive lets it through, on that target only", async () => {

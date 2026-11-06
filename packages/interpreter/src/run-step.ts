@@ -352,7 +352,7 @@ export async function runStep(
         const rowLocator = itemsLocator.nth(i);
         vars.set(`${step.as}.__index`, String(i));
         for (const childStep of step.steps) {
-          await runRowScopedChildStep(actor, childStep, rowLocator, vars, expected);
+          await runRowScopedChildStep(actor, childStep, rowLocator, vars, expected, index, rec, targetOpts.actionGuard);
           // #580: an `extract` inside a `forEach` also publishes its value under the row's indexed
           // binding (`<as>.<i>.<field>`), alongside the row-scoped `<field>` (last row wins) it has
           // always bound. Copied per row, while `<field>` still holds THIS row's value.
@@ -396,10 +396,16 @@ async function runRowScopedChildStep(
   rowLocator: Locator,
   vars: Map<string, string>,
   expected: (a: Assertion) => Assertion,
+  index: number,
+  parent: RecordedStep,
+  actionGuard: ReplayActionGuard | undefined,
 ): Promise<void> {
   switch (childStep.kind) {
     case "click": {
-      await resolveInRoot(rowLocator, childStep.target).click();
+      const clicked = resolveInRoot(rowLocator, childStep.target);
+      // #789: as a plain click's, judged as the child it is, at the `forEach`'s own step number.
+      await actionGuard?.beforeAction({ index, recorded: { ...parent, step: childStep }, locator: clicked });
+      await clicked.click();
       const expect = expected(childStep.expect);
       if (!(await checkAssertionInRow(actor, expect, rowLocator))) {
         throw new PostconditionFailed(expect, "forEach click");
