@@ -15,10 +15,10 @@ import { expectedResultFromDelta } from "../replay-deltas.js";
  *  - a `relevant-change` delta (#303) → `expect` on what it added or changed on the page: a named
  *    element (`visible role+name`) or the new text (`visible textContains`), skipping volatile
  *    (digit-bearing), redacted and summarised lines and the target's own name;
- *  - a fill of a constant value → `valueEquals` of that value; #565: a fill of a NON-SECRET variable
+ *  - a fill of a constant value → `valueEquals` of that value; #565: a NON-SECRET variable
  *    → `valueEquals { var }` (the field holds exactly the supplied text). A secret fill (a name in
  *    `secretVars`, or one that reads as a secret) claims no value: it would be model-visible;
- *  - a navigation postcondition (`urlIncludes`, set by the recorder) is kept as is.
+ *  - a navigation postcondition (`urlIncludes`, set by the recorder) is kept when its URL changed.
  *
  * A click on an ARIA tab proves its activation as `aria-selected=true` even without a delta
  * (#756). Any other click/type/select step left with nothing to claim gets the explicit "no claim"
@@ -36,13 +36,13 @@ export function deriveStepExpectations(
   const secret = new Set(opts.secretVars ?? []);
   return {
     ...recording,
-    pages: recording.pages.map((page) => ({ ...page, steps: page.steps.map((r) => deriveOne(r, isWrite, secret)) })),
+    pages: recording.pages.map((page) => ({ ...page, steps: page.steps.map((r) => deriveOne(r, isWrite, secret, page.url)) })),
   };
 }
 
-function deriveOne(recorded: RecordedStep, isWrite: WriteClassifier, secret: ReadonlySet<string>): RecordedStep {
+function deriveOne(recorded: RecordedStep, isWrite: WriteClassifier, secret: ReadonlySet<string>, entryUrl: string): RecordedStep {
   const writes = writeChecks(recorded, isWrite);
-  const step = withDerivedExpect(recorded, secret);
+  const step = withDerivedExpect(recorded, secret, entryUrl);
   const expectedResult = derivedExpectedResult(recorded);
   return {
     ...recorded,
@@ -120,11 +120,20 @@ function noClaim(target: TargetDescriptor): Assertion {
   return { kind: "count", target: { ...target }, min: 0 };
 }
 
-function withDerivedExpect(recorded: RecordedStep, secret: ReadonlySet<string>): Step {
+function withDerivedExpect(recorded: RecordedStep, secret: ReadonlySet<string>, entryUrl: string): Step {
   const step = recorded.step;
   if (!("expect" in step) || !("target" in step)) return step;
-  // The recorder already replaced a provisional postcondition with what held (a navigation).
-  if (step.expect.kind === "urlIncludes" && step.expect.text !== "") return step;
+  // A disappeared SPA control also makes the recorder store the current URL. When that URL did
+  // not change, it is not evidence of the action's outcome; prefer the observed page delta.
+  const unchangedUrl = step.expect.kind === "urlIncludes" && step.expect.text === entryUrl;
+  if (step.expect.kind === "urlIncludes" && step.expect.text !== "" && !unchangedUrl) return step;
+  // The select executor records the actual DOM value returned by Playwright, which can differ
+  // from the chosen option label. Never infer a value assertion from that label.
+  if (step.kind === "select" && step.expect.kind === "valueEquals") {
+    // Post-processing may have promoted the action to a variable after this measurement. The
+    // original literal is neither a proof for another option nor safe for a secret parameter.
+    return "var" in step.value || step.value.redacted ? { ...step, expect: noClaim(step.target) } : step;
+  }
   const derived = step.kind === "fill" ? fillExpect(step, secret) : recorded.delta?.verdict === "relevant-change" ? fromDelta(recorded.delta.changes, step.target) : null;
   if (derived !== null) return { ...step, expect: derived };
   // #756: no delta claim. An ARIA tab's activation is still provable from its role alone.
@@ -132,7 +141,7 @@ function withDerivedExpect(recorded: RecordedStep, secret: ReadonlySet<string>):
     const tab = tabAssertion(step.target);
     if (tab !== null) return { ...step, expect: tab };
   }
-  return isOwnTargetVisible(step) ? { ...step, expect: noClaim(step.target) } : step;
+  return isOwnTargetVisible(step) || unchangedUrl ? { ...step, expect: noClaim(step.target) } : step;
 }
 
 function fillExpect(step: Extract<Step, { kind: "fill" }>, secret: ReadonlySet<string>): Assertion | null {
