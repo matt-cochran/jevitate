@@ -16,6 +16,9 @@ import { runJourneyProgrammatically } from "./journey-api.js";
 import { loadTargetsFile, TargetConfigError } from "./target-config.js";
 import { confineMcpPath, McpPathError } from "./mcp-paths.js";
 import { homeDataRoot } from "./project-dir.js";
+import { runAsMcpInvocation } from "./approval-provenance.js";
+import { allowedOriginSet, offAllowlistWriteOrigin, prepareMcpRunGuard } from "./mcp-run-guard.js";
+import { canonicalOrigin, resolveTargetConfig } from "./target-config.js";
 
 /** #789: an MCP-driven replay refuses destructive clicks and off-allowlist writes before anything leaves the browser. */
 
@@ -458,5 +461,52 @@ describe("#789 only a person's targets.json can lift a refusal", () => {
     writeFileSync(targetsFile, "{ not json");
     const r = await run("bad-config");
     expect(r.body).toMatchObject({ error: "refused", code: "E_RUN_GUARD_CONFIG", retryable: false });
+  });
+});
+
+describe("an alias of a flagged origin", () => {
+  const prepared = (site: string, environments: object, targets: object = {}): Promise<string> => {
+    const dir = mkdtempSync(join(tmpdir(), "jev-guard-alias-"));
+    const environmentsFile = join(dir, "environments.json");
+    const file = join(dir, "targets.json");
+    writeFileSync(environmentsFile, JSON.stringify(environments));
+    writeFileSync(file, JSON.stringify(targets));
+    return runAsMcpInvocation(async () => {
+      try {
+        prepareMcpRunGuard({ site, allowedOrigins: [site], environmentsFile, targetsFile: file });
+        return "allowed";
+      } catch (err) {
+        return (err as { code: string }).code;
+      }
+    });
+  };
+  const FLAGGED = { prod: { baseUrl: "https://app.example.com", production: true } };
+
+  it.each(["https://app.example.com", "https://APP.example.com:443", "https://app.example.com.", "https://app.example.com..", "https://App.Example.COM.:443/x"])("%s is refused as the flagged origin", async (site) => {
+    expect(await prepared(site, FLAGGED)).toBe("E_RUN_REFUSED_PRODUCTION");
+  });
+
+  it("the flag and the targets entry may themselves be written as an alias", async () => {
+    expect(await prepared("https://app.example.com", { prod: { baseUrl: "https://APP.example.com.", production: true } })).toBe("E_RUN_REFUSED_PRODUCTION");
+    expect(await prepared("https://app.example.com.", FLAGGED, { "https://APP.example.com:443/": { mcpRun: { allowProduction: true } } })).toBe("allowed");
+  });
+
+  it("a different scheme or an IP can't be known as the same site: docs/safety.md says so", async () => {
+    expect(await prepared("http://app.example.com", FLAGGED)).toBe("allowed");
+    expect(await prepared("https://192.0.2.1", FLAGGED)).toBe("allowed");
+  });
+
+  it("the allowlist reads a write to an alias as the same origin, and any other as off it", () => {
+    const allowed = allowedOriginSet(["https://app.example.com"]);
+    expect(offAllowlistWriteOrigin("POST", "https://APP.example.com.:443/save", allowed)).toBeUndefined();
+    expect(offAllowlistWriteOrigin("POST", "https://other.example.com/save", allowed)).toBe("https://other.example.com");
+    expect(canonicalOrigin("not a url")).toBeUndefined();
+  });
+
+  it("a target's safety.deny reaches an alias", () => {
+    const file = { "https://app.example.com": { safety: { deny: ["Wire transfer"] } } };
+    expect(resolveTargetConfig(file, "https://app.example.com.").safety?.deny).toEqual(["Wire transfer"]);
+    expect(resolveTargetConfig({ "https://APP.example.com/": { safety: { deny: ["x"] } } }, "https://app.example.com").safety?.deny).toEqual(["x"]);
+    expect(resolveTargetConfig(file, "https://other.example.com").safety?.deny).toBeUndefined();
   });
 });

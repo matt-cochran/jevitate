@@ -261,6 +261,15 @@ What does not guard a run today:
   ([#795](https://github.com/matt-cochran/jevitate/issues/795)).
 - An agent can loosen the limits that are not in `targets.json`: it can set the site policy, promote a
   target and promote a Journey over MCP ([#799](https://github.com/matt-cochran/jevitate/issues/799)).
+- A `baseUrl` an agent passes can name an origin the configuration doesn't know, and that origin joins the
+  run's write allowlist. Its `production` flag, `safety.deny` and `mcpRun` don't apply there, because nothing
+  says they should. Origins are compared after normalising case, default port and a trailing dot, so an alias
+  of a flagged host is still that host, but an IP or another scheme for the same site can't be known as it
+  ([#799](https://github.com/matt-cochran/jevitate/issues/799)).
+- An authored `allowedOrigins` widens the allowlist after promotion. `author_journey` with `allow` records
+  `metadata.allowedOrigins`, and once `promote_journey` has run, the run's guard allows writes to those origins.
+  `mcpRun.allowOffAllowlistWrites` isn't the only thing that lifts that refusal
+  ([#799](https://github.com/matt-cochran/jevitate/issues/799)).
 - The MCP and CLI rules above are separate; one trust model for both is
   [#792](https://github.com/matt-cochran/jevitate/issues/792).
 

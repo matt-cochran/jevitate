@@ -392,13 +392,29 @@ export interface TargetFlags {
   readonly dialogs?: DialogPolicy;
 }
 
+/**
+ * An origin as this code compares origins: lower case and no default port (as `URL` has it), and no
+ * trailing dot on the host, so an alias of the same host matches the same entry. An IP, or another
+ * scheme, can't be known to be the same site. Undefined for what is no URL.
+ */
+export function canonicalOrigin(url: string): string | undefined {
+  try {
+    const u = new URL(url);
+    if (u.hostname.endsWith(".")) u.hostname = u.hostname.replace(/\.+$/, "");
+    return u.origin;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The config for one origin: the file's entry, with flag patterns ADDED and flag numbers winning. */
 export function resolveTargetConfig(
   file: Readonly<Record<string, TargetConfig>>,
   origin: string,
   flags: TargetFlags = {},
 ): TargetConfig {
-  const base = file[origin] ?? {};
+  const wanted = canonicalOrigin(origin);
+  const base = file[origin] ?? Object.entries(file).find(([key]) => wanted !== undefined && canonicalOrigin(key) === wanted)?.[1] ?? {};
   const ignoreRequests = [...(base.settle?.ignoreRequests ?? []), ...(flags.settleIgnore ?? [])];
   const longPollMs = flags.longPollMs ?? base.settle?.longPollMs;
   const devServer = flags.devServer === true || base.settle?.devServer === true;

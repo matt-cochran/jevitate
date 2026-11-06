@@ -107,7 +107,7 @@ export const OMIT = {
   browserBin: "which browser binary, channel and Chromium switches launch is the operator's setting (the server's own launch), never an MCP argument",
   storeDir: "store and results locations are the server's (the `jevitate mcp` defaults / --dir): an MCP argument never picks which directory is read or written as a store",
   envSecret: "binds an environment variable (or a literal secret) the run types or redacts: a request never chooses which of the operator's variables is read — secret fields come from targets.json (secretFields/personas)",
-  mcpOrigins: "#484: an MCP caller never names origins — a replay reaches only operator-configured origins; over MCP use 'env' (an environment in environments.json), or verify-fix --allow on the CLI",
+  mcpOrigins: "#484: a request adds no origin to a replay's allowlist by flag: over MCP use 'env' (an environment in environments.json), or verify-fix --allow on the CLI. Where a tool takes 'baseUrl', that argument can still name an origin the configuration doesn't know (docs/safety.md)",
   logCmd: "server-log sources can run commands and read arbitrary files: operator-declared only (targets.json logSources/allowLogCmd)",
   logTriage: "#313: sends the run's recorded log text (redacted) to the judgment model — an operator opt-in for their own logs, never a request's choice",
   hangWrites: "re-sending a paid/destructive write is the operator's call (targets.json safety.hangReplayWrites)",

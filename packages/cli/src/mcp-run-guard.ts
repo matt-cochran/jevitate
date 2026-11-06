@@ -6,7 +6,7 @@ import type { RecordedStep } from "@jevitate/recording";
 import { inMcpInvocation, noteMcpRefusal } from "./approval-provenance.js";
 import { environmentsFilePath, loadEnvironmentsFile, type ResolvedJourneyEnvironment } from "./environments.js";
 import { EXIT_CODES } from "./exit-codes.js";
-import { loadTargetsFile, type McpRunAllowances, type TargetConfig } from "./target-config.js";
+import { canonicalOrigin, loadTargetsFile, type McpRunAllowances, type TargetConfig } from "./target-config.js";
 
 /**
  * #789 — the floor under an MCP-driven replay, until run modes exist (#792). By default such a run:
@@ -32,17 +32,9 @@ import { loadTargetsFile, type McpRunAllowances, type TargetConfig } from "./tar
 
 const READ_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
 
-/** The origins of an allowlist (entries that do not parse are dropped: they allow nothing). */
+/** The origins of an allowlist, in `canonicalOrigin`'s form (entries that do not parse are dropped: they allow nothing). */
 export function allowedOriginSet(allowedOrigins: readonly string[]): ReadonlySet<string> {
-  return new Set(
-    allowedOrigins.flatMap((o) => {
-      try {
-        return [new URL(o).origin];
-      } catch {
-        return [];
-      }
-    }),
-  );
+  return new Set(allowedOrigins.flatMap((o) => canonicalOrigin(o) ?? []));
 }
 
 /** #485: the origin of an http(s) write (any method but GET/HEAD/OPTIONS) outside `allowed`, else undefined. */
@@ -51,7 +43,7 @@ export function offAllowlistWriteOrigin(method: string, url: string, allowed: Re
   try {
     const u = new URL(url);
     if (u.protocol !== "http:" && u.protocol !== "https:") return undefined;
-    return allowed.has(u.origin) ? undefined : u.origin;
+    return allowed.has(canonicalOrigin(url) ?? u.origin) ? undefined : u.origin;
   } catch {
     return undefined;
   }
@@ -81,16 +73,10 @@ export function runGuardRefusalBody(err: RunGuardRefusedError): Record<string, u
 
 const DO_NOT_RETRY = "This is not a failed run to retry: it is refused the same way until a person changes that setting.";
 
-/** One origin's entry of the targets file (the keys may be written with a trailing slash). */
+/** One origin's entry of the targets file, by `canonicalOrigin` (the keys may be written with a trailing slash). */
 function targetForOrigin(targets: Readonly<Record<string, TargetConfig>>, origin: string): TargetConfig | undefined {
-  for (const [key, target] of Object.entries(targets)) {
-    try {
-      if (new URL(key).origin === origin) return target;
-    } catch {
-      // A key that is no URL is no origin's entry.
-    }
-  }
-  return undefined;
+  // A key that is no URL is no origin's entry.
+  return Object.entries(targets).find(([key]) => canonicalOrigin(key) === origin)?.[1];
 }
 
 /** True when this origin is any declared environment's flagged `production: true` (a `baseUrl` naming it counts as `env` naming it). */
@@ -119,7 +105,7 @@ export interface McpRunGuardRequest {
  */
 export function prepareMcpRunGuard(req: McpRunGuardRequest): McpRunGuard | undefined {
   if (!inMcpInvocation()) return undefined;
-  const origin = allowedOriginSet([req.site]).values().next().value ?? req.site;
+  const origin = canonicalOrigin(req.site) ?? req.site;
   let target: TargetConfig | undefined;
   let production: boolean;
   try {
