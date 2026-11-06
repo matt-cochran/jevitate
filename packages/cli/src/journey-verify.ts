@@ -1031,6 +1031,18 @@ const resultOfEntry = (m: JourneyVerifyMutation): MutationRunResult => ({
   ...(m.atBaseTime === undefined ? {} : { atBaseTime: m.atBaseTime }),
 });
 
+/**
+ * A paced replay waits as long as the proof says, not as long as the Journey does, so a wait that ran out
+ * says both. For the reader only: nothing reads `reason` for a verdict but `failedSitesOf`, which is given the run's own.
+ */
+function withStatedWaitLimit(reason: string, at: number | undefined, journey: Journey): string {
+  const step = at === undefined ? undefined : flatJourneySteps(journey)[at]?.recorded.step;
+  const stated = step !== undefined && "waitFor" in step ? step.waitFor?.maxMs : undefined;
+  return reason.replace(/\(waitFor maxMs (\d+)\); it never held/, (whole, limit: string) =>
+    Number(limit) === stated ? whole : `(this replay's waitFor maxMs ${limit}; the Journey's ${stated === undefined ? "sets none" : `is ${stated}`}); it never held`,
+  );
+}
+
 const reported = ({ reachedMs: _reachedMs, arrivedMs: _arrivedMs, heldMs: _heldMs, endStateReachedMs: _end, endStateHeldMs: _endHeld, marginMs: _margin, ...result }: Replayed): Omit<Replayed, "reachedMs" | "arrivedMs" | "heldMs" | "endStateReachedMs" | "endStateHeldMs" | "marginMs"> => result;
 
 // The replay is DESCRIBED, not fixed: `mutateJourney` re-describes it on the Journey the run moved
@@ -1040,6 +1052,14 @@ async function attemptReplay(c: ReplayContext, m: JourneyMutation, describe: (j:
   const lastIndex = stepsTotal - 1;
   const baseOpenLines = baseProbe.openLinesAtClose;
   const noEndState = journeyEndState(journey).length === 0;
+  let opened: ReplayProbe | undefined;
+  // What a replay left open may land in the next one, however the replay ended.
+  const checkWritesLeftOpen = (p: ReplayProbe): void => {
+    c.noteWritesInFlight(p.writesInFlightAtClose);
+    if (kind === "independence") c.noteIndependenceOpen(p.openLinesAtClose);
+    const excused = kind === "independence" && p.openLinesAtClose.every((line) => baseOpenLines.includes(line));
+    if (p.writesInFlightAtClose > 0 && !excused) taint("write-open", m.id);
+  };
   try {
     const paced = (j: Journey): MutationReplay => pacedReplay(j, describe(j), m, pace);
     const how = paced(journey);
@@ -1055,6 +1075,7 @@ async function attemptReplay(c: ReplayContext, m: JourneyMutation, describe: (j:
       if (writesSent > 0) await pacer.hold(paceTailMs(pace, m));
       await probe.settleOpenWrites(settleBoundMs);
     }, writeScope);
+    opened = probe;
     // Described on the Journey the run moved onto the environment, as the mutated copy is.
     let waits: readonly RelaxedSiteWait[] = how.relaxedSiteWaits ?? [];
     const params = how.params ?? opts.params;
@@ -1106,12 +1127,7 @@ async function attemptReplay(c: ReplayContext, m: JourneyMutation, describe: (j:
       retry,
       probe,
     );
-    c.noteWritesInFlight(probe.writesInFlightAtClose);
-    if (kind === "independence") c.noteIndependenceOpen(probe.openLinesAtClose);
-    const excused = kind === "independence" && probe.openLinesAtClose.every((line) => baseOpenLines.includes(line));
-    if (probe.writesInFlightAtClose > 0 && !excused) {
-      taint("write-open", m.id);
-    }
+    checkWritesLeftOpen(probe);
     const blocked = r.blockedWrites ?? [];
     const blockedFields = how.blockIndex === undefined ? {} : { blockedWrites: blocked.map((b) => `${b.method} ${b.path}`) };
     // #579: a select mutation found no other enabled live option — not applied, never proof.
@@ -1139,7 +1155,7 @@ async function attemptReplay(c: ReplayContext, m: JourneyMutation, describe: (j:
       outcome: r.outcome === "quarantined" ? "failed" : "passed",
       failedSites,
       ...blockedFields,
-      ...(r.outcome === "quarantined" ? { reason: r.reason } : {}),
+      ...(r.outcome === "quarantined" ? { reason: withStatedWaitLimit(r.reason, r.at, journey) } : {}),
       ...(early.length === 0 ? {} : { waitsCut: early }),
       reachedMs: pacer.reachedMs,
       arrivedMs: pacer.arrivedMs,
@@ -1161,6 +1177,7 @@ async function attemptReplay(c: ReplayContext, m: JourneyMutation, describe: (j:
   } catch (err) {
     // A stall ends the proof: it never reads as one mutation's error, which could still end `proven`.
     if (err instanceof JourneyVerifyStalledError) throw err;
+    if (opened !== undefined) checkWritesLeftOpen(opened);
     return { outcome: "error", failedSites: [], reason: err instanceof Error ? err.message : String(err) };
   }
 }

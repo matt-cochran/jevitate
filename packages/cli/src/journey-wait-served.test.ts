@@ -156,6 +156,18 @@ describe("#409 waitFor — a per-step outcome wait for a long-running job (serve
     expect(r.exitCode).toBe(0);
   }, 240_000);
 
+  it("a progress signal that stalls ends the wait as a hang that names the signal, long before maxMs", async () => {
+    const stalled = { kind: "textIncludes" as const, target: { css: "[role=status]" }, text: "Step 99 of 99" };
+    const j = journey("generate-stalled", { maxMs: 240_000, progress: stalled, stallMs: 5_000 });
+    const r = await cli(await stored(j), ["journey", "run", "generate-stalled", "--json"]);
+    const data = (JSON.parse(r.out) as { data: { outcome: string; reason?: string; waits?: Wait[] } }).data;
+    expect(data.outcome).toBe("quarantined");
+    expect(data.reason).toMatch(/hang: the progress signal \(.*\) was absent and unchanged for [0-9.]+s \(stallMs 5000\)/);
+    expect(data.waits![0]).toMatchObject({ step: 2, ending: "hang", maxMs: 240_000 });
+    expect(data.waits![0]!.waitedMs).toBeGreaterThanOrEqual(5_000);
+    expect(data.waits![0]!.waitedMs).toBeLessThan(JOB_MS);
+  }, 240_000);
+
   it("verify --mutate: skip and block-write of the job step make the waited claim fail past the base replay's time (sensitive), not after maxMs", async () => {
     const j = journey("generate-proof", { maxMs: 1_200_000, progress });
     const started = clock.monotonicMs();
@@ -167,7 +179,8 @@ describe("#409 waitFor — a per-step outcome wait for a long-running job (serve
     expect(report.base.outcome).toBe("ok");
     expect(report.mutations.map((m) => `${m.id}=${m.outcome}`)).toEqual(["skip:2=failed", "block-write:2=failed"]);
     for (const m of report.mutations) {
-      const wait = /step 2 failed: .*postcondition failed: kind=count .* — waited [0-9.]+s \(waitFor maxMs ([0-9]+)\); it never held/.exec(m.reason ?? "");
+      // This replay's bound and the Journey's own, both: the proof sets the first.
+      const wait = /step 2 failed: .*postcondition failed: kind=count .* — waited [0-9.]+s \(this replay's waitFor maxMs ([0-9]+); the Journey's is 1200000\); it never held/.exec(m.reason ?? "");
       expect(wait, m.reason).not.toBeNull();
       // Past the base's 2 minutes by a quarter and a second; the base can read long here, as the page clock trails Node's under skipping time.
       expect(Number(wait![1])).toBeGreaterThan(JOB_MS);

@@ -131,7 +131,8 @@ Under `journey verify --mutate`, a waited claim from the mutated step on runs a 
 replay's claim took (1 s and a quarter more), or to its hang threshold plus 5 s if that is longer, and never
 past `maxMs`: a claim whose job never started must fail, and the proof does not wait out the budget to show
 it. A `progress` signal cannot end this wait, since the action that brings the signal may be what was
-mutated, so such a replay reports `it never held` rather than a hang.
+mutated, so such a replay reports `it never held` rather than a hang, and names both limits: `(this replay's waitFor
+maxMs 188838; the Journey's is 1200000)`.
 
 ### Parameter-relative assertions
 

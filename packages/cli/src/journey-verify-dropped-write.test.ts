@@ -60,7 +60,7 @@ let fake: FakeClock;
 const realTimer = setTimeout;
 
 /** A proof whose first mutated replay does `during` on its browser, then closes it. */
-async function proveWith(during: (browser: Browser) => void): Promise<JourneyVerifyReport> {
+async function proveWith(during: (browser: Browser) => void, thenThrow = false): Promise<JourneyVerifyReport> {
   let replay = 0;
   let browser: Browser;
   const browserPortFactory = (): BrowserPort => ({
@@ -80,6 +80,7 @@ async function proveWith(during: (browser: Browser) => void): Promise<JourneyVer
     if (replay === 3) during(browser);
     await options.observer?.afterStep?.({ index: 0, actor, outcome: "done" } as never);
     await session.close();
+    if (thenThrow && replay === 3) throw new Error("Target page, context or browser has been closed");
     return passed;
   }) as unknown as Run;
   const proving = verifyJourneyMutations({ dir, id: ID, params: {}, browserPortFactory }, run);
@@ -119,6 +120,19 @@ describe("a write a new document dropped", () => {
     const report = await proveWith(write);
     expect(report.verdict).toBe("inconclusive");
     expect(report.reason).toMatch(UNANSWERED);
+  });
+
+  it("a replay that throws is held to the same check: what it left open may land in the next", async () => {
+    const report = await proveWith(write, true);
+    expect(report.mutations[0]).toMatchObject({ outcome: "error" });
+    expect(report.verdict).toBe("inconclusive");
+    expect(report.reason).toMatch(UNANSWERED);
+  });
+
+  it("a replay that throws with nothing open is only an error", async () => {
+    const report = await proveWith(() => undefined, true);
+    expect(report.mutations[0]).toMatchObject({ outcome: "error" });
+    expect(report.reason ?? "").not.toMatch(UNANSWERED);
   });
 
   it("a write the new document sent itself is not dropped with the old one", async () => {
