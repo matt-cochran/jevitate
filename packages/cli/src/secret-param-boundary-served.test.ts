@@ -833,6 +833,7 @@ describe("nothing secret-bound goes to a model: annotate", { timeout: 120_000 },
   it.each([
     ["a secret parameter", () => journey("an-param"), { secret1: VALUE }, {}],
     ["an extracted credential", () => plain("an-extract", [{ step: { kind: "extract", target: { testId: "pw" }, as: "apiKey", attr: "id", expect: { kind: "visible", target: { testId: "pw" } } } }]), {}, {}],
+    ["a credential extracted in a forEach", () => plain("an-foreach", [{ step: { kind: "forEach", items: { testId: "pw" }, as: "row", steps: [{ kind: "extract", target: { css: "input" }, as: "apiKey", attr: "id", expect: { kind: "visible", target: { css: "input" } } }] } }]), {}, {}],
     ["a secretOutputs value", () => plain("an-secret-output"), {}, { fixtures: fixtureOf({ minted: "$.sec" }, ["minted"]) }],
     ["a credential-named fixture output", () => plain("an-auth-output"), {}, { fixtures: fixtureOf({ authToken: "$.tok" }) }],
   ])("needing %s: refused by name, and no model call", async (_what, make, params, extra) => {

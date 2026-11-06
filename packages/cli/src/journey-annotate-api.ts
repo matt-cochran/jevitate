@@ -175,7 +175,9 @@ export class SecretBoundJourneyError extends Error {
 function assertNoSecretForModel(journey: Journey, params: Readonly<Record<string, string>>): void {
   const names = secretParamNames(journey, params).map((n) => `secret parameter ${n}`);
   const nonSecret = declaredNonSecretParams(journey);
-  const extracted = flatJourneySteps(journey).flatMap(({ recorded: { step } }) => (step.kind === "extract" && isSecretName(step.as) && !nonSecret.has(step.as) ? [`extracted credential ${step.as}`] : []));
+  const extracted = flatJourneySteps(journey)
+    .flatMap(({ recorded: { step } }) => (step.kind === "forEach" ? step.steps : [step]))
+    .flatMap((step) => (step.kind === "extract" && isSecretName(step.as) && !nonSecret.has(step.as) ? [`extracted credential ${step.as}`] : []));
   if (names.length + extracted.length > 0) throw new SecretBoundJourneyError(journey.metadata.id, [...names, ...extracted]);
 }
 
