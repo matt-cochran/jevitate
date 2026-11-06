@@ -382,7 +382,8 @@ built-in verb (`Preview*`, `Recalculate*`, …).
   value still there stops the call, and gone when the run ends. Past 2000 live values a model call
   fails. A secret under 8 characters isn't masked there. A replay holding one makes no model call at
   all. Goal, adversarial and usability still make them, and a short secret is masked by their own set,
-  not by the backstop.
+  not by the backstop. That masks it as a whole token only: a short secret inside a longer one, such as
+  `abcPw12xdef`, still reaches the prompt.
 - Redaction is for what a person or a model reads, never for what a page gets: a run that would type or
   navigate with masked text fails (`E_REDACTED_VALUE`), which includes a value that really does contain
   `«redacted»`. `journey chain` hands on what the producer extracted, except a value under a name the
