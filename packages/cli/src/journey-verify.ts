@@ -30,6 +30,7 @@ import {
   mutationReplay,
   mutationWriteMatches,
   needsRelaxedReplay,
+  needsFinalNetworkObservation,
   paceBeforeMutationMs,
   paceEndStateFloorMs,
   paceFloorMs,
@@ -1009,6 +1010,36 @@ function failedSitesOf(result: { outcome: string; reason?: string; at?: number; 
   return result.at === undefined ? structured : [...structured, { where: "step", step: result.at + 1, postcondition: result.failurePhase === "postcondition" }];
 }
 
+/** Corresponding top-level boundaries only; admission and cleanup never enter this record. */
+function finalObservation(stepCount: number): {
+  anchors: number[]; valid: boolean; finalDone: boolean; closes: number; close?: number;
+  observer: StepObserver; captureClose: () => Promise<void>;
+} {
+  const record = {
+    anchors: [] as number[], valid: true, finalDone: false, closes: 0,
+    close: undefined as number | undefined,
+    observer: {} as StepObserver,
+    captureClose: async (): Promise<void> => {
+      const now = clock.monotonicMs();
+      record.closes++;
+      if (record.closes !== 1 || !Number.isFinite(now) || now < 0 || now < (record.anchors.at(-1) ?? now)) record.valid = false;
+      record.close = now;
+    },
+  };
+  record.observer = {
+    beforeStep: async ({ index }) => {
+      const now = clock.monotonicMs();
+      if (index !== record.anchors.length || index >= stepCount || !Number.isFinite(now) || now < 0 || now < (record.anchors.at(-1) ?? now)) { record.valid = false; return; }
+      record.anchors.push(now);
+    },
+    afterStep: async ({ index, outcome }) => {
+      if (index === stepCount - 1) record.finalDone = outcome === "done";
+    },
+  };
+  return record;
+}
+type FinalObservation = ReturnType<typeof finalObservation>;
+
 /**
  * Runs the proof for one Journey by id. Usage errors (unknown id, bad params, an environment that
  * refuses a step, a site-gate refusal) throw exactly as `journey run`'s do, before any mutation.
@@ -1116,6 +1147,10 @@ interface ReplayContext {
   readonly taint: Taint;
   readonly noteWritesInFlight: (n: number) => void;
   readonly noteIndependenceOpen: (lines: readonly string[]) => void;
+  /** The base's step anchors and final-network capture close, when the Journey has a final network check. */
+  readonly baseline: FinalObservation | undefined;
+  /** Is `m` a skip paired with a final network check, so its replay must observe as long as the base did? */
+  readonly judgesRequest: (m: JourneyMutation) => boolean;
 }
 
 /** What a pair's replays, and the re-runs that settle a disagreement, need from the proof. */
@@ -1218,6 +1253,56 @@ async function attemptReplay(c: ReplayContext, m: JourneyMutation, describe: (j:
       await probe.settleOpenWrites(settleBoundMs);
     }, writeScope);
     opened = probe;
+    // A mutated replay judged by a final network check observes each step prefix at least as long, up to
+    // the final capture's close, as the base did. Browser admission and cleanup never count: the clock
+    // starts at each step's own boundary, and an incomplete or inconsistent observation is no evidence.
+    const baseline = c.baseline;
+    const holdRequired = kind !== "independence" && c.judgesRequest(m);
+    const observed = holdRequired ? finalObservation(stepsTotal) : undefined;
+    let horizonComplete = !holdRequired;
+    let horizonSleeps = 0;
+    let horizonElapsed = 0;
+    let horizonRequired = 0;
+    let horizonCause: "missing-observer" | "sleep-failed" | "clock-no-progress" | "clock-invalid" | "wake-limit" | "incomplete" = "missing-observer";
+    const captureClose = async (): Promise<void> => {
+      if (observed === undefined || baseline === undefined) return;
+      await observed.captureClose();
+      if (!baseline.valid || !observed.valid) { horizonCause = "clock-invalid"; return; }
+      if (baseline.close !== undefined) horizonRequired = Math.max(0, ...baseline.anchors.slice(0, m.step).map((before) => baseline.close! - before));
+      if (baseline.close === undefined || baseline.closes !== 1 || !baseline.finalDone || baseline.anchors.length !== stepsTotal || !observed.finalDone || observed.anchors.length !== stepsTotal) return;
+      horizonCause = "incomplete";
+      try {
+        let now = clock.monotonicMs();
+        if (observed.close === undefined || !Number.isFinite(observed.close) || !Number.isFinite(now) || now < observed.close) {
+          horizonCause = "clock-invalid";
+          return;
+        }
+        for (;;) {
+          let remaining = 0;
+          horizonElapsed = Number.POSITIVE_INFINITY;
+          for (let index = 0; index < m.step; index++) {
+            const before = baseline.anchors[index];
+            const replayBefore = observed.anchors[index];
+            if (before === undefined || replayBefore === undefined) { horizonCause = "missing-observer"; return; }
+            const required = baseline.close - before;
+            const elapsed = now - replayBefore;
+            if (![now, required, elapsed].every(Number.isFinite) || required < 0 || elapsed < 0) { horizonCause = "clock-invalid"; return; }
+            horizonRequired = Math.max(horizonRequired, required);
+            horizonElapsed = Math.min(horizonElapsed, elapsed);
+            remaining = Math.max(remaining, required - elapsed);
+          }
+          if (remaining <= 0) { horizonComplete = true; return; }
+          if (horizonSleeps >= 8) { horizonCause = "wake-limit"; return; }
+          const previous = now;
+          horizonSleeps++;
+          try { await clock.sleep(Math.ceil(remaining)); }
+          catch { horizonCause = "sleep-failed"; return; }
+          now = clock.monotonicMs();
+          if (!Number.isFinite(now) || now < previous) { horizonElapsed = now; horizonCause = "clock-invalid"; return; }
+          if (now === previous) { horizonCause = "clock-no-progress"; return; }
+        }
+      } catch { horizonCause = "clock-invalid"; }
+    };
     // Described on the Journey the run moved onto the environment, as the mutated copy is.
     let waits: readonly RelaxedSiteWait[] = how.relaxedSiteWaits ?? [];
     const params = how.params ?? opts.params;
@@ -1225,6 +1310,7 @@ async function attemptReplay(c: ReplayContext, m: JourneyMutation, describe: (j:
       waits.length === 0 ? undefined : relaxedWaitObserver(() => waits, params, opts.stepResponseTimeoutMs ?? DEFAULT_STEP_RESPONSE_TIMEOUT_MS, (ended) => probe.recordWait(ended)),
       isUnmutated(kind) ? probe.observer() : undefined,
       pacer.observer(),
+      observed?.observer,
     );
     // The step's own lines stay blocked for the rest of the replay. A later step that records the same line sends its own.
     const blockLines = how.blockRequests ?? [];
@@ -1239,6 +1325,7 @@ async function attemptReplay(c: ReplayContext, m: JourneyMutation, describe: (j:
         structuredFailures: true,
         // The write blocker classifies with the same recorded-origin read policy as the planner.
         ...(opts.readRequests === undefined ? {} : { readRequests: opts.readRequests }),
+        ...(observed === undefined ? {} : { beforeFinalNetworkCaptureClose: captureClose }),
         beforeEndState: async () => {
           await pacer.hold(atLeast(paceEndStateFloorMs(pace, m, withMargin), matchTo?.endStateReachedMs));
           // A claim is judged with what the app was already doing finished, as far as the Journey allows.
@@ -1272,6 +1359,15 @@ async function attemptReplay(c: ReplayContext, m: JourneyMutation, describe: (j:
       probe,
     );
     checkWritesLeftOpen(probe);
+    if (holdRequired && r.outcome === "heal-exhausted") {
+      return { outcome: "failed", failedSites: [{ where: "step", step: r.at + 1, postcondition: false }], reason: r.reason };
+    }
+    // A replay that stopped at a step retains its original failure/cascade. A result at
+    // the final-check boundary needs the completed hold, even when the observer was skipped.
+    if (holdRequired && (!horizonComplete || observed?.valid !== true || observed.closes !== 1 || !observed.finalDone) && !(r.outcome === "quarantined" && r.at !== undefined)) {
+      if (observed?.valid === false) horizonCause = "clock-invalid";
+      return { outcome: "error", failedSites: [], reason: `final-network observation horizon failed (cause=${horizonCause}, eligible=${observed?.finalDone === true}, closeObserved=${observed?.closes === 1}, baselineAnchors=${baseline?.anchors.length ?? 0}, replayAnchors=${observed?.anchors.length ?? 0}, sleeps=${horizonSleeps}, requiredMs=${Number.isFinite(horizonRequired) ? horizonRequired : "invalid"}, elapsedMs=${Number.isFinite(horizonElapsed) ? horizonElapsed : "invalid"})` };
+    }
     const blocked = r.blockedWrites ?? [];
     const blockedFields = how.blockIndex === undefined ? {} : { blockedWrites: blocked.map((b) => `${b.method} ${b.path}`) };
     // #579: a select mutation found no other enabled live option — not applied, never proof.
@@ -1622,7 +1718,20 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
   const basePacer = new ReplayPacer(0, () => undefined);
   // The base stays open until its writes have settled: what it started must not land in the next replay.
   const baseProbe: ReplayProbe = new ReplayProbe(stepsTotal, () => baseProbe.settleOpenWrites(Math.max(longestResponseMs, basePacer.elapsedMs())), writeScope);
-  const base = await boundedRun({ ...runOpts, observer: composeObservers(baseProbe.observer(), basePacer.observer()) }, { structuredFailures: true, earliestObserver: basePacer.claimObserver(), afterEndState: () => basePacer.noteEndState() }, undefined, false, baseProbe);
+  // The base's own step boundaries and final capture close: what a final-network replay must observe as long as.
+  const baseline = needsFinalNetworkObservation(journey) ? finalObservation(stepsTotal) : undefined;
+  const base = await boundedRun(
+    { ...runOpts, observer: composeObservers(baseProbe.observer(), basePacer.observer(), baseline?.observer) },
+    {
+      structuredFailures: true,
+      earliestObserver: basePacer.claimObserver(),
+      afterEndState: () => basePacer.noteEndState(),
+      ...(baseline === undefined ? {} : { beforeFinalNetworkCaptureClose: baseline.captureClose }),
+    },
+    undefined,
+    false,
+    baseProbe,
+  );
   // Every other replay waits as this one did, so this one is their control (`pacedReplay`).
   const pace: ReplayPace = { stepEndMs: basePacer.reachedMs.filter((ms): ms is number => ms !== undefined), ...(basePacer.endStateReachedMs === undefined ? {} : { endStateMs: basePacer.endStateReachedMs }), claimHeldMs: [...basePacer.claimHeldMs] };
   const baseMs = basePacer.elapsedMs();
@@ -1667,6 +1776,11 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
       opts, runOpts, journey, pace, stepsTotal, settleBoundMs, writeScope, writeSteps, baseProbe, boundedRun, taint,
       noteWritesInFlight: (n) => void (replayWritesInFlight = Math.max(replayWritesInFlight, n)),
       noteIndependenceOpen: (lines) => void (independenceOpen = lines),
+      baseline,
+      judgesRequest: (m) => m.kind === "skip" && plan.pairs.some((p) => {
+        const site = p.mutation === m.id ? sites.find((s) => assertionSiteKey(s) === p.site) : undefined;
+        return site?.where === "end-state" && (site.check.kind === "requestMade" || site.check.kind === "responseStatus");
+      }),
     };
     const retriesOf = new Map<string, { readonly reason: string }[]>();
     // #778: one infrastructure error must not cost the proof, so a replay that errored before opening a

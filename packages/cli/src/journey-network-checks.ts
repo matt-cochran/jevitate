@@ -10,7 +10,7 @@
  * replay whose steps all passed but whose outcome is absent is a failed run, never `ok`.
  */
 import type { Page } from "playwright";
-import { isLoadRefusedName, journeyEndState, type Journey } from "@jevitate/journey";
+import { isLoadRefusedName, journeyEndState, needsFinalNetworkObservation, type Journey } from "@jevitate/journey";
 import type { NetworkCheck } from "@jevitate/recording";
 import type { JourneyRunResult } from "@jevitate/runtime";
 import type { Actor } from "@jevitate/screenplay";
@@ -69,6 +69,7 @@ interface JudgedCheck {
 
 export class JourneyOutcomeChecks {
   readonly #page: Page;
+  readonly #beforeFinalNetworkCaptureClose: (() => Promise<void>) | undefined;
   readonly #end;
   readonly #steps: StepWindow[];
   readonly #secrets: readonly string[];
@@ -84,6 +85,7 @@ export class JourneyOutcomeChecks {
     page: Page,
     journey: Journey | undefined,
     opts: {
+      readonly beforeFinalNetworkCaptureClose?: () => Promise<void>;
       readonly relaxedStepRequests?: readonly string[];
       readonly secrets?: readonly string[];
       readonly stepResponseTimeoutMs?: number;
@@ -98,6 +100,7 @@ export class JourneyOutcomeChecks {
     } = {},
   ) {
     this.#page = page;
+    this.#beforeFinalNetworkCaptureClose = journey !== undefined && needsFinalNetworkObservation(journey) ? opts.beforeFinalNetworkCaptureClose : undefined;
     this.#relaxedStepRequests = new Set(opts.relaxedStepRequests ?? []);
     this.#httpProbe = opts.httpProbe;
     this.#resolveRef = opts.resolveRef;
@@ -295,6 +298,14 @@ export class JourneyOutcomeChecks {
           ? { where: "unevaluable", detail: `${r.check} — ${r.detail}` }
           : { where: "step-request", step: s.index + 1, checkIndex, detail: `${r.check} — ${r.detail}`, ...(evaluated === true ? { evaluated } : {}) });
         stepFailureReasons.push(`step ${s.index + 1} (${s.label}): ${r.check} — ${r.detail}`);
+      }
+    }
+    // Step judgments retain their original membership. Only the still-open final capture extends.
+    if (this.#beforeFinalNetworkCaptureClose !== undefined) {
+      try { await this.#beforeFinalNetworkCaptureClose(); }
+      catch {
+        this.#stopCaptures(monitor, capture);
+        throw new Error("final-network capture observation failed");
       }
     }
     // The captures stay live through the waits above (#486): a pending request's response lands in them.

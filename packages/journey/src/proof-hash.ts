@@ -1,4 +1,5 @@
 import { contentHash } from "@jevitate/domain";
+import { needsFinalNetworkObservation } from "./assertions.js";
 import type { Journey } from "./journey.js";
 
 /*
@@ -85,5 +86,5 @@ export function journeyProofHash(journey: Journey): string {
   }));
   // Planner semantics include waived checks, request ownership/observation horizons and
   // required unresolved requests. Earlier planner receipts must not remain fresh.
-  return contentHash(stripDescriptorMetadata({ mutationPlannerVersion: 7, metadata, recording }));
+  return contentHash(stripDescriptorMetadata({ mutationPlannerVersion: 7, ...(needsFinalNetworkObservation(journey) ? { finalNetworkObservationVersion: 1 } : {}), metadata, recording }));
 }
