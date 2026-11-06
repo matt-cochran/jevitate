@@ -72,7 +72,7 @@ export interface MutationPlan {
 /** Where a mutated replay failed. `postcondition`: the step's own assertion failed (not its action). */
 export type MutationFailedSite =
   | { readonly where: "step"; readonly step: number; readonly postcondition: boolean }
-  | { readonly where: "step-request"; readonly step: number; readonly checkIndex: number }
+  | { readonly where: "step-request"; readonly step: number; readonly checkIndex: number; readonly evaluated?: true }
   | { readonly where: "end-state"; readonly index: number }
   | { readonly where: "unevaluable" };
 
@@ -947,7 +947,11 @@ export function needsRelaxedReplay(plan: MutationPlan, m: JourneyMutation, resul
   if (result.outcome !== "failed") return false;
   if (!result.failedSites.some((f) => f.where === "step" && f.step === m.step && f.postcondition)) return false;
   const own = `step:${m.step}`;
-  return plan.pairs.some((p) => p.mutation === m.id && p.site !== own);
+  return plan.pairs.some((p) => {
+    if (p.mutation !== m.id || p.site === own) return false;
+    const request = /^step-request:([1-9][0-9]*):([0-9]+)$/.exec(p.site);
+    return request === null || !evaluatedOwnRequestFailure(Number(request[1]), Number(request[2]), m, result);
+  });
 }
 
 /**
@@ -964,12 +968,24 @@ export function classifyMutation(site: JourneyAssertionSite, m: JourneyMutation,
   return targeted === "sensitive" || targeted === "insensitive" ? targeted : "cascade";
 }
 
+/** An already judged own-request failure survives only the completed action's own DOM failure. */
+function evaluatedOwnRequestFailure(step: number, checkIndex: number, m: JourneyMutation, result: MutationRunResult): boolean {
+  if (result.outcome !== "failed" || step !== m.step) return false;
+  return result.failedSites.some((f) => f.where === "step-request" && f.step === step && f.checkIndex === checkIndex && f.evaluated === true) &&
+    !result.failedSites.some((f) => f.where === "unevaluable" ||
+      (f.where === "step" && (f.step < step || (f.step === step && !f.postcondition))) ||
+      (f.where === "step-request" && f.step < step));
+}
+
 /**
  * #402: one assertion against one mutated replay. Sensitive only when the replay failed AT that
  * assertion and nothing failed before the mutated step — a failure anywhere else is a cascade,
  * never counted as proof.
  */
 function classifyMutationPlain(site: JourneyAssertionSite, m: JourneyMutation, result: MutationRunResult): MutationVerdict {
+  // The original applied run already evaluated this exact request in its own complete capture.
+  // Its completed action can fail its DOM assertion too; a relaxed rerun must not erase that fact.
+  if (site.where === "step-request" && evaluatedOwnRequestFailure(site.step, site.checkIndex, m, result)) return "sensitive";
   // #554: the mutated step's own postcondition failed, so a later site is judged on the relaxed
   // replay (same rules, no further relaxed level). The step's own step site keeps the original
   // result, so its own failure stays the sensitive verdict.

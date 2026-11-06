@@ -174,12 +174,12 @@ function blockedOwnWrite(recorded: readonly string[], declared: NonNullable<Muta
   return [...observed, ...declared].some((matcher) => blocked.some((request) => mutationWriteMatches(matcher, request)));
 }
 
-function failedSitesOf(result: { outcome: string; reason?: string; at?: number }, failures: readonly OutcomeCheckFailure[]): MutationFailedSite[] {
+function failedSitesOf(result: { outcome: string; reason?: string; at?: number; failurePhase?: "action" | "postcondition" }, failures: readonly OutcomeCheckFailure[]): MutationFailedSite[] {
   if (result.outcome !== "quarantined") return [];
   const structured = failures.map((f): MutationFailedSite =>
-    f.where === "step-request" ? { where: "step-request", step: f.step, checkIndex: f.checkIndex } : f.where === "end-state" ? { where: "end-state", index: f.index } : { where: "unevaluable" },
+    f.where === "step-request" ? { where: "step-request", step: f.step, checkIndex: f.checkIndex, ...(f.evaluated === true ? { evaluated: true } : {}) } : f.where === "end-state" ? { where: "end-state", index: f.index } : { where: "unevaluable" },
   );
-  return result.at === undefined ? structured : [...structured, { where: "step", step: result.at + 1, postcondition: /postcondition failed/.test(result.reason ?? "") }];
+  return result.at === undefined ? structured : [...structured, { where: "step", step: result.at + 1, postcondition: result.failurePhase === "postcondition" }];
 }
 
 /**

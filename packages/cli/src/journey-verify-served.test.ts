@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Command } from "commander";
 import { ProfileManager } from "@jevitate/daemon";
-import { FsJourneyStore, type Journey } from "@jevitate/journey";
+import { FsJourneyStore, classifyMutation, journeyAssertions, type Journey, type MutationRunResult } from "@jevitate/journey";
 import type { Assertion, RecordedStep } from "@jevitate/recording";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
@@ -153,7 +153,7 @@ interface Report {
   journeyHash: string;
   base: { outcome: string };
   verdict: string;
-  mutations: { kind: string; step: number; id: string; outcome: string; failedSites: unknown[]; blockedWrites?: string[] }[];
+  mutations: { kind: string; step: number; id: string; outcome: string; failedSites: MutationRunResult["failedSites"]; relaxed?: MutationRunResult["relaxed"]; blockedWrites?: string[] }[];
   assertions: { site: string; verdict: string; provedBy?: string; check: string }[];
   summary: Record<string, number>;
 }
@@ -230,7 +230,7 @@ describe("journey verify --mutate (#402, served)", () => {
     expect(verdictOf(report, "step:2")).toEqual({ verdict: "sensitive", provedBy: "stale-value:2" });
     // block-write alone proves the request and the persisted text too.
     const blocked = report.mutations.find((m) => m.id === "block-write:3")!;
-    expect(blocked.failedSites).toEqual(expect.arrayContaining([{ where: "step-request", step: 3, checkIndex: 0 }, { where: "end-state", index: 0 }]));
+    expect(blocked.failedSites).toEqual(expect.arrayContaining([{ where: "step-request", step: 3, checkIndex: 0, evaluated: true }, { where: "end-state", index: 0 }]));
     expect(report.verdict).toBe("proven");
     expect(exitCode).toBe(0);
     // #432: the verdict is recorded beside the Journey, and its review sheet shows it.
@@ -249,6 +249,18 @@ describe("journey verify --mutate (#402, served)", () => {
     });
     const { exitCode, report } = await verify(selfAsserting, ["--json"]);
     expect({ verdict: report.verdict, exitCode }).toEqual({ verdict: "proven", exitCode: 0 });
+    const blocked = report.mutations.find((m) => m.id === "block-write:3")!;
+    expect(blocked.blockedWrites).toEqual(["POST /api/save"]);
+    expect(blocked.failedSites).toEqual(expect.arrayContaining([
+      { where: "step-request", step: 3, checkIndex: 0, evaluated: true },
+      { where: "step", step: 3, postcondition: true },
+    ]));
+    const requestSite = journeyAssertions(selfAsserting).find((s) => s.where === "step-request")!;
+    // The real applied run retains the exact failed request alongside its own failed DOM check.
+    // Replacing the relaxed replay with an unusable result cannot erase this independent evidence.
+    expect(classifyMutation(requestSite, { kind: "block-write", step: 3, id: "block-write:3" }, {
+      outcome: "failed", failedSites: blocked.failedSites, relaxed: { outcome: "not-applied", failedSites: [] },
+    })).toBe("sensitive");
   }, 240_000);
 
   it("a request failure is sensitive when its missing write makes a later action fail", async () => {
@@ -261,7 +273,7 @@ describe("journey verify --mutate (#402, served)", () => {
     const { exitCode, report } = await verify(dependent, ["--json"]);
     expect(verdictOf(report, "step-request:3:0")).toEqual({ verdict: "sensitive", provedBy: "skip:3" });
     expect(report.mutations.find((m) => m.id === "skip:3")?.failedSites).toEqual(
-      expect.arrayContaining([{ where: "step-request", step: 3, checkIndex: 0 }, { where: "step", step: 4, postcondition: false }]),
+      expect.arrayContaining([{ where: "step-request", step: 3, checkIndex: 0, evaluated: true }, { where: "step", step: 4, postcondition: false }]),
     );
     expect(report.verdict).toBe("proven");
     expect(exitCode).toBe(0);

@@ -85,5 +85,5 @@ export function journeyProofHash(journey: Journey): string {
   }));
   // Planner semantics are part of the evidence identity. Legacy last-write pairing
   // and unknown-request block results must not remain fresh after this correction.
-  return contentHash(stripDescriptorMetadata({ mutationPlannerVersion: 3, metadata, recording }));
+  return contentHash(stripDescriptorMetadata({ mutationPlannerVersion: 4, metadata, recording }));
 }

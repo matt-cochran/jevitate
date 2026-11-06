@@ -257,6 +257,42 @@ describe("#402 classifyMutation", () => {
     expect(classifyMutation(site("step-request:3:0"), skip3, failed({ where: "step-request", step: 3, checkIndex: 0 }))).toBe("sensitive");
   });
 
+  describe("an evaluated own request survives its own DOM postcondition", () => {
+    const request = { where: "step-request" as const, step: 3, checkIndex: 0, evaluated: true as const };
+    const post = { where: "step" as const, step: 3, postcondition: true };
+
+    it.each([undefined, "not-applied", "error", "passed"] as const)("retains original evidence when relaxed outcome is %s", (outcome) => {
+      const original = failed(request, post);
+      const result = outcome === undefined ? original : { ...original, relaxed: { outcome, failedSites: [] } };
+      expect(classifyMutation(site("step-request:3:0"), skip3, result)).toBe("sensitive");
+    });
+
+    it.each([
+      ["own action failure", { where: "step", step: 3, postcondition: false }],
+      ["earlier action failure", { where: "step", step: 2, postcondition: false }],
+      ["earlier postcondition failure", { where: "step", step: 2, postcondition: true }],
+      ["earlier request failure", { where: "step-request", step: 2, checkIndex: 0, evaluated: true }],
+      ["unevaluable or truncated capture", { where: "unevaluable" }],
+    ] satisfies [string, MutationRunResult["failedSites"][number]][])("refuses %s", (_label, failure) => {
+      expect(classifyMutation(site("step-request:3:0"), skip3, failed(request, post, failure))).toBe("cascade");
+    });
+
+    it("does not invent evidence for an unstarted/missing own capture or the wrong request index", () => {
+      expect(classifyMutation(site("step-request:3:0"), skip3, failed({ where: "step-request", step: 3, checkIndex: 0 }, post))).toBe("cascade");
+      expect(classifyMutation(site("step-request:3:0"), skip3, failed({ ...request, checkIndex: 1 }, post))).toBe("cascade");
+    });
+
+    it.each(["not-applied", "error"] as const)("does not prove an inapplicable or errored run (%s)", (outcome) => {
+      expect(classifyMutation(site("step-request:3:0"), skip3, { outcome, failedSites: [request, post] })).toBe(outcome);
+    });
+
+    it("avoids unnecessary relaxation when only already evaluated own sites are paired", () => {
+      const plan = planJourneyMutations(saveJourney({ stepRequests: true }));
+      expect(needsRelaxedReplay(plan, skip3, failed(request, post))).toBe(false);
+      expect(needsRelaxedReplay(planJourneyMutations(journey), skip3, failed(request, post))).toBe(true);
+    });
+  });
+
   it("the paired end-state check failed with an earlier step-request failing too: cascade", () => {
     expect(classifyMutation(site("end-state:0"), skip3, failed({ where: "step-request", step: 2, checkIndex: 0 }, { where: "end-state", index: 0 }))).toBe("cascade");
   });

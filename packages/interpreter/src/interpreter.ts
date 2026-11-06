@@ -1,6 +1,7 @@
 import type { Assertion, AssertionRefLookup, Recording, RecordedStep, Step, StepTiming } from "@jevitate/recording";
 import { RecordingSchema } from "@jevitate/recording";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
+import { PostconditionFailed } from "./assertion.js";
 import { installFlashRecorder } from "./flash-recorder.js";
 import type { InterpretResult, StepResolution } from "./interpret-result.js";
 import type { StepWait } from "./outcome-wait.js";
@@ -355,8 +356,8 @@ async function runFlat(
       const message = err instanceof Error ? err.message : String(err);
       return withWaits(
         err instanceof ReplayTargetError
-          ? { outcome: "failed", at: i, error: message, reason: err.kind }
-          : { outcome: "failed", at: i, error: message },
+          ? { outcome: "failed", at: i, error: message, reason: err.kind, failurePhase: "action" }
+          : { outcome: "failed", at: i, error: message, failurePhase: err instanceof PostconditionFailed ? "postcondition" : "action" },
       );
     }
     const stepEndedAt = clock.monotonicMs();

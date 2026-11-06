@@ -190,7 +190,7 @@ describe("JourneyOutcomeChecks.lastFailures reports the failed assertion sites (
       );
 
       expect(result).toMatchObject({ outcome: "quarantined", at: 2 });
-      expect(checks.lastFailures).toEqual([{ where: "step-request", step: 2, checkIndex: 0, detail: expect.any(String) }]);
+      expect(checks.lastFailures).toEqual([{ where: "step-request", step: 2, checkIndex: 0, detail: expect.any(String), evaluated: true }]);
     });
   }, 120_000);
 
@@ -207,7 +207,7 @@ describe("JourneyOutcomeChecks.lastFailures reports the failed assertion sites (
         return { outcome: "ok", output: null };
       });
 
-      expect(checks.lastFailures).toEqual([{ where: "step-request", step: 2, checkIndex: 0, detail: expect.any(String) }]);
+      expect(checks.lastFailures).toEqual([{ where: "step-request", step: 2, checkIndex: 0, detail: expect.any(String), evaluated: true }]);
     });
   }, 120_000);
 
