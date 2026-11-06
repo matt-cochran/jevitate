@@ -29,9 +29,9 @@ async function crawl(lab) {
 }
 
 describe("nav-lab", () => {
-  test("the app and the ground truth hold the same 42 cases", () => {
+  test("the app and the ground truth hold the same 44 cases", () => {
     expect([...CASE_IDS].sort()).toEqual(Object.keys(cases).sort());
-    expect(CASE_IDS).toHaveLength(42);
+    expect(CASE_IDS).toHaveLength(44);
   });
 
   test("every case has a scripted walk that proves it in a browser", () => {
@@ -39,7 +39,7 @@ describe("nav-lab", () => {
   });
 
   test("the matrix plans every case at every replicate", () => {
-    expect(buildCells(3)).toHaveLength(126);
+    expect(buildCells(3)).toHaveLength(132);
   });
 
   test("each injection arm has its control and each control its injection", () => {

@@ -113,6 +113,15 @@ export const WALKS = {
   "unmarked-div": { done: true, steps: [...toQ3, (page) => page.getByText("Publish report", { exact: true }).click()] },
   "hover-menu-span": { done: true, steps: [hoverLibrary, click("Q3 sales report"), publish] },
   "hover-menu-button": { done: true, steps: [hoverLibrary, click("Q3 sales report"), publish] },
+  "sign-in-goal": {
+    done: true,
+    steps: [click("Sign in"), async (page) => {
+      await page.getByLabel("Email").fill("morgan@pinecrest.example");
+      await page.getByLabel("Password").fill("lab-pass-1");
+      await click("Sign in")(page);
+    }],
+  },
+  "password-on-route": { steps: [click("Security"), click("Reports"), click("Q3 sales report"), publish], done: true },
   clean: { steps: clean, done: true },
 };
 

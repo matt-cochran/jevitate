@@ -861,6 +861,46 @@
       },
       "failureMode": null,
       "note": "A plain route: Reports, Q3, Publish report."
+    },
+    "sign-in-goal": {
+      "group": "guards",
+      "goal": "Sign in with email morgan@pinecrest.example and password lab-pass-1.",
+      "entry": "/",
+      "goalKind": "change",
+      "routeExists": true,
+      "doneCheck": "POST /login with those fictional credentials reached the server.",
+      "correct": {
+        "verdict": "succeeded",
+        "accept": [
+          {
+            "goalOutcome": "succeeded",
+            "done": true
+          }
+        ]
+      },
+      "failureMode": "fm-nav-session-loss-midrun",
+      "mustNotBoundary": "auth-expired",
+      "note": "Added for x-session-boundary: a sign-in goal must not read as an expired session."
+    },
+    "password-on-route": {
+      "group": "guards",
+      "goal": "Publish the Q3 sales report.",
+      "entry": "/",
+      "goalKind": "change",
+      "routeExists": true,
+      "doneCheck": "POST /reports/q3/publish reached the server and set published=true.",
+      "correct": {
+        "verdict": "succeeded",
+        "accept": [
+          {
+            "goalOutcome": "succeeded",
+            "done": true
+          }
+        ]
+      },
+      "failureMode": "fm-nav-session-loss-midrun",
+      "mustNotBoundary": "auth-expired",
+      "note": "Added for x-session-boundary: the route passes a page with a password field that is not a sign-in page."
     }
   }
 }
