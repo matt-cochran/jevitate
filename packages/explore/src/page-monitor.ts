@@ -123,6 +123,8 @@ const TRANSIENT_DIALOG_SELECTOR = "[role=dialog],[role=alertdialog],dialog";
 const TRANSIENT_MAX = 50;
 /** Bound (chars) on one announcement's text. */
 const TRANSIENT_TEXT_MAX = 200;
+/** Read past the cut, which the reader makes once it has masked: a secret across it leaves nothing. */
+const TRANSIENT_TEXT_READ = TRANSIENT_TEXT_MAX + 1024;
 
 /** One announcement the page made (raw page text — redact before keeping or sending it). */
 export interface TransientNote {
@@ -180,7 +182,7 @@ const INSTRUMENT = `(() => {
       }
       if (el === null || seen.has(el)) continue;
       seen.add(el);
-      const text = (el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, ${TRANSIENT_TEXT_MAX});
+      const text = (el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, ${TRANSIENT_TEXT_READ});
       if (text === "") continue;
       const role = el.getAttribute("role") || (el.tagName === "DIALOG" ? "dialog" : "live");
       const last = state.transients[state.transients.length - 1];

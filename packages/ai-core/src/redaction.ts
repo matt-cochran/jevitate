@@ -170,6 +170,17 @@ export function openModelSecretScope(): { add(values: readonly string[]): void; 
   };
 }
 
+/** `fn` as a run holding `values`. */
+export async function withModelSecrets<T>(values: readonly string[] | undefined, fn: () => Promise<T>): Promise<T> {
+  const scope = openModelSecretScope();
+  scope.add(values ?? []);
+  try {
+    return await fn();
+  } finally {
+    scope.release();
+  }
+}
+
 function maskStrings(value: unknown, secrets: readonly string[]): unknown {
   if (typeof value === "string") return redactText(value, secrets);
   if (Array.isArray(value)) return value.map((v) => maskStrings(v, secrets));

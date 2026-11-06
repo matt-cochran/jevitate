@@ -364,17 +364,18 @@ built-in verb (`Preview*`, `Recalculate*`, …).
   credential-named output, or an extracted credential, doesn't self-heal: the step fails as it would
   without a heal, and says so. `journey annotate`, `annotate_journey` and `create_demo` refuse a Journey
   needing one (`E_MODEL_REFUSED_SECRET`). **The cost: a secret-bound Journey can't self-heal or be
-  annotated in 0.29.0.** `explore --strategy coverage|exploratory` and `--feature` refuse `--secret`
-  (`E_EXPLORE_SECRET_UNSUPPORTED`), since they can't keep it out.
-- Goal, adversarial and usability runs keep their `--secret` masking, applied as the page is read. Limit:
-  a control's name is clipped to 200 characters first, so a secret across that cut can reach the model in
-  part. A secret the page transforms (lower-cased, say) is not recognised.
-- The gateways (`OpenRouterGenerationGateway`, `JevJudgmentGateway`) hold a backstop for a live goal run's
-  values of 8 characters or more, gone when the run ends: masked in every string and key, then checked,
-  and a value still there stops the call. Past 2000 live values a model call fails. A secret under 8
-  characters isn't masked there. A replay holding one makes no model call at all. A goal, adversarial or
-  usability run still makes them, and relies on the masking above, so a short `--secret` is safe only as
-  far as that masking goes.
+  annotated in 0.29.0.** `explore --strategy coverage|exploratory` refuse `--secret`
+  (`E_EXPLORE_SECRET_UNSUPPORTED`), since they can't keep it out. `--feature` makes no model call and
+  masks it in its transcript, Recordings and result.
+- Goal, adversarial and usability runs keep their `--secret` masking, applied before any cut, so a
+  secret across a bound on a control's name, heading, option, announcement or page text leaves none of
+  its characters. A secret the page transforms (lower-cased, say) is not recognised.
+- The gateways (`OpenRouterGenerationGateway`, `JevJudgmentGateway`) hold a backstop for those three
+  while they run: values of 8 characters or more, masked in every string and key, then checked, so a
+  value still there stops the call, and gone when the run ends. Past 2000 live values a model call
+  fails. A secret under 8 characters isn't masked there. A replay holding one makes no model call at
+  all. Goal, adversarial and usability still make them, and a short secret is masked by their own set,
+  not by the backstop.
 - Redaction is for what a person or a model reads, never for what a page gets: a run that would type or
   navigate with masked text fails (`E_REDACTED_VALUE`), which includes a value that really does contain
   `«redacted»`. `journey chain` hands on what the producer extracted, except a value under a name the

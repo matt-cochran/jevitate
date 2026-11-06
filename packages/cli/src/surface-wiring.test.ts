@@ -313,6 +313,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     journeyPrefix: NO_ANCHORED_HERE,
   },
   "mission-queue-runner.ts runFeatureCliMission": {
+    secrets: "a queued feature mission declares no --secret: a request never chooses one",
     blockOffAllowlistNavigation: QUEUE_NARROW,
     hostHealth: SEAM,
     stallTimeoutMs: QUEUE_NARROW,
@@ -344,6 +345,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     nowIso: SEAM,
   },
   "check-execute.ts runFeatureCliMission": {
+    secrets: "a suite's feature mission declares no secret: `secret` applies to goals, usability and adversarial",
     hostHealth: SEAM,
     nowIso: SEAM,
   },

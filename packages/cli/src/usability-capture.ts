@@ -92,7 +92,7 @@ function scanPage(args: { secrets: readonly string[]; attr: string }): { marked:
     document.querySelector('[aria-busy="true"], [role="progressbar"], progress, .spinner, [class*="spinner" i], [class*="loading" i]') !== null ||
     Array.from(document.querySelectorAll('[role="status"], [aria-live]')).some((el) => (el.textContent ?? "").trim().length > 0);
   const h1 = document.querySelector('h1, [role="heading"][aria-level="1"]') as HTMLElement | null;
-  const heading = ((h1?.innerText ?? h1?.textContent ?? "").trim() || document.title || "").replace(/\s+/g, " ").slice(0, 200);
+  const heading = ((h1?.innerText ?? h1?.textContent ?? "").trim() || document.title || "").replace(/\s+/g, " ");
   return { marked, busy, heading };
 }
 
@@ -347,7 +347,7 @@ export class UsabilityCapture {
       visibleText: this.#redact(visibleText),
       busy,
       ...(shot === null ? {} : { screenshot: shot }),
-      ...(heading.length === 0 ? {} : { heading: this.#redact(heading) }),
+      ...(heading.length === 0 ? {} : { heading: this.#redact(heading).slice(0, 200) }),
     });
     return shot;
   }

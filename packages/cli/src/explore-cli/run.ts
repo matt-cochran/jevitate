@@ -271,9 +271,9 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
         const resolved = resolveSecretArgs(o.secret, process.env, "--secret");
         if (resolved.literals > 0) program.configureOutput().writeErr?.(LITERAL_SECRET_WARNING);
         o.secret = [...resolved.secrets, ...(journeyPrefix?.secrets ?? [])];
-        // These carry no redaction set: the value would reach the model or the transcript.
-        if (o.secret.length > 0 && (o.feature !== undefined || strategy === "coverage" || strategy === "exploratory")) {
-          emitExplore(fail("E_EXPLORE_SECRET_UNSUPPORTED", `${o.feature !== undefined ? "--feature" : `--strategy ${strategy}`} can't keep a --secret out of its model calls and transcript, so nothing ran. Use goal, adversarial or usability, which mask it, or leave the value off the page`));
+        // These two carry no redaction set: the value would reach the model and the transcript.
+        if (o.secret.length > 0 && o.feature === undefined && (strategy === "coverage" || strategy === "exploratory")) {
+          emitExplore(fail("E_EXPLORE_SECRET_UNSUPPORTED", `--strategy ${strategy} can't keep a --secret out of its model calls and transcript, so nothing ran. Use goal, adversarial or usability, which mask it, or leave the value off the page`));
           return;
         }
       } catch (err) {

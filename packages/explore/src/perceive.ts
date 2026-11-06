@@ -18,7 +18,7 @@ import { contentHash, clock } from "@jevitate/domain";
 import { clockBounded } from "./clock-bound.js";
 import { textMatcher, type HangConfig, type SettleConfig, type TimingConfig } from "./settle-config.js";
 import { redactUrl } from "@jevitate/ai-core";
-import { busyOverlay } from "./status.js";
+import { busyOverlay, maskPageReads } from "./status.js";
 import { resourceSettleFactor } from "@jevitate/playwright";
 
 /**
@@ -146,6 +146,7 @@ function documentPending(pending: readonly { readonly resourceType: string }[]):
 }
 
 export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<Perception> {
+  if (opts.secrets !== undefined) maskPageReads(page, opts.secrets);
   // #205: while the host is throttled (loaded/low on memory) the DEFAULT settle windows are longer
   // (`resourceSettleFactor`, 2x) — a starved renderer is slow, not hung; explicit values are kept.
   const settleFactor = resourceSettleFactor();

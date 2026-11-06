@@ -873,6 +873,20 @@ describe("nothing secret-bound goes to a model: annotate", { timeout: 120_000 },
   });
 });
 
+describe("explore --feature --secret: model-free, and masked where it writes", { timeout: 120_000 }, () => {
+  it("still runs, and the value is in no transcript, result or stdout", async () => {
+    showsSecrets = `<a href="/next?t=${VALUE}">Link ${VALUE}</a><button aria-label="Copy ${VALUE}">x</button>`;
+    const out = join(root, "feature-out");
+    const r = await cli(["explore", "--url", `${origin}/`, "--feature", "profile", "--route", "/**", "--allow", origin, "--out", out, "--max-actions", "4", "--secret", `env:${VAR}`, "--json"]).finally(() => {
+      showsSecrets = "";
+    });
+    expect(JSON.parse(r.out)).toMatchObject({ ok: true });
+    expect(r.out + r.err).not.toContain(VALUE);
+    expect(allFiles(out).length).toBeGreaterThan(0);
+    expect(allFiles(out).filter((f) => readFileSync(f).includes(VALUE)).map((f) => `${f.slice(out.length)}: ${readFileSync(f, "utf8").split(VALUE)[0]!.slice(-90)}`)).toEqual([]);
+  });
+});
+
 describe("explore --secret on a strategy that can't keep it out (E4)", { timeout: 60_000 }, () => {
   it.each(["coverage", "exploratory"])("%s refuses before anything runs", async (strategy) => {
     const r = await cli(["explore", "--url", `${origin}/`, "--strategy", strategy, "--secret", `env:${VAR}`, "--allow", origin, "--json"]);
