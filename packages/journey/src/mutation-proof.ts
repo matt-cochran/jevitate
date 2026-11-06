@@ -2,7 +2,7 @@ import type { Assertion, NetworkCheck, OutcomeWait, RecordedStep, Step } from "@
 import { WAIT_FOR_STALL_MS } from "@jevitate/recording";
 import type { Journey, JourneyTargetedProofPlan } from "./journey.js";
 import { isNoClaimExpect, journeyAssertions, type JourneyAssertionSite } from "./assertions.js";
-import { journeyWriteSteps, writeLineNamedBy, type JourneyLintOptions } from "./lint.js";
+import { journeyWriteSteps, type JourneyLintOptions } from "./lint.js";
 import { resolveJourneyStep } from "./anchors.js";
 import { secretParamNames } from "./intent.js";
 import { actionRefs, alteredValue, mutableParamValue, pinAssertionRefs, sitePageAssertion, siteRefs, swappedValue, truncatedValue } from "./mutation-proof-refs.js";
@@ -456,8 +456,8 @@ function fillValue(step: Step, params: Readonly<Record<string, string>>): string
 
 /**
  * #402: the Journey's mutations and which assertion each must break. Derived pairs: a write step's
- * `skip`/`block-write` with that step's own `expect`/`check` and `expectRequests`, any end-state network
- * check naming its write, and — for the LAST write step — every other end-state check; a fill's `stale-value` with that step's own assertion and every
+ * `skip`/`block-write` with that step's own `expect`/`check` and `expectRequests` — and, for the LAST
+ * write step, every end-state check; a fill's `stale-value` with that step's own assertion and every
  * `valueEquals`/`textIncludes` that checks the typed value. Plus `metadata.mutationPairs` (anchors resolved).
  * An explicit no-claim `expect` (`isNoClaimExpect`) asserts nothing, so it is never paired.
  */
@@ -478,22 +478,12 @@ export function planJourneyMutations(
 
   const writes = journeyWriteSteps(journey, opts);
   const lastWrite = writes.at(-1)?.step;
-  const namedBy = (s: JourneyAssertionSite): readonly (typeof writes)[number][] => {
-    if (s.where !== "end-state" || (s.check.kind !== "requestMade" && s.check.kind !== "responseStatus")) return [];
-    const check = s.check;
-    return writes.filter((w) => w.requests.some((line) => writeLineNamedBy(check, line)));
-  };
   for (const w of writes) {
     for (const kind of ["skip", "block-write"] as const) {
       const m = mutation(kind, w.step);
       mutations.push(m);
       for (const s of ownSites(w.step)) pair(s, m);
-      for (const s of sites) {
-        if (s.where !== "end-state") continue;
-        // A check that names one step's write is that step's: the last write's mutation can't break it.
-        const named = namedBy(s);
-        if (named.length > 0 ? named.includes(w) : w.step === lastWrite) pair(s, m);
-      }
+      if (w.step === lastWrite) for (const s of sites) if (s.where === "end-state") pair(s, m);
     }
   }
 

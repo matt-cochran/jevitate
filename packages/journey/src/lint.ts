@@ -256,103 +256,17 @@ export interface JourneyWriteStep {
   readonly requests: readonly string[];
 }
 
-/** Does this step's write line carry the request this end-state check names? */
-export function writeLineNamedBy(check: { readonly method: string; readonly pathGlob: string }, line: string): boolean {
-  const m = REQUEST_LINE.exec(line.trim());
-  return m !== null && sameMethod(check.method, m[1]!) && globMatch(check.pathGlob, m[2]!);
-}
-
-/** A request a status check names that the proof could not place on a step, and why. */
-export interface NamedWriteNotMapped {
-  readonly site: string;
-  /** `METHOD path` as the check names it. */
-  readonly line: string;
-  readonly why: string;
-}
-
-function pathOfTimed(entry: { readonly endpoint: string; readonly url: string }): string {
-  try {
-    return new URL(entry.url).pathname;
-  } catch {
-    return REQUEST_LINE.exec(entry.endpoint.trim())?.[2] ?? entry.url;
-  }
-}
-
 /**
- * A `responseStatus` end-state check that names a write is a declared write: on a recording with no
- * delta, page timing says which step sent it. Never a guess: the classifier has to call it a write (read
- * RPCs are POSTs too), exactly one step's timing has to show it, that step has to be an action with no
- * delta of its own, and no other action's list can be cut short, since `slowest` keeps only a few.
- */
-function namedWrites(journey: Journey, classify: WriteClassifier): { readonly byStep: ReadonlyMap<number, readonly string[]>; readonly notMapped: readonly NamedWriteNotMapped[] } {
-  const steps = flattenSteps(journey);
-  const byStep = new Map<number, string[]>();
-  const notMapped: NamedWriteNotMapped[] = [];
-  const hasDeltaLine = (check: { readonly method: string; readonly pathGlob: string }): boolean => steps.some((r) => writeRequestsOf(r, classify).some((w) => writeLineNamedBy(check, w.line)));
-  for (const site of journeyAssertions(journey)) {
-    if (site.where !== "end-state" || site.check.kind !== "responseStatus") continue;
-    const check = site.check;
-    if (!classify({ method: check.method, path: check.pathGlob }) || hasDeltaLine(check)) continue;
-    const line = `${check.method.toUpperCase()} ${check.pathGlob}`;
-    const miss = (why: string): void => void notMapped.push({ site: `end-state:${site.index}`, line, why });
-    const shownBy = steps.flatMap((r, i) => {
-      const paths = (r.timing?.page?.requests.slowest ?? []).filter((e) => REQUEST_LINE.exec(e.endpoint.trim())?.[1]?.toUpperCase() === check.method.toUpperCase()).map(pathOfTimed).filter((p) => globMatch(check.pathGlob, p));
-      return paths.length === 0 ? [] : [{ step: i + 1, recorded: r, path: paths[0]! }];
-    });
-    const only = shownBy[0];
-    if (only === undefined) {
-      miss("no step's recorded timing shows it");
-      continue;
-    }
-    if (shownBy.length > 1) {
-      miss(`steps ${shownBy.map((s) => s.step).join(", ")} all show it in their recorded timing`);
-      continue;
-    }
-    if (!STATE_CHANGING.has(only.recorded.step.kind)) {
-      miss(`only step ${only.step}, a ${only.recorded.step.kind}, shows it in its recorded timing`);
-      continue;
-    }
-    // A step with a delta recorded what it wrote, and this is not among it.
-    if (only.recorded.delta !== undefined) {
-      miss(`step ${only.step} shows it in its recorded timing, but its recorded delta does not name it`);
-      continue;
-    }
-    const cutShort = steps.flatMap((r, i) => {
-      const requests = r.timing?.page?.requests;
-      return i + 1 !== only.step && STATE_CHANGING.has(r.step.kind) && requests !== undefined && requests.count > requests.slowest.length ? [{ step: i + 1, listed: requests.slowest.length, count: requests.count }] : [];
-    })[0];
-    if (cutShort !== undefined) {
-      miss(`step ${only.step} shows it, but step ${cutShort.step}'s recorded timing lists only ${cutShort.listed} of its ${cutShort.count} requests`);
-      continue;
-    }
-    const lines = byStep.get(only.step) ?? [];
-    const written = `${check.method.toUpperCase()} ${only.path}`;
-    if (!lines.includes(written)) lines.push(written);
-    byStep.set(only.step, lines);
-  }
-  return { byStep, notMapped };
-}
-
-/** The status checks that name a write the proof could not place on a step: nothing pairs them. */
-export function namedWritesNotMapped(journey: Journey, opts: JourneyLintOptions = {}): readonly NamedWriteNotMapped[] {
-  return namedWrites(journey, writeClassifier({ readRequests: opts.readRequests })).notMapped;
-}
-
-/**
- * #402: the Journey's write steps. The rule the lint's `write-without-effect` uses (a recorded write
- * request, a write `expectRequests`, or a state-changing step whose delta changed the page), plus for the
- * proof a write a status check names and page timing places (`namedWrites`). The lint does not read those:
- * they are the check's own write, so they add no assertion to ask for.
+ * #402: the Journey's write steps, by the SAME rule the lint's `write-without-effect` uses (a recorded
+ * write request, a write `expectRequests`, or a state-changing step whose delta changed the page).
  * The mutation proof (`journey verify --mutate`) skips or blocks exactly these.
  */
 export function journeyWriteSteps(journey: Journey, opts: JourneyLintOptions = {}): JourneyWriteStep[] {
   const classify = writeClassifier({ readRequests: opts.readRequests });
-  const named = namedWrites(journey, classify).byStep;
   const out: JourneyWriteStep[] = [];
   flattenSteps(journey).forEach((recorded, i) => {
     const requests = writeRequestsOf(recorded, classify);
-    const fromChecks = named.get(i + 1) ?? [];
-    if (isWriteStep(recorded, classify, requests) || fromChecks.length > 0) out.push({ step: i + 1, requests: [...requests.map((r) => r.line), ...fromChecks] });
+    if (isWriteStep(recorded, classify, requests)) out.push({ step: i + 1, requests: requests.map((r) => r.line) });
   });
   return out;
 }

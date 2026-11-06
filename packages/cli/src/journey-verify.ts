@@ -28,7 +28,6 @@ import {
   mutationErrored,
   mutationProofVerdict,
   mutationReplay,
-  namedWritesNotMapped,
   needsRelaxedReplay,
   paceBeforeMutationMs,
   paceEndStateFloorMs,
@@ -1388,14 +1387,20 @@ async function settleDisagreements(c: PairContext): Promise<void> {
   }
 }
 
-/** A proof with no pairs, on a Journey whose status checks name a write it could not place: what to add, in the Journey's own terms. */
-function withNamedWriteHints(reason: string, journey: Journey, readRequests: readonly string[] | undefined): string {
-  const notMapped = namedWritesNotMapped(journey, readRequests === undefined ? {} : { readRequests });
+/**
+ * A proof with no pairs says what to add, in the Journey's own terms. A check's method does not make its
+ * request a write (read RPCs are POSTs too), so the words leave that to whoever knows: this adds no pair.
+ */
+function withWhatToAdd(reason: string, journey: Journey): string {
+  const deltaWith = (line: string): string => `"delta":${JSON.stringify({ verdict: "relevant-change", why: "sends this write", changes: [], requests: [`${line} → 200`], overheadMs: 0 })}`;
+  const lineFor = (method: string, pathGlob: string): string => `${method.toUpperCase()} ${pathGlob}`;
+  const named = journeyAssertions(journey).flatMap((s) => (s.where === "end-state" && (s.check.kind === "responseStatus" || s.check.kind === "requestMade") && !READ_METHODS.has(s.check.method.toUpperCase()) ? [{ site: assertionSiteKey(s), line: lineFor(s.check.method, s.check.pathGlob) }] : []));
+  if (named.length === 0) return `${reason}; if a step sends a write, add it to that step's delta.requests (a step with no delta: ${deltaWith("POST /path")}), which gives the step skip and block-write mutations, or pair a check yourself in metadata.mutationPairs`;
   return [
     reason,
-    ...notMapped.map(
+    ...named.map(
       (n) =>
-        `${n.site} names ${n.line}, but ${n.why}. To prove it, add {"check":"${n.site}","mustFailWhen":"skip:<step>"} to metadata.mutationPairs for the step that sends it, or name it in that step's delta.requests, which also runs block-write. If it is a read, list it in the target's safety.readRequests`,
+        `${n.site} names ${n.line}, and no step records it: a check names a request, not the step that sends it. If this request is the step's write, add it to that step's delta.requests, with the path it sends (a step with no delta: ${deltaWith(n.line)}), which gives the step skip and block-write mutations, or add {"check":"${n.site}","mustFailWhen":"skip:<step>"} to metadata.mutationPairs. If it is a read, there is no write here to prove`,
     ),
   ].join("; ");
 }
@@ -1435,7 +1440,7 @@ async function concludeProof(c: ConcludeContext): Promise<JourneyVerifyReport> {
     }
   }
   const { verdict, reason: judgedReason } = mutationProofVerdict({ ...verdictInput, restoreFailed: restoreFailed(), ...(notIsolated === undefined ? {} : { notIsolated }) });
-  const reason = plan.pairs.length === 0 && judgedReason?.startsWith("no assertion is paired") === true ? withNamedWriteHints(judgedReason, journey, opts.readRequests) : judgedReason;
+  const reason = plan.pairs.length === 0 && judgedReason?.startsWith("no assertion is paired") === true ? withWhatToAdd(judgedReason, journey) : judgedReason;
   const count = (v: AssertionVerdict): number => assertions.filter((a) => a.verdict === v).length;
   const report: JourneyVerifyReport = {
     journeyId: journey.metadata.id,

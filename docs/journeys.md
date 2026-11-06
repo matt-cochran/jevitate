@@ -267,14 +267,14 @@ A `{ "var": name }` fill whose parameter an assertion names gets a `stale-value`
 **altered** value of the parameter instead of `""`. This is the stale text a composer can keep
 from an earlier reply.
 
-A write step is one the lint counts, or a step a `responseStatus` end-state check places: on a
-recording with no delta, when the classifier calls the named request a write (read RPCs are POSTs too)
-and it shows in the recorded page timing of exactly one action step, with no other action's list cut
-short. Nothing is guessed: when that doesn't hold, a proof with no pairs says why and what to add.
+A write step is one the lint counts: a step whose recorded delta names a write request, whose
+`expectRequests` names one, or a state-changing step whose delta changed the page. A `networkChecks` entry
+does not make one, and neither does page timing, which can place a request under the wrong step. A Journey
+with no write step and no other pair has 0 pairs and reads `inconclusive`, and the reason names each check
+and what to add: if the request is the step's write, its `delta.requests`.
 
-A mutation of step n is paired with step n's own `expect`/`check` and its `expectRequests`, and with an
-end-state network check naming step n's write; the **last** write step's mutations are also paired with
-every other end-state check; a `stale-value` is also
+A mutation of step n is paired with step n's own `expect`/`check` and its `expectRequests`; the
+**last** write step's mutations are also paired with every end-state check; a `stale-value` is also
 paired with every assertion that checks the typed value (or names its variable); a `swap-param`/
 `truncate-param` is paired with every assertion at or after the action that names the parameter, and
 a `guard-param` with the checks before it (the guards that refuse a wrong input before the app

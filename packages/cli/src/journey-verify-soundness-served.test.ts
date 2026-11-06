@@ -785,19 +785,39 @@ const streamJourney = (assertion: ReturnType<typeof text>) => (site: string): Jo
 
 const ROWS_EXPERIMENT: readonly Row[] = [
   {
-    name: "no delta: a networkCheck names the POST that a click's timing shows, and is proven by that click's mutations",
+    name: "no delta: a networkCheck names a POST, and page timing shows it: no pair comes of that, and the reason says what to add",
     serve: saving({ saveMs: 0 }),
     journey: (site) =>
       J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: NOCLAIM }, timing: { atMs: 0, durationMs: 0, gapBeforeMs: 0, page: { route: "/", kind: "transition", settled: true, requests: { count: 1, pending: 0, slowest: [{ endpoint: "POST /api/save", url: `${site}/api/save`, status: 200, durationMs: 5 }] } } } }], { networkChecks: POST("/api/save") }),
-    verdict: "proven",
-    reading: ["end-state:0", "sensitive"],
+    verdict: "inconclusive",
+    reason: /no assertion is paired.*end-state:0 names POST \/api\/save, and no step records it.*If this request is the step's write, add it to that step's delta\.requests.*"check":"end-state:0","mustFailWhen":"skip:<step>"/,
   },
   {
-    name: "no delta: a named POST the timing does not show is not guessed, and the reason says what to add",
+    name: "no delta and no network check: the reason says what to add",
     serve: saving({ saveMs: 0 }),
-    journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: NOCLAIM } }], { networkChecks: POST("/api/save") }),
+    journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: NOCLAIM } }]),
     verdict: "inconclusive",
-    reason: /end-state:0 names POST \/api\/save, but no step's recorded timing shows it.*"check":"end-state:0","mustFailWhen":"skip:<step>"/,
+    reason: /no assertion is paired.*if a step sends a write, add it to that step's delta\.requests.*"requests":\["POST \/path → 200"\]/,
+  },
+  {
+    name: "a read RPC a check names by glob: no pair, and the reason calls it no write",
+    serve: () => (req, res) => {
+      if (pathOfUrl(req).startsWith("/board.v1.Items/")) return void res.writeHead(200, { "content-type": "application/json" }).end("{}");
+      html(res, `<button id="open">Open</button><script>document.getElementById('open').onclick=()=>fetch('/board.v1.Items/GetItem',{method:'POST',headers:{'content-type':'application/json'},body:'{}'})</script>`);
+    },
+    journey: (site) => J(site, [NAV_TO("#open"), { step: { kind: "click", target: { css: "#open" }, expect: NOCLAIM } }], { networkChecks: POST("/board.v1.Items/Get*") }),
+    verdict: "inconclusive",
+    reason: /If this request is the step's write, add it.*If it is a read, there is no write here to prove/,
+  },
+  {
+    name: "a check naming the first of two recorded writes stays with the last write, which can't break it: a recording can place a timer's write under the wrong step",
+    serve: () => (req, res) => {
+      if (pathOfUrl(req).startsWith("/api/")) return void res.writeHead(200, { "content-type": "application/json" }).end("{}");
+      html(res, `<button id="a">A</button><button id="b">B</button><script>for(const id of ['a','b'])document.getElementById(id).onclick=()=>fetch('/api/'+id,{method:'POST'})</script>`);
+    },
+    journey: (site) => J(site, [NAV_TO("#a"), { step: { kind: "click", target: { css: "#a" }, expect: NOCLAIM }, ...WROTE("/api/a") }, { step: { kind: "click", target: { css: "#b" }, expect: NOCLAIM }, ...WROTE("/api/b") }], { networkChecks: POST("/api/a") }),
+    verdict: "insensitive",
+    reading: ["end-state:0", "insensitive"],
   },
   {
     name: "a no-store 200 whose body the page never reads: the write was answered",

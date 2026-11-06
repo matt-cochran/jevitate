@@ -787,7 +787,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (180 exports)
+# @jevitate/journey (178 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -922,7 +922,6 @@
   mutationProofVerdict: function
   mutationReplay: function
   mutationWait: function
-  namedWritesNotMapped: function
   needsRelaxedReplay: function
   nextTargetedRelaxation: function
   outputKeyFields: function
@@ -967,7 +966,6 @@
   validateParams: function
   validateRecords: function
   validateRequests: function
-  writeLineNamedBy: function
 
 # @jevitate/load (8 exports)
   LoadHarnessSetupError: class
