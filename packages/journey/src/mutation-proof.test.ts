@@ -415,15 +415,35 @@ describe("#554 relaxed replay", () => {
     const results = new Map<string, MutationRunResult>([
       ["skip:3", { ...failed(ownPost), relaxed: failed({ where: "step-request", step: 3, checkIndex: 0 }, { where: "end-state", index: 0 }) }],
       ["block-write:3", { ...failed(ownPost), relaxed: failed({ where: "end-state", index: 0 }) }],
-      ["stale-value:2", failed({ where: "step", step: 2, postcondition: true })],
+      ["stale-value:2", { ...failed({ where: "step", step: 2, postcondition: true }), relaxed: failed({ where: "end-state", index: 0 }) }],
     ]);
     expect(judgeAssertions(journey, plan, results)).toEqual([
       { site: "step:1", verdict: "unpaired" },
       { site: "step:2", verdict: "sensitive", provedBy: "stale-value:2" },
       { site: "step:3", verdict: "sensitive", provedBy: "skip:3" },
       { site: "step-request:3:0", verdict: "sensitive", provedBy: "skip:3" },
-      { site: "end-state:0", verdict: "sensitive", provedBy: "skip:3" },
+      { site: "end-state:0", verdict: "sensitive", provedBy: "stale-value:2", obligations: [
+        { kind: "data", verdict: "sensitive", provedBy: "stale-value:2" },
+        { kind: "action", verdict: "sensitive", provedBy: "skip:3" },
+      ] },
     ]);
+  });
+
+  it("a sensitive write cannot substitute for missing saved-data evidence", () => {
+    const journey = saveJourney({ endState: true });
+    const plan = planJourneyMutations(journey);
+    const results = new Map<string, MutationRunResult>([
+      ["skip:3", { ...failed(ownPost), relaxed: failed({ where: "end-state", index: 0 }) }],
+      ["block-write:3", { ...failed(ownPost), relaxed: failed({ where: "end-state", index: 0 }) }],
+      ["stale-value:2", failed({ where: "step", step: 2, postcondition: true })],
+    ]);
+    expect(judgeAssertions(journey, plan, results).find((a) => a.site === "end-state:0")).toEqual({
+      site: "end-state:0", verdict: "cascade", obligations: [
+        { kind: "data", verdict: "cascade" },
+        { kind: "action", verdict: "sensitive", provedBy: "skip:3" },
+      ],
+    });
+    expect(mutationProofVerdict({ basePassed: true, mutations: [...results.values()], assertions: judgeAssertions(journey, plan, results) }).verdict).toBe("inconclusive");
   });
 
   it("mutationProofVerdict is proven when every paired site is sensitive via the relaxed replay", () => {
@@ -432,7 +452,7 @@ describe("#554 relaxed replay", () => {
     const results = new Map<string, MutationRunResult>([
       ["skip:3", { ...failed(ownPost), relaxed: failed({ where: "step-request", step: 3, checkIndex: 0 }, { where: "end-state", index: 0 }) }],
       ["block-write:3", { ...failed(ownPost), relaxed: failed({ where: "end-state", index: 0 }) }],
-      ["stale-value:2", failed({ where: "step", step: 2, postcondition: true })],
+      ["stale-value:2", { ...failed({ where: "step", step: 2, postcondition: true }), relaxed: failed({ where: "end-state", index: 0 }) }],
     ]);
     expect(mutationProofVerdict({ basePassed: true, mutations: plan.mutations, assertions: judgeAssertions(journey, plan, results) }).verdict).toBe("proven");
   });

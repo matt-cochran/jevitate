@@ -27,6 +27,7 @@ import {
   runTargetedProof,
   suggestTargetedProofPlan,
   type AssertionVerdict,
+  type AssertionProof,
   type Journey,
   type JourneyMutation,
   type JourneyTargetedProofPlan,
@@ -95,6 +96,7 @@ export interface JourneyVerifyAssertion {
   readonly targetedRefusal?: string;
   /** #616: the proving targeted proof came from a declared `metadata.targetedProofs` plan. */
   readonly declaredProof?: true;
+  readonly obligations?: readonly (NonNullable<AssertionProof["obligations"]>[number] & { readonly declaredProof?: true })[];
 }
 
 export interface JourneyVerifyReport {
@@ -279,7 +281,7 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
       // targeted proof relaxes them one at a time (in a clone) to reach the target itself.
       const targeted: TargetedProof[] = [];
       for (const pair of plan.pairs) {
-        if (pair.mutation !== m.id || pair.onlyIfSensitive === true) continue;
+        if (pair.mutation !== m.id) continue;
         const site = siteByKey.get(pair.site);
         if (site === undefined || classifyMutation(site, m, initial) !== "cascade") continue;
         // #616: a declared plan (reviewed earlier relaxations) replaces the automatic bound search.
@@ -329,6 +331,10 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
     ...(a.targetedRefusal === undefined ? {} : { targetedRefusal: a.targetedRefusal }),
     // #616: the proving proof was a declared plan, not the automatic relaxation search.
     ...(a.provedBy !== undefined && results.get(a.provedBy)?.targeted?.some((t) => t.site === a.site && t.declared === true) === true ? { declaredProof: true as const } : {}),
+    ...(a.obligations === undefined ? {} : { obligations: a.obligations.map((o) => ({
+      ...o,
+      ...(o.provedBy !== undefined && results.get(o.provedBy)?.targeted?.some((t) => t.site === a.site && t.declared === true) === true ? { declaredProof: true as const } : {}),
+    })) }),
   }));
   const order = new Map(journeyAssertions(journey).map((s, i) => [assertionSiteKey(s), i]));
   const siteOrder = (key: string): number => order.get(key) ?? Number.MAX_SAFE_INTEGER;
@@ -381,5 +387,11 @@ export function verifyAssertionLine(a: JourneyVerifyAssertion): string {
     a.relaxedSites === undefined || a.relaxedSites.length === 0 ? "" : a.declaredProof === true ? `, declared plan relaxed ${a.relaxedSites.join(", ")}` : `, relaxed ${a.relaxedSites.join(", ")}`;
   const proved = a.provedBy === undefined ? "" : `  (proved by ${a.provedBy}${relaxed})`;
   const refused = a.targetedRefusal === undefined ? "" : `  (targeted proof refused: ${a.targetedRefusal})`;
-  return `${a.verdict.padEnd(11)}  ${a.site.padEnd(18)}  ${a.check}${proved}${refused}`;
+  const obligations = a.obligations === undefined ? "" : `  [${a.obligations.map((o) => {
+    const witness = o.provedBy === undefined ? "" : ` by ${o.provedBy}`;
+    const relaxed = o.relaxedSites === undefined || o.relaxedSites.length === 0 ? "" : `, ${o.declaredProof === true ? "declared plan " : ""}relaxed ${o.relaxedSites.join(", ")}`;
+    const refusal = o.targetedRefusal === undefined ? "" : `, targeted proof refused: ${o.targetedRefusal}`;
+    return `${o.kind}: ${o.verdict}${witness}${relaxed}${refusal}`;
+  }).join("; ")}]`;
+  return `${a.verdict.padEnd(11)}  ${a.site.padEnd(18)}  ${a.check}${proved}${refused}${obligations}`;
 }

@@ -35,7 +35,8 @@ describe("UI effects and known HTTP writes are distinct mutation candidates", ()
     expect(planJourneyMutations(journey([click("apply", ["GET /telemetry → 200"])] )).mutations.map((m) => m.id)).toEqual(["skip:1"]);
   });
 
-  it.each([[], ["malformed"], ["unrecognized method"], Array.from({ length: 10 }, (_, i) => `GET /poll/${i} → 200`)])(
+  // Each row is wrapped: it.each spreads a row, which would pass one string instead of the request list.
+  it.each([[[]], [["malformed"]], [["unrecognized method"]], [Array.from({ length: 10 }, (_, i) => `GET /poll/${i} → 200`)]])(
     "retains persistence uncertainty with incomplete request evidence %j",
     (requests) => {
       expect(lintJourney(journey([click("apply", requests)])).some((f) => f.rule === "no-persistence-check")).toBe(true);
@@ -141,35 +142,6 @@ describe("UI effects and known HTTP writes are distinct mutation candidates", ()
     expect(mutationProofVerdict({ basePassed: true, mutations: [...results.values()], assertions: judgeAssertions(j, plan, results) }).verdict).toBe("inconclusive");
   });
 
-  describe("a checked UI action with no recorded write or change", () => {
-    const local = (target: string): RecordedStep => ({ step: { kind: "click", target: { testId: target }, expect: { kind: "count", target: { css: "p.preview" }, min: 1 } } });
-    const end: Journey["metadata"]["endState"] = [{ kind: "page", assertion: { kind: "textIncludes", target: { testId: "status" }, text: "done" } }];
-    const passed: MutationRunResult = { outcome: "passed", failedSites: [] };
-
-    it("never takes a final check as the last effect", () => {
-      const plan = planJourneyMutations(journey([click("start", ["POST /start → 202"]), local("preview")], end));
-      expect(plan.pairs.filter((p) => p.site === "end-state:0").map((p) => p.mutation)).toEqual(["skip:1", "block-write:1"]);
-    });
-
-    it("leaves its own check unpaired when the skip did not break it", () => {
-      const j = journey([local("preview")]);
-      const assertions = judgeAssertions(j, planJourneyMutations(j), new Map([["skip:1", passed]]));
-      expect(assertions.find((a) => a.site === "step:1")?.verdict).toBe("unpaired");
-    });
-
-    it("leaves its own check unpaired when the run failed elsewhere", () => {
-      const j = journey([local("preview")]);
-      const assertions = judgeAssertions(j, planJourneyMutations(j), new Map([["skip:1", { outcome: "failed", failedSites: [{ where: "end-state", index: 0 }] } as MutationRunResult]]));
-      expect(assertions.find((a) => a.site === "step:1")?.verdict).toBe("unpaired");
-    });
-
-    it("counts its own check as sensitive only when the skip really failed it", () => {
-      const j = journey([local("preview")]);
-      const assertions = judgeAssertions(j, planJourneyMutations(j), new Map([["skip:1", { outcome: "failed", failedSites: [{ where: "step", step: 1, postcondition: true }] } as MutationRunResult]]));
-      expect(assertions.find((a) => a.site === "step:1")).toMatchObject({ verdict: "sensitive", provedBy: "skip:1" });
-    });
-  });
-
   describe("a final network check the block broke and the skip did not", () => {
     const j = journey([click("b", ["POST /api/sync → 200"])], [{ kind: "responseStatus", method: "POST", pathGlob: "/api/sync", status: { class: 2 } }]);
     const failedAtEnd: MutationRunResult = { outcome: "failed", failedSites: [{ where: "end-state", index: 0 }] };
@@ -200,5 +172,157 @@ describe("UI effects and known HTTP writes are distinct mutation candidates", ()
     expect(planJourneyMutations(journey([action])).mutations).toEqual([]);
     action.expectRequests = [{ kind: "requestMade", method: "POST", pathGlob: "/board.v1.Items/*" }];
     expect(planJourneyMutations(journey([action])).mutations.map((m) => m.id)).toEqual(["skip:1", "block-write:1"]);
+  });
+});
+
+describe("conservative inferred UI ownership", () => {
+  it("keeps a pre-existing structural count as a baseline assertion without inferring an effect", () => {
+    const j = journey([{ step: { kind: "click", target: { testId: "preview" }, expect: { kind: "count", target: { testId: "preview-text" }, min: 1 } } }]);
+    const plan = planJourneyMutations(j);
+    expect(plan).toEqual({ mutations: [], pairs: [] });
+    expect(judgeAssertions(j, plan, new Map())).toEqual([{ site: "step:1", verdict: "unpaired" }]);
+    // Positive change evidence and explicit declarations remain independent reasons to test it.
+    j.metadata.mutationPairs = [{ check: "step:1", mustFailWhen: "skip:1" }];
+    expect(planJourneyMutations(j)).toEqual({ mutations: [{ id: "skip:1", kind: "skip", step: 1 }], pairs: [{ site: "step:1", mutation: "skip:1", declared: true }] });
+    j.metadata.mutationPairs = [];
+    j.recording.pages[0]!.steps[0]!.delta = { verdict: "relevant-change", why: "preview appeared", changes: ["preview-text"], requests: [], overheadMs: 0 };
+    expect(planJourneyMutations(j).pairs).toEqual([{ site: "step:1", mutation: "skip:1" }]);
+  });
+
+  it("uses live option swapping rather than a potentially no-op default selection skip", () => {
+    const j = journey([{ step: { kind: "select", target: { label: "Thread" }, value: { var: "threadId" }, expect: { kind: "valueEquals", target: { label: "Thread" }, value: { var: "threadId" } } } }], [
+      { kind: "page", assertion: { kind: "valueEquals", target: { label: "Thread" }, value: { var: "threadId" } } },
+    ]);
+    j.metadata.params = ["threadId"];
+    const plan = planJourneyMutations(j, { params: { threadId: "thread-001" } });
+    expect(plan.mutations).toEqual([{ id: "swap-param:threadId", kind: "swap-param", step: 1, param: "threadId", source: "option" }]);
+    expect(plan.pairs).toEqual([{ site: "step:1", mutation: "swap-param:threadId" }, { site: "end-state:0", mutation: "swap-param:threadId" }]);
+    j.metadata.mutationPairs = [{ check: "end-state:0", mustFailWhen: "skip:1" }];
+    expect(planJourneyMutations(j, { params: { threadId: "thread-001" } }).pairs).toContainEqual({ site: "end-state:0", mutation: "skip:1", declared: true });
+  });
+
+  it("does not assign an independent select's final value to the last click", () => {
+    const j = journey([click("open")], [{ kind: "page", assertion: { kind: "valueEquals", target: { label: "Thread" }, value: "Improved" } }]);
+    expect(planJourneyMutations(j).pairs).toEqual([{ site: "step:1", mutation: "skip:1" }]);
+    j.metadata.mutationPairs = [{ check: "end-state:0", mustFailWhen: "skip:1" }];
+    expect(planJourneyMutations(j).pairs).toContainEqual({ site: "end-state:0", mutation: "skip:1", declared: true });
+  });
+
+  it("does not assign a final selection to an unrelated earlier UI action", () => {
+    const select: RecordedStep = {
+      step: { kind: "select", target: { label: "Thread" }, value: { redacted: false, value: "thread-001" }, expect: { kind: "valueEquals", target: { label: "Thread" }, value: "thread-001" } },
+    };
+    const j = journey([click("open"), select], [{ kind: "page", assertion: { kind: "valueEquals", target: { label: "Thread" }, value: "thread-001" } }]);
+    expect(planJourneyMutations(j)).toEqual({ mutations: [{ kind: "skip", step: 1, id: "skip:1" }], pairs: [{ site: "step:1", mutation: "skip:1" }] });
+  });
+
+  it("requires the same assertion operation for final UI ownership", () => {
+    const j = journey([click("apply")], [{ kind: "page", assertion: { kind: "textIncludes", target: { testId: "objective" }, text: "Improved" } }]);
+    expect(planJourneyMutations(j).pairs).toEqual([{ site: "step:1", mutation: "skip:1" }]);
+  });
+
+  it("does not equate distinct symbolic operands just because baseline values agree", () => {
+    const apply = click("apply");
+    apply.step = { kind: "click", target: { testId: "apply" }, expect: { kind: "valueEquals", target: { testId: "objective" }, value: { var: "reply" } } };
+    const j = journey([apply], [{ kind: "page", assertion: { kind: "valueEquals", target: { testId: "objective" }, value: { var: "expectedReply" } } }]);
+    j.metadata.params = ["reply", "expectedReply"];
+    expect(planJourneyMutations(j, { params: { reply: "Improved", expectedReply: "Improved" } }).pairs).toEqual([{ site: "step:1", mutation: "skip:1" }, { site: "step:1", mutation: "guard-param:reply" }]);
+  });
+
+  it("compares operative selectors while ignoring display metadata", () => {
+    const apply = click("apply");
+    apply.step = { kind: "click", target: { testId: "apply" }, expect: { kind: "valueEquals", target: { testId: "objective", display: { name: "Objective before" } }, value: "Improved" } };
+    const j = journey([apply], [{ kind: "page", assertion: { kind: "valueEquals", target: { testId: "objective", display: { name: "Objective after" } }, value: "Improved" } }]);
+    expect(planJourneyMutations(j).pairs).toContainEqual({ site: "end-state:0", mutation: "skip:1" });
+    j.metadata.endState = [{ kind: "page", assertion: { kind: "valueEquals", target: { testId: "other", display: { name: "Objective before" } }, value: "Improved" } }];
+    expect(planJourneyMutations(j).pairs).not.toContainEqual({ site: "end-state:0", mutation: "skip:1" });
+  });
+});
+
+function parameterApply(guard = false): Journey {
+  const check = { kind: "valueEquals" as const, target: { testId: "applied" }, value: { var: "reply" } };
+  const j = journey([
+    { step: { kind: "fill", target: { label: "Reply" }, value: { var: "reply" }, expect: { kind: "valueEquals", target: { label: "Reply" }, value: { var: "reply" } } } },
+    ...(guard ? [{ step: { kind: "assert" as const, check: { kind: "visible" as const, target: { testId: "context" } } } }] : []),
+    { step: { kind: "click", target: { testId: "apply" }, expect: check } },
+  ], [{ kind: "page", assertion: check }]);
+  j.metadata.params = ["reply"];
+  return j;
+}
+
+function applyEvidence(j: Journey, data: "echo" | "constant" | "refused"): Map<string, MutationRunResult> {
+  const plan = planJourneyMutations(j, { params: { reply: "Improved" } });
+  const applyStep = j.recording.pages[0]!.steps.length;
+  return new Map(plan.mutations.map((m): [string, MutationRunResult] => {
+    if (m.kind === "skip") return [m.id, {
+      outcome: "failed", failedSites: [{ where: "step", step: applyStep, postcondition: true }],
+      relaxed: { outcome: "failed", failedSites: [{ where: "end-state", index: 0 }] },
+    }];
+    return [m.id, {
+      outcome: "failed", failedSites: [{ where: "step", step: 1, postcondition: true }],
+      relaxed: data === "constant" ? { outcome: "passed", failedSites: [] } : {
+        outcome: "failed", failedSites: [{ where: "step", step: data === "refused" ? 2 : applyStep, postcondition: true }],
+      },
+      ...(data === "constant" ? {} : { targeted: [{ site: "end-state:0", relaxedSites: data === "refused" ? [] : [`step:${applyStep}`], outcome: "failed", failedSites: [{ where: "end-state", index: 0 }], control: "passed", ...(data === "refused" ? { refused: `step:2 is not paired with ${m.id}` } : {}) }] }),
+    }];
+  }));
+}
+
+describe("data sensitivity and UI necessity are independent obligations", () => {
+  it("a constant Apply with identical param-valued own/final checks stays insensitive despite a sensitive skip", () => {
+    const j = parameterApply();
+    const plan = planJourneyMutations(j, { params: { reply: "Improved" } });
+    const results = applyEvidence(j, "constant");
+    const assertions = judgeAssertions(j, plan, results);
+    for (const site of ["step:2", "end-state:0"]) expect(assertions.find((a) => a.site === site)).toEqual({
+      site, verdict: "insensitive", obligations: [
+        { kind: "data", verdict: "insensitive" },
+        { kind: "action", verdict: "sensitive", provedBy: "skip:2" },
+      ],
+    });
+    expect(mutationProofVerdict({ basePassed: true, mutations: [...results.values()], assertions }).verdict).toBe("insensitive");
+  });
+
+  it("an honest Apply proves both propositions with their actual independent witnesses", () => {
+    const j = parameterApply();
+    const plan = planJourneyMutations(j, { params: { reply: "Improved" } });
+    const results = applyEvidence(j, "echo");
+    const assertions = judgeAssertions(j, plan, results);
+    expect(assertions.find((a) => a.site === "end-state:0")).toEqual({
+      site: "end-state:0", verdict: "sensitive", provedBy: "stale-value:1", relaxedSites: ["step:2"], obligations: [
+        { kind: "data", verdict: "sensitive", provedBy: "stale-value:1", relaxedSites: ["step:2"] },
+        { kind: "action", verdict: "sensitive", provedBy: "skip:2" },
+      ],
+    });
+    expect(mutationProofVerdict({ basePassed: true, mutations: [...results.values()], assertions }).verdict).toBe("proven");
+  });
+
+  it("data sensitivity cannot substitute for an unnecessary Apply action", () => {
+    const j = parameterApply();
+    const plan = planJourneyMutations(j, { params: { reply: "Improved" } });
+    const results = applyEvidence(j, "echo");
+    results.set("skip:2", { outcome: "passed", failedSites: [] });
+    const assertions = judgeAssertions(j, plan, results);
+    expect(assertions.find((a) => a.site === "end-state:0")).toEqual({
+      site: "end-state:0", verdict: "insensitive", obligations: [
+        { kind: "data", verdict: "sensitive", provedBy: "stale-value:1", relaxedSites: ["step:2"] },
+        { kind: "action", verdict: "insensitive" },
+      ],
+    });
+    expect(mutationProofVerdict({ basePassed: true, mutations: [...results.values()], assertions }).verdict).toBe("insensitive");
+  });
+
+  it("a sensitive UI skip cannot hide an exact data-mutation targeted refusal", () => {
+    const j = parameterApply(true);
+    const plan = planJourneyMutations(j, { params: { reply: "Improved" } });
+    const results = applyEvidence(j, "refused");
+    const assertions = judgeAssertions(j, plan, results);
+    expect(assertions.find((a) => a.site === "end-state:0")).toEqual({
+      site: "end-state:0", verdict: "cascade", targetedRefusal: "step:2 is not paired with stale-value:1", obligations: [
+        { kind: "data", verdict: "cascade", targetedRefusal: "step:2 is not paired with stale-value:1" },
+        { kind: "action", verdict: "sensitive", provedBy: "skip:3" },
+      ],
+    });
+    expect(mutationProofVerdict({ basePassed: true, mutations: [...results.values()], assertions }).verdict).toBe("inconclusive");
   });
 });

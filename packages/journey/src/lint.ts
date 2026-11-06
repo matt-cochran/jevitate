@@ -269,11 +269,6 @@ export interface JourneyMutationStep {
   readonly requests: readonly { readonly method: string; readonly pathGlob: string; readonly literal?: true }[];
   /** Positive write evidence only; absence still means unknown network coverage. */
   readonly knownHttpWrite: boolean;
-  /**
-   * The step is only a checked UI action: nothing recorded says it wrote or changed the page. Its own
-   * check may turn out to depend on it, but a final check is never attributed to it on that basis.
-   */
-  readonly uiCheckOnly: boolean;
 }
 
 export function journeyMutationSteps(journey: Journey, opts: JourneyLintOptions = {}): JourneyMutationStep[] {
@@ -284,10 +279,11 @@ export function journeyMutationSteps(journey: Journey, opts: JourneyLintOptions 
     const requests = [...observed, ...declared.map(({ method, pathGlob }) => ({ method, pathGlob }))];
     const knownHttpWrite = requests.length > 0;
     const action = recorded.step;
-    const checkedUiEffect = (STATE_CHANGING.has(action.kind) || action.kind === "select") &&
-      "expect" in action && !isNoClaimExpect(action) && !isOwnTargetVisible(action);
-    const evidenced = knownHttpWrite || isWriteStep(recorded, classify, []);
-    return evidenced || checkedUiEffect ? [{ step: i + 1, requests, knownHttpWrite, uiCheckOnly: !evidenced }] : [];
+    const checkedUiEffect = STATE_CHANGING.has(action.kind) &&
+      "expect" in action && action.expect.kind !== "count" && !isNoClaimExpect(action) && !isOwnTargetVisible(action);
+    return knownHttpWrite || checkedUiEffect || isWriteStep(recorded, classify, [])
+      ? [{ step: i + 1, requests, knownHttpWrite }]
+      : [];
   });
 }
 
