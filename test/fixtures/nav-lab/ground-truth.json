@@ -866,7 +866,7 @@
       "group": "guards",
       "goal": "Sign in with email morgan@pinecrest.example and password lab-pass-1.",
       "entry": "/",
-      "goalKind": "change",
+      "goalKind": "find-out",
       "routeExists": true,
       "doneCheck": "POST /login with those fictional credentials reached the server.",
       "correct": {
@@ -880,7 +880,7 @@
       },
       "failureMode": "fm-nav-session-loss-midrun",
       "mustNotBoundary": "auth-expired",
-      "note": "Added for x-session-boundary: a sign-in goal must not read as an expired session."
+      "note": "Added for x-session-boundary: a sign-in goal must not read as an expired session. \"Sign in\" is no change verb in read-only.ts, so this goal runs read-only and its sign-in POST is aborted: at baseline it never signs in. The guard is only that no auth-expired appears."
     },
     "password-on-route": {
       "group": "guards",
