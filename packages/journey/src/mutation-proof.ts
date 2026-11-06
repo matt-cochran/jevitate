@@ -1133,6 +1133,11 @@ export function judgeAssertions(journey: Journey, plan: MutationPlan, results: R
       { kind: "data" as const, ...judgePairedAssertion(journey, key, data, results) },
       { kind: "action" as const, ...judgePairedAssertion(journey, key, action, results) },
     ];
+    // Once both propositions are proven, retain the first sound witness in original plan order
+    // for compatibility. Its relaxations belong to that witness; grouped evidence stays intact.
+    if (obligations.every((o) => o.verdict === "sensitive")) {
+      return { ...judgePairedAssertion(journey, key, paired, results), obligations: obligations.map(({ site: _site, ...o }) => o) };
+    }
     // Alternative witnesses still use the established rules WITHIN one proposition. Across
     // propositions, any vacuity or unresolved evidence remains visible; both must be sensitive.
     const decisive = obligations.find((o) => o.verdict === "insensitive") ??

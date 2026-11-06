@@ -269,6 +269,63 @@ function applyEvidence(j: Journey, data: "echo" | "constant" | "refused"): Map<s
 }
 
 describe("data sensitivity and UI necessity are independent obligations", () => {
+  it.each([false, true])("retains the first sound aggregate witness in original plan order (data first: %s)", (dataFirst) => {
+    const j = parameterApply();
+    const planned = planJourneyMutations(j, { params: { reply: "Improved" } });
+    const plan = { ...planned, mutations: dataFirst ? [...planned.mutations].reverse() : planned.mutations };
+    const results = new Map<string, MutationRunResult>(plan.mutations.map((m) => [m.id, m.kind === "skip" ? {
+      outcome: "failed", failedSites: [{ where: "step", step: 2, postcondition: true }],
+      targeted: [{ site: "end-state:0", relaxedSites: ["step:2"], outcome: "failed", failedSites: [{ where: "end-state", index: 0 }], control: "passed" }],
+    } : { outcome: "failed", failedSites: [{ where: "end-state", index: 0 }] }]));
+    // Reversing the original plan puts truncate-param before stale-value. Do not sort IDs or
+    // privilege skip: each group and the compatibility aggregate retain their actual first witness.
+    const dataWitness = dataFirst ? "truncate-param:reply" : "stale-value:1";
+    expect(judgeAssertions(j, plan, results).find((a) => a.site === "end-state:0")).toEqual({
+      site: "end-state:0", verdict: "sensitive", provedBy: dataFirst ? dataWitness : "skip:2",
+      ...(dataFirst ? {} : { relaxedSites: ["step:2"] }), obligations: [
+        { kind: "data", verdict: "sensitive", provedBy: dataWitness },
+        { kind: "action", verdict: "sensitive", provedBy: "skip:2", relaxedSites: ["step:2"] },
+      ],
+    });
+  });
+
+  it.each([
+    ["data", "insensitive"], ["data", "cascade"], ["data", "error"], ["data", "not-applied"],
+    ["action", "insensitive"], ["action", "cascade"], ["action", "error"], ["action", "not-applied"],
+  ] as const)("a sensitive opposite group cannot override %s %s", (kind, verdict) => {
+    const j = parameterApply();
+    const plan = planJourneyMutations(j, { params: { reply: "Improved" } });
+    const results = applyEvidence(j, "echo");
+    const replacement: MutationRunResult = verdict === "insensitive" ? { outcome: "passed", failedSites: [] } :
+      verdict === "cascade" ? { outcome: "failed", failedSites: [{ where: "unevaluable" }] } : { outcome: verdict, failedSites: [] };
+    for (const m of plan.mutations) if ((m.kind === "skip") === (kind === "action")) results.set(m.id, replacement);
+    const assertions = judgeAssertions(j, plan, results);
+    const final = assertions.find((a) => a.site === "end-state:0");
+    expect(final?.verdict).toBe(verdict);
+    expect(final?.provedBy).toBeUndefined();
+    expect(final?.obligations?.find((o) => o.kind === kind)?.verdict).toBe(verdict);
+    expect(final?.obligations?.find((o) => o.kind !== kind)?.verdict).toBe("sensitive");
+    expect(mutationProofVerdict({ basePassed: true, mutations: [...results.values()], assertions }).verdict).toBe(verdict === "insensitive" ? "insensitive" : "inconclusive");
+  });
+
+  it("rejects an unsound targeted action witness despite sound sensitive data", () => {
+    const j = parameterApply();
+    const plan = planJourneyMutations(j, { params: { reply: "Improved" } });
+    const results = applyEvidence(j, "echo");
+    results.set("skip:2", {
+      outcome: "failed", failedSites: [{ where: "step", step: 2, postcondition: true }],
+      targeted: [{ site: "end-state:0", relaxedSites: ["step:1"], outcome: "failed", failedSites: [{ where: "end-state", index: 0 }], control: "passed" }],
+    });
+    const assertions = judgeAssertions(j, plan, results);
+    expect(assertions.find((a) => a.site === "end-state:0")).toEqual({
+      site: "end-state:0", verdict: "cascade", targetedRefusal: "relaxed site step:1 is not itself proven sensitive to skip:2", obligations: [
+        { kind: "data", verdict: "sensitive", provedBy: "stale-value:1", relaxedSites: ["step:2"] },
+        { kind: "action", verdict: "cascade", targetedRefusal: "relaxed site step:1 is not itself proven sensitive to skip:2" },
+      ],
+    });
+    expect(mutationProofVerdict({ basePassed: true, mutations: [...results.values()], assertions }).verdict).toBe("inconclusive");
+  });
+
   it("a constant Apply with identical param-valued own/final checks stays insensitive despite a sensitive skip", () => {
     const j = parameterApply();
     const plan = planJourneyMutations(j, { params: { reply: "Improved" } });
@@ -289,7 +346,7 @@ describe("data sensitivity and UI necessity are independent obligations", () => 
     const results = applyEvidence(j, "echo");
     const assertions = judgeAssertions(j, plan, results);
     expect(assertions.find((a) => a.site === "end-state:0")).toEqual({
-      site: "end-state:0", verdict: "sensitive", provedBy: "stale-value:1", relaxedSites: ["step:2"], obligations: [
+      site: "end-state:0", verdict: "sensitive", provedBy: "skip:2", obligations: [
         { kind: "data", verdict: "sensitive", provedBy: "stale-value:1", relaxedSites: ["step:2"] },
         { kind: "action", verdict: "sensitive", provedBy: "skip:2" },
       ],
