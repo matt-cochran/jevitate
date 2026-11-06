@@ -140,4 +140,65 @@ describe("UI effects and known HTTP writes are distinct mutation candidates", ()
     const results = new Map(plan.mutations.map((m) => [m.id, { outcome: "failed", failedSites: [{ where: "step", step: m.step, postcondition: true }] } as MutationRunResult]));
     expect(mutationProofVerdict({ basePassed: true, mutations: [...results.values()], assertions: judgeAssertions(j, plan, results) }).verdict).toBe("inconclusive");
   });
+
+  describe("a checked UI action with no recorded write or change", () => {
+    const local = (target: string): RecordedStep => ({ step: { kind: "click", target: { testId: target }, expect: { kind: "count", target: { css: "p.preview" }, min: 1 } } });
+    const end: Journey["metadata"]["endState"] = [{ kind: "page", assertion: { kind: "textIncludes", target: { testId: "status" }, text: "done" } }];
+    const passed: MutationRunResult = { outcome: "passed", failedSites: [] };
+
+    it("never takes a final check as the last effect", () => {
+      const plan = planJourneyMutations(journey([click("start", ["POST /start → 202"]), local("preview")], end));
+      expect(plan.pairs.filter((p) => p.site === "end-state:0").map((p) => p.mutation)).toEqual(["skip:1", "block-write:1"]);
+    });
+
+    it("leaves its own check unpaired when the skip did not break it", () => {
+      const j = journey([local("preview")]);
+      const assertions = judgeAssertions(j, planJourneyMutations(j), new Map([["skip:1", passed]]));
+      expect(assertions.find((a) => a.site === "step:1")?.verdict).toBe("unpaired");
+    });
+
+    it("leaves its own check unpaired when the run failed elsewhere", () => {
+      const j = journey([local("preview")]);
+      const assertions = judgeAssertions(j, planJourneyMutations(j), new Map([["skip:1", { outcome: "failed", failedSites: [{ where: "end-state", index: 0 }] } as MutationRunResult]]));
+      expect(assertions.find((a) => a.site === "step:1")?.verdict).toBe("unpaired");
+    });
+
+    it("counts its own check as sensitive only when the skip really failed it", () => {
+      const j = journey([local("preview")]);
+      const assertions = judgeAssertions(j, planJourneyMutations(j), new Map([["skip:1", { outcome: "failed", failedSites: [{ where: "step", step: 1, postcondition: true }] } as MutationRunResult]]));
+      expect(assertions.find((a) => a.site === "step:1")).toMatchObject({ verdict: "sensitive", provedBy: "skip:1" });
+    });
+  });
+
+  describe("a final network check the block broke and the skip did not", () => {
+    const j = journey([click("b", ["POST /api/sync → 200"])], [{ kind: "responseStatus", method: "POST", pathGlob: "/api/sync", status: { class: 2 } }]);
+    const failedAtEnd: MutationRunResult = { outcome: "failed", failedSites: [{ where: "end-state", index: 0 }] };
+    const passed: MutationRunResult = { outcome: "passed", failedSites: [] };
+    const reading = (journeyUnderTest: Journey, skip: MutationRunResult): string | undefined =>
+      judgeAssertions(journeyUnderTest, planJourneyMutations(journeyUnderTest), new Map([["skip:1", skip], ["block-write:1", failedAtEnd]])).find((a) => a.site === "end-state:0")?.verdict;
+
+    it("is insensitive: the block aborted a request this step did not send", () => {
+      expect(reading(j, passed)).toBe("insensitive");
+    });
+
+    it("stays sensitive when skip and block agree", () => {
+      expect(reading(j, failedAtEnd)).toBe("sensitive");
+    });
+
+    it("stays sensitive when a person declared the block", () => {
+      const declared = structuredClone(j);
+      declared.metadata.mutationPairs = [{ check: "end-state:0", mustFailWhen: "block-write:1" }];
+      expect(reading(declared, passed)).toBe("sensitive");
+    });
+  });
+
+  it("does not read a read RPC named by a glob as a write", () => {
+    const action = click("open");
+    action.delta = undefined;
+    action.step = { kind: "click", target: { testId: "open" }, expect: { kind: "urlIncludes", text: "" } };
+    action.expectRequests = [{ kind: "requestMade", method: "POST", pathGlob: "/board.v1.Items/Get*" }];
+    expect(planJourneyMutations(journey([action])).mutations).toEqual([]);
+    action.expectRequests = [{ kind: "requestMade", method: "POST", pathGlob: "/board.v1.Items/*" }];
+    expect(planJourneyMutations(journey([action])).mutations.map((m) => m.id)).toEqual(["skip:1", "block-write:1"]);
+  });
 });

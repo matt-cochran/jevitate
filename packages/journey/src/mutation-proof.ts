@@ -62,6 +62,11 @@ export interface MutationPair {
   readonly mutation: string;
   /** Declared in `metadata.mutationPairs` (else derived from the Journey). */
   readonly declared?: true;
+  /**
+   * The own check of a UI action with no recorded write or change. Nothing says the check claims the
+   * action's effect, so the pair counts only if the skip really broke it; otherwise it stays unpaired.
+   */
+  readonly onlyIfSensitive?: true;
 }
 
 export interface MutationPlan {
@@ -416,19 +421,22 @@ export function planJourneyMutations(
   const sites = journeyAssertions(journey).filter((s) => !(s.where === "step" && s.field === "expect" && isNoClaimExpect(steps[s.step - 1]!.step)));
   const mutations: JourneyMutation[] = [];
   const pairs: MutationPair[] = [];
-  const pair = (site: JourneyAssertionSite, m: JourneyMutation): void => {
+  const pair = (site: JourneyAssertionSite, m: JourneyMutation, opts: { readonly onlyIfSensitive?: true } = {}): void => {
     const key = assertionSiteKey(site);
-    if (!pairs.some((p) => p.site === key && p.mutation === m.id)) pairs.push({ site: key, mutation: m.id });
+    if (!pairs.some((p) => p.site === key && p.mutation === m.id)) pairs.push({ site: key, mutation: m.id, ...opts });
   };
   const ownSites = (n: number): JourneyAssertionSite[] => sites.filter((s) => (s.where === "step" || s.where === "step-request") && s.step === n);
 
   const candidates = journeyMutationSteps(journey, opts);
-  const lastEffect = candidates.at(-1)?.step;
+  // A step known only by its own check is not the last effect: "the final check follows the last action"
+  // is a guess, and the guess reads as insensitive for a check some earlier step or parameter drives.
+  const lastEffect = candidates.filter((c) => !c.uiCheckOnly).at(-1)?.step;
   for (const w of candidates) {
     for (const kind of w.knownHttpWrite ? ["skip", "block-write"] as const : ["skip"] as const) {
       const m = mutation(kind, w.step);
       mutations.push(m);
-      for (const s of ownSites(w.step)) pair(s, m);
+      for (const s of ownSites(w.step)) pair(s, m, w.uiCheckOnly ? { onlyIfSensitive: true } : {});
+      if (w.uiCheckOnly) continue;
       for (const s of sites) {
         if (s.where !== "end-state") continue;
         const check = s.check;
@@ -1040,6 +1048,36 @@ function provenSensitive(journey: Journey, m: JourneyMutation, results: Readonly
 }
 
 /**
+ * A final network check pairs with the step that recorded its request, and recorded requests are placed
+ * by time. A step that really sends the request breaks the check when it is skipped too. If the check
+ * holds under the skip and fails only under the block, the block aborted another step's request (a timer
+ * firing in this step's window), so that failure is not evidence about this step.
+ */
+function blockAloneBrokeNetworkCheck(
+  site: JourneyAssertionSite,
+  pairs: readonly MutationPair[],
+  verdicts: readonly { readonly m: JourneyMutation; readonly v: MutationVerdict }[],
+): boolean {
+  if (site.where !== "end-state" || (site.check.kind !== "requestMade" && site.check.kind !== "responseStatus")) return false;
+  return verdicts.some(({ m, v }) =>
+    m.kind === "block-write" && v === "sensitive" && pairs.find((p) => p.mutation === m.id)?.declared !== true &&
+    verdicts.some((other) => other.m.kind === "skip" && other.m.step === m.step && other.v === "insensitive"),
+  );
+}
+
+/**
+ * A check naming a value is about that value. If changing the value leaves it passing, leaving out an action
+ * that also breaks it says nothing about the value, so the skip does not prove the check.
+ * A human-declared pair is its author's claim and stands.
+ */
+function valueIgnoredByCheck(pairs: readonly MutationPair[], verdicts: readonly { readonly m: JourneyMutation; readonly v: MutationVerdict }[]): boolean {
+  const isValue = (m: JourneyMutation): boolean => m.kind === "swap-param" || m.kind === "truncate-param" || m.kind === "guard-param" || m.kind === "stale-value";
+  const values = verdicts.filter(({ m }) => isValue(m));
+  if (!values.some(({ v }) => v === "insensitive") || values.some(({ v }) => v === "sensitive")) return false;
+  return !verdicts.some(({ m, v }) => v === "sensitive" && pairs.find((p) => p.mutation === m.id)?.declared === true);
+}
+
+/**
  * #402/#609: every assertion's verdict over its paired mutations — sensitive when ANY paired
  * mutation broke it for the right reason (`provedBy` the first), else insensitive when one passed,
  * else cascade / not-applied / error; `unpaired` when no mutation is paired with it. A sensitive
@@ -1050,9 +1088,15 @@ export function judgeAssertions(journey: Journey, plan: MutationPlan, results: R
   const proofFor = (m: JourneyMutation, key: string): TargetedProof | undefined => results.get(m.id)?.targeted?.find((t) => t.site === key);
   return journeyAssertions(journey).map((site) => {
     const key = assertionSiteKey(site);
-    const paired = plan.mutations.filter((m) => plan.pairs.some((p) => p.site === key && p.mutation === m.id));
+    const sitePairs = plan.pairs.filter((p) => p.site === key);
+    const paired = plan.mutations.filter((m) => {
+      const found = sitePairs.find((p) => p.mutation === m.id);
+      if (found === undefined) return false;
+      return found.onlyIfSensitive !== true || classifyMutation(site, m, results.get(m.id) ?? { outcome: "error", failedSites: [] }) === "sensitive";
+    });
     if (paired.length === 0) return { site: key, verdict: "unpaired", ...(site.where === "end-state" && site.check.kind !== "page" ? { required: true as const } : {}) };
     const verdicts = paired.map((m) => ({ m, v: classifyMutation(site, m, results.get(m.id) ?? { outcome: "error", failedSites: [] }) }));
+    if (blockAloneBrokeNetworkCheck(site, sitePairs, verdicts) || valueIgnoredByCheck(sitePairs, verdicts)) return { site: key, verdict: "insensitive" };
     // #616: set when every sensitive verdict rested on an unproven relaxed site — those count as cascades.
     let unsound: string | undefined;
     for (const v of PRECEDENCE) {

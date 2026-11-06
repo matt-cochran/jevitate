@@ -165,10 +165,18 @@ function writeRequestsOf(recorded: RecordedStep, classify: WriteClassifier): Wri
   return out;
 }
 
+/**
+ * Does a request check's glob name a write? The classifier reads paths, and `Get*` is not a method name:
+ * read it as a path the glob stands for, so `/pkg.Items/Get*` is a read RPC and `/pkg.Items/*` stays unknown.
+ */
+function checkNamesWrite(check: { readonly method: string; readonly pathGlob: string }, classify: WriteClassifier): boolean {
+  return classify({ method: check.method, path: check.pathGlob.replaceAll("*", "X") });
+}
+
 function isWriteStep(recorded: RecordedStep, classify: WriteClassifier, requests: readonly WriteRequest[]): boolean {
   if (requests.length > 0) return true;
   // (b) a step's own request expectation names a write method for its path.
-  if ((recorded.expectRequests ?? []).some((check) => classify({ method: check.method, path: check.pathGlob }))) return true;
+  if ((recorded.expectRequests ?? []).some((check) => checkNamesWrite(check, classify))) return true;
   // Capture is a partial window, not a certificate of absent writes. GETs, configured
   // read RPCs and unrelated expectations cannot erase uncertainty about a changed UI.
   // (c) a state-changing step whose delta changed the page, even if the request was not recorded.
@@ -255,21 +263,25 @@ export interface JourneyMutationStep {
   readonly requests: readonly { readonly method: string; readonly pathGlob: string; readonly literal?: true }[];
   /** Positive write evidence only; absence still means unknown network coverage. */
   readonly knownHttpWrite: boolean;
+  /**
+   * The step is only a checked UI action: nothing recorded says it wrote or changed the page. Its own
+   * check may turn out to depend on it, but a final check is never attributed to it on that basis.
+   */
+  readonly uiCheckOnly: boolean;
 }
 
 export function journeyMutationSteps(journey: Journey, opts: JourneyLintOptions = {}): JourneyMutationStep[] {
   const classify = writeClassifier({ readRequests: opts.readRequests });
   return flattenSteps(journey).flatMap((recorded, i) => {
     const observed = writeRequestsOf(recorded, classify).map(({ method, path }) => ({ method, pathGlob: path, literal: true as const }));
-    const declared = (recorded.expectRequests ?? []).filter((check) => classify({ method: check.method, path: check.pathGlob }));
+    const declared = (recorded.expectRequests ?? []).filter((check) => checkNamesWrite(check, classify));
     const requests = [...observed, ...declared.map(({ method, pathGlob }) => ({ method, pathGlob }))];
     const knownHttpWrite = requests.length > 0;
     const action = recorded.step;
     const checkedUiEffect = (STATE_CHANGING.has(action.kind) || action.kind === "select") &&
       "expect" in action && !isNoClaimExpect(action) && !isOwnTargetVisible(action);
-    return knownHttpWrite || checkedUiEffect || isWriteStep(recorded, classify, [])
-      ? [{ step: i + 1, requests, knownHttpWrite }]
-      : [];
+    const evidenced = knownHttpWrite || isWriteStep(recorded, classify, []);
+    return evidenced || checkedUiEffect ? [{ step: i + 1, requests, knownHttpWrite, uiCheckOnly: !evidenced }] : [];
   });
 }
 

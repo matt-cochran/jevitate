@@ -41,6 +41,7 @@ import { clock } from "@jevitate/domain";
 import { journeyContentHash } from "./journey-annotate-api.js";
 import { journeyReviewHash } from "./journey-review.js";
 import { preflightVerifyRecord, writePreflightedVerifyRecord } from "./journey-review-store.js";
+import type { StepObserver } from "@jevitate/interpreter";
 import { UnknownJourneyError, redactSecretParams, runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import type { OutcomeCheckFailure } from "./journey-network-checks.js";
 import { journeyProofContext, journeyProofHashForContext } from "./journey-proof-context.js";
@@ -195,7 +196,9 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
   const lintOpts = readRequests === undefined ? {} : { readRequests };
   const journeyHash = journeyContentHash(journey);
 
+  const baseStartedAt = clock.monotonicMs();
   const base = await run(runOpts, { structuredFailures: true });
+  const baseMs = clock.monotonicMs() - baseStartedAt;
   const baseFields = { outcome: base.outcome, ...(base.outcome === "quarantined" ? { reason: base.reason } : {}) };
   const sites = journeyAssertions(journey);
   const checkOf = new Map(sites.map((s) => [assertionSiteKey(s), describeCheck(s.check)]));
@@ -212,10 +215,19 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
     const replayOpts = { ...lintOpts, params: opts.params };
     // The replay is DESCRIBED, not fixed: `mutateJourney` re-describes it on the Journey the run moved
     // onto the environment (#247), so a mutated copy never drops `--env`/`--base-url`.
-    const runReplay = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay): Promise<Replayed> => {
+    const runReplay = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay, holdMs: number | undefined): Promise<Replayed> => {
       try {
         const how = describe(journey);
-        const r = await run(how.params === undefined ? runOpts : { ...runOpts, params: { ...how.params } }, {
+        const startedAt = clock.monotonicMs();
+        const lastStep = journey.recording.pages.reduce((n, page) => n + page.steps.length, 0) - 1;
+        const hold: StepObserver = {
+          afterStep: async ({ index }) => {
+            const left = holdMs === undefined || index !== lastStep ? 0 : holdMs - (clock.monotonicMs() - startedAt);
+            if (left > 0) await clock.sleep(left);
+          },
+        };
+        const held = holdMs === undefined ? runOpts : { ...runOpts, observer: hold };
+        const r = await run(how.params === undefined ? held : { ...held, params: { ...how.params } }, {
           structuredFailures: true,
           ...(how.relaxedStepRequests === undefined ? {} : { relaxedStepRequests: how.relaxedStepRequests }),
           ...(how.journey === journey ? {} : { mutateJourney: (j) => describe(j).journey }),
@@ -248,7 +260,14 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
       }
     };
     // #402: a named mutation lowers to its `MutationReplay`; #609's targeted proof passes one directly.
-    const replay = (m: JourneyMutation, describe: typeof mutationReplay): Promise<Replayed> => runReplay(m, (j) => describe(j, m, replayOpts));
+    // A skipped step may be all that gave an earlier step's timer time to send the final check's request.
+    // Its replay gets the base's time before that check is judged, so a late request is not read as a missing one.
+    const judgesRequest = (m: JourneyMutation): boolean => m.kind === "skip" && plan.pairs.some((p) => {
+      const site = p.mutation === m.id ? siteByKey.get(p.site) : undefined;
+      return site?.where === "end-state" && (site.check.kind === "requestMade" || site.check.kind === "responseStatus");
+    });
+    const holdFor = (m: JourneyMutation): number | undefined => (judgesRequest(m) ? baseMs : undefined);
+    const replay = (m: JourneyMutation, describe: typeof mutationReplay): Promise<Replayed> => runReplay(m, (j) => describe(j, m, replayOpts), holdFor(m));
     const siteByKey = new Map(sites.map((s) => [assertionSiteKey(s), s]));
     for (const m of plan.mutations) {
       const first = await replay(m, mutationReplay);
@@ -260,15 +279,15 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
       // targeted proof relaxes them one at a time (in a clone) to reach the target itself.
       const targeted: TargetedProof[] = [];
       for (const pair of plan.pairs) {
-        if (pair.mutation !== m.id) continue;
+        if (pair.mutation !== m.id || pair.onlyIfSensitive === true) continue;
         const site = siteByKey.get(pair.site);
         if (site === undefined || classifyMutation(site, m, initial) !== "cascade") continue;
         // #616: a declared plan (reviewed earlier relaxations) replaces the automatic bound search.
         const declared = declaredTargetedProofFor(journey, m, pair.site);
         targeted.push(
           declared === undefined
-            ? await runTargetedProof(journey, plan, m, site, initial, (describe) => runReplay(m, describe), replayOpts)
-            : await runDeclaredTargetedProof(journey, plan, m, site, declared, (describe) => runReplay(m, describe), replayOpts),
+            ? await runTargetedProof(journey, plan, m, site, initial, (describe) => runReplay(m, describe, holdFor(m)), replayOpts)
+            : await runDeclaredTargetedProof(journey, plan, m, site, declared, (describe) => runReplay(m, describe, holdFor(m)), replayOpts),
         );
         // #616: a proof the automatic bound stopped names the plan a human could declare instead.
         const suggestion = suggestTargetedProofPlan(targeted[targeted.length - 1]!, m);
