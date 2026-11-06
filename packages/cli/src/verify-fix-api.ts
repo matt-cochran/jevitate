@@ -545,10 +545,11 @@ async function replayFinding(opts: RunVerifyFixOptions, known: ReadonlySet<strin
   }
   // Guardrail #1: the replay may only ever touch the mission's own authorized origins.
   const origin = assertAuthorizedExploreTarget(mission.target.seedUrl, mission.target.allowlist);
-  // #789: over MCP a finding is not replayed on a production origin, nor under a production environment's allow list, before anything opens. The CLI is the person's.
+  // #789: over MCP a finding is not replayed on a production origin, with one in its allowlist, or under a production environment's allow list, before anything opens. The CLI is the person's.
   prepareMcpRunGuard({
     site: origin,
     allowedOrigins: mission.target.allowlist,
+    refuseProductionInAllowlist: true,
     environment: opts.env === undefined ? undefined : resolveJourneyEnvironment({ env: opts.env, targets: {}, ...(opts.environmentsFile === undefined ? {} : { environmentsFile: opts.environmentsFile }) }),
     targetsFile: opts.runGuardTargetsFile,
     environmentsFile: opts.environmentsFile,

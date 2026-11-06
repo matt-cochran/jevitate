@@ -263,6 +263,7 @@ export async function runStep(
       }
       vars.set(step.as, value);
       targetOpts.onExtracted?.(value);
+      targetOpts.actionGuard?.noteExtracted?.(value);
       await postcondition(actor, expected(step.expect), step.waitFor, "extract", index, targetOpts);
       return { kind: "done" };
     }
@@ -421,6 +422,7 @@ async function runRowScopedChildStep(
       }
       vars.set(childStep.as, value);
       hooks.onExtracted?.(value);
+      hooks.actionGuard?.noteExtracted?.(value);
       const expect = expected(childStep.expect);
       if (!(await checkAssertionInRow(actor, expect, rowLocator))) {
         throw new PostconditionFailed(expect, "forEach extract");

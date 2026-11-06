@@ -109,9 +109,13 @@ export function inMcpInvocation(): boolean {
   return mcpScope.getStore() !== undefined;
 }
 
+/** The tool call running here, to hold on to: a callback a browser runs later may be in another's async context. */
+export function currentMcpInvocation(): McpInvocation | undefined {
+  return mcpScope.getStore();
+}
+
 /** #789: records the invocation's first refusal, so the tool result reports it whatever the command made of the error. */
-export function noteMcpRefusal(refusal: Error): void {
-  const invocation = mcpScope.getStore();
+export function noteMcpRefusal(refusal: Error, invocation: McpInvocation | undefined = mcpScope.getStore()): void {
   if (invocation !== undefined && invocation.refusal === undefined) invocation.refusal = refusal;
 }
 

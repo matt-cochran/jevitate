@@ -235,6 +235,7 @@ real writes. Which guards apply depends on who starts it. These are the ones in 
 | No click on a session-ending, destructive or paid control (a `forEach` row's included), and no Enter in a field whose form's default button is one | Yes: `E_RUN_REFUSED_DESTRUCTIVE`. Lifted by `mcpRun.allowDestructive`; a target's own `safety.deny` is never lifted | No |
 | No write to an origin outside the run's allowlist | Yes, at the browser context (popups, form posts and WebSocket frames included, on a self-heal run too): `E_RUN_REFUSED_OFF_ALLOWLIST_WRITE`. Lifted by `mcpRun.allowOffAllowlistWrites` | No. The write is sent and listed in `offAllowlistWrites` in the result |
 | No replay on an environment flagged `production: true` | Yes: `E_RUN_REFUSED_PRODUCTION`, before anything is sent. `verify_fix` refuses it too. Lifted by `mcpRun.allowProduction` | No, and not on `verify-fix` |
+| No write to an origin flagged `production: true`, whatever the allowlist says | Yes: `E_RUN_REFUSED_PRODUCTION`, at the browser context. `verify_fix` has no such guard at the context, so it refuses a mission whose allowlist holds one, before anything opens. Lifted only by that origin's own `mcpRun.allowProduction` | No |
 | Site policy (pacing, minimum interval, budgets, quiet hours) | Yes on a Journey's run, `{error: throttled}` | Yes. With no policy set, nothing is limited |
 | A value-free record of the run in `logs/<date>/journey-run-*.json` | Yes on `run_journey` | Yes on `journey run` |
 
@@ -247,7 +248,8 @@ retried, and names the setting that lifts it. If `targets.json` or `environments
 an MCP run refuses with `E_RUN_GUARD_CONFIG` rather than run unguarded. A redirect from an allowed
 origin to a disallowed one cannot be stopped in the browser; the write may have been sent, and the run ends.
 The destructive check reads a control's name, so it cannot judge what has none: Enter in a form with no
-submit button, or a key the page's own script turns into a write.
+submit button, or a key the page's own script turns into a write. A press is judged however its key is spelt,
+including `"\n"`, `"\r"`, `NumpadEnter`, `" "` and a chord that holds one, and on what holds focus inside a frame.
 
 What does not guard a run today:
 

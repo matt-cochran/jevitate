@@ -102,6 +102,10 @@ beforeAll(async () => {
       res.end();
       return;
     }
+    if (req.url === "/frame") {
+      send(res, `<i data-testid=ready>ready</i><button data-testid=focus-frame onclick="const f=document.querySelector('iframe');f.contentWindow.focus();f.contentDocument.querySelector('button').focus()">Go</button><iframe srcdoc="<form method=post action=/delete><button>Delete account</button></form>"></iframe>`);
+      return;
+    }
     if (req.url === "/rows") {
       send(res, `<i data-testid=ready>ready</i><main class=rows><ul>
         <li><button data-testid=row-del onclick="fetch('/delete',{method:'POST'})">Delete account</button><button data-testid=row-open>Open panel</button></li>
@@ -115,6 +119,7 @@ beforeAll(async () => {
     send(
       res,
       `<i data-testid=ready>ready</i>
+      <button data-testid=focus-first onclick="document.querySelector('[data-testid=del]').focus()">Go to it</button>
       <form method=post action=/delete><button data-testid=del>Delete account</button></form>
       <form method=post action=/delete><button data-testid=wrapped><span data-testid=inner>Delete</span> account</button></form>
       <input data-testid=before-del aria-label="Before"><form method=post action=/delete><button data-testid=focus-del>Delete it</button></form>
@@ -529,5 +534,72 @@ describe("the operator's own files under ~/.jevitate", () => {
 
   it("another file there is still allowed", () => {
     expect(confineMcpPath(join(home, "other.json"), "file", [home])).toBe(join(home, "other.json"));
+  });
+});
+
+describe("every spelling of a key that activates", () => {
+  const fillThenPress = (id: string, field: string, key: string): Journey =>
+    journey(id, [
+      { step: { kind: "fill", target: { testId: field }, value: { redacted: false, value: "x" }, expect: { kind: "count", target: { testId: field }, min: 0 } } } as RecordedStep,
+      { step: { kind: "press", key, expect: { kind: "count", target: { css: "body" }, min: 0 } } } as RecordedStep,
+    ]);
+  // Tab lands on the page's first control in tree order, a button: see `onButton` in the page below.
+  const focusThenPress = (id: string, key: string): Journey =>
+    journey(id, [
+      { step: { kind: "click", target: { testId: "focus-first" }, expect: { kind: "count", target: { css: "body" }, min: 0 } } } as RecordedStep,
+      { step: { kind: "press", key, expect: { kind: "count", target: { css: "body" }, min: 0 } } } as RecordedStep,
+    ]);
+
+  it.each([
+    ["Enter", "Enter"],
+    ["LF", "\n"],
+    ["CR", "\r"],
+    ["NumpadEnter", "NumpadEnter"],
+    ["a chord", "Control+\n"],
+    ["Enter held under another key", "Enter+a"],
+    ["LF held under another key", "\n+a"],
+  ])("%s in a field whose default button is destructive is refused", async (name, key) => {
+    const id = `key-field-${name.replace(/\W/g, "")}`;
+    seed(fillThenPress(id, "enter-del-field", key));
+    const r = await run(id);
+    expect(r.body.code, r.text).toBe("E_RUN_REFUSED_DESTRUCTIVE");
+    expect(hits.delete).toBe(0);
+  });
+
+  it.each([
+    ["Enter", "Enter"],
+    ["LF", "\n"],
+    ["CR", "\r"],
+    ["NumpadEnter", "NumpadEnter"],
+    ["Space", "Space"],
+    ["a space", " "],
+    ["Space held under another key", "Space+a"],
+  ])("%s on a focused destructive button is refused", async (name, key) => {
+    const id = `key-button-${name.replace(/\W/g, "")}`;
+    seed(focusThenPress(id, key));
+    const r = await run(id);
+    expect(r.body.code, r.text).toBe("E_RUN_REFUSED_DESTRUCTIVE");
+    expect(hits.delete).toBe(0);
+  });
+
+  it("Enter on a destructive button focused inside an iframe is refused", async () => {
+    const j = journey("key-frame", [
+      { step: { kind: "click", target: { testId: "focus-frame" }, expect: { kind: "count", target: { css: "body" }, min: 0 } } } as RecordedStep,
+      { step: { kind: "press", key: "Enter", expect: { kind: "count", target: { css: "body" }, min: 0 } } } as RecordedStep,
+    ]);
+    const again = structuredClone(j);
+    again.recording.pages[0]!.url = "/frame";
+    (again.recording.pages[0]!.steps[0]!.step as { url: string }).url = "/frame";
+    again.metadata.approval = { contentHash: journeyReviewHash({ ...again, metadata: { ...again.metadata, approval: undefined } } as Journey), at: "2026-11-05T00:00:00.000Z" };
+    seed(again);
+    const r = await run("key-frame");
+    expect(r.body.code, r.text).toBe("E_RUN_REFUSED_DESTRUCTIVE");
+    expect(hits.delete).toBe(0);
+  });
+
+  it("a key that activates nothing still presses", async () => {
+    seed(fillThenPress("key-plain", "enter-del-field", "a"));
+    expect((await run("key-plain")).body).toMatchObject({ outcome: "ok" });
+    expect(hits.delete).toBe(0);
   });
 });

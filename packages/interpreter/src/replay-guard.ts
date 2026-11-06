@@ -20,6 +20,8 @@ export interface ReplayActionGuard {
    * guard judges what the key reaches). Throwing a `ReplayRefusal` keeps the action from running.
    */
   beforeAction(ctx: { readonly index: number; readonly recorded: RecordedStep; readonly locator: Locator; readonly key?: string }): Promise<void>;
+  /** Told each value an `extract` binds, wherever the guard runs: a refusal that quotes one must mask it. */
+  noteExtracted?(value: string): void;
   /** After every step, and after a failed one (a refused write can be why it failed): throws what ended the run. */
   afterStep(ctx: { readonly index: number }): void;
 }
