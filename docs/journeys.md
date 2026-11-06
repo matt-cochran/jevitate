@@ -229,7 +229,9 @@ then once per mutation, and checks that each mutation breaks the assertion paire
 Budget for that before a long proof. No replay leaves a step sooner than the base did, so each takes at
 least as long as the base, and the count above is a floor: most proofs also run a control for each
 mutated step. A proof of 3 mutations on 2 steps runs 7 replays. Every replay that reaches a write sends
-it for real, so use a target whose data can take that, and fixtures that reset it. See
+it for real, so use a target whose data can take that, and fixtures that reset it. With no reset hook or
+fixture, `--plan` and the report each say so in one line, with how many of the planned replays can send real
+writes (`summary.writeReplays`, and `noReset` in `--json`). See
 [what a proof runs](outcomes.md).
 
 

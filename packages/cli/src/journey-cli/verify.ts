@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { HttpCheckOffAllowlistError } from "../http-probe.js";
 import { Command } from "commander";
 import { clock } from "@jevitate/domain";
-import { ParamValidationError, secretParamValues } from "@jevitate/journey";
+import { ParamValidationError, secretParamValues, type Journey } from "@jevitate/journey";
 import { ok, fail } from "../envelope.js";
 import { SiteGateRefusedError } from "@jevitate/runtime";
 import { UnknownJourneyError, JourneyRequiresAuthError } from "../journey-api.js";
@@ -13,7 +13,7 @@ import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFla
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "../mission-fixtures.js";
 import { withRecordedFixtures, fixtureDriftFor, type FixtureDrift } from "../journey-fixtures.js";
 import { currentBuildTree, currentEngineInfo, withEngine } from "../engine.js";
-import { JourneyVerifyStalledError, loadJourneyToVerify, planJourneyVerification, proofInactivityMs, verifyAssertionLine, verifyExitCode, verifyJourneyMutations } from "../journey-verify.js";
+import { JourneyVerifyStalledError, loadJourneyToVerify, planJourneyVerification, proofInactivityMs, verifyAssertionLine, verifyExitCode, verifyJourneyMutations, verifyNoResetLine } from "../journey-verify.js";
 import { JourneyVerifyResumeRefusedError, browserBindingOf, checkpointKeyPath, hookBindingOf, readVerifyProgress, verifyCheckpointPath, verifyProgressLine } from "../journey-verify-checkpoint.js";
 import { VerifyReceiptPreflightError } from "../journey-review-store.js";
 import { EXIT_CODES } from "../exit-codes.js";
@@ -43,6 +43,11 @@ import { DEPRECATED_DIR_HELP, journeyLayout, targetsOpts } from "./shared.js";
 export interface JourneyVerifySeams {
   readonly run?: Parameters<typeof verifyJourneyMutations>[1];
   readonly terminal?: TerminalResultDeps;
+}
+
+/** Whether anything is set to reset the app around a replay: flags, the environment, or the Journey's recorded fixtures. Reads no file and runs no hook. */
+function resetDeclared(journey: Journey, flags: FixtureFlags, environment: ResolvedJourneyEnvironment | undefined): boolean {
+  return [flags.fixtures, flags.before, flags.after, environment?.fixtures, environment?.hooks?.before, environment?.hooks?.after, journey.metadata.fixtures].some((set) => set !== undefined);
 }
 
 /** Registers `jevitate journey verify`. */
@@ -91,9 +96,12 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
       if (plan === true) {
         try {
           // #763: the same read-request policy as `journey lint` and `journey review`.
-          const readRequests = journeyReadRequests(await loadJourneyToVerify(verifyJourneysDir, id), targetsOpts(deps));
+          const planned = await loadJourneyToVerify(verifyJourneysDir, id);
+          const readRequests = journeyReadRequests(planned, targetsOpts(deps));
           const report = await planJourneyVerification({ dir: verifyJourneysDir, id, params: param, ...(readRequests === undefined ? {} : { readRequests }) });
-          if (json) emitJson(program, ok(withEngine(report)));
+          const planEnvironment = environmentFromFlags({ ...(envName === undefined ? {} : { env: envName }), ...(baseUrl === undefined ? {} : { baseUrl }) }, environmentSeams(deps));
+          const noReset = resetDeclared(planned, this.opts<FixtureFlags>(), planEnvironment) ? undefined : verifyNoResetLine(report.summary);
+          if (json) emitJson(program, ok(withEngine(noReset === undefined ? report : { ...report, noReset })));
           else {
             const out = program.configureOutput().writeOut;
             for (const mutation of report.mutations) {
@@ -101,6 +109,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
               out?.(`${mutation.id} (step ${mutation.step}) -> ${sites.length === 0 ? "unpaired" : sites.join(", ")}\n`);
             }
             for (const assertion of report.assertions) if (assertion.mutations.length === 0) out?.(`unpaired ${assertion.site} ${assertion.check}\n`);
+            if (noReset !== undefined) out?.(`${noReset}\n`);
             out?.(
               `planned — journey '${report.journeyId}': ${report.summary.mutations} mutations, ${report.summary.pairs} pairs, ${report.summary.assertions} assertions, ${report.summary.unpaired} unpaired, at least ${report.summary.minimumReplays} replays\n`,
             );
@@ -108,6 +117,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
         } catch (err) {
           if (err instanceof UnknownJourneyError) emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
           else if (err instanceof TargetConfigError) emitJson(program, fail("E_TARGET_CONFIG", err.message));
+          else if (isEnvironmentError(err)) emitJson(program, fail(err.code, err.message));
           else throw err;
         }
         return;
@@ -209,12 +219,14 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
           ),
         );
         const code = verifyExitCode(report.verdict);
+        const noReset = resetDeclared(proved, recorded.flags, environment) ? undefined : verifyNoResetLine((await planJourneyVerification({ dir: verifyJourneysDir, id, params: param, ...(readRequests === undefined ? {} : { readRequests }) })).summary);
         if (json) {
-          emitJson(program, ok(withEngine(fixtureDrift === undefined ? report : { ...report, fixtureDrift })));
+          emitJson(program, ok(withEngine({ ...report, ...(fixtureDrift === undefined ? {} : { fixtureDrift }), ...(noReset === undefined ? {} : { noReset }) })));
         } else {
           const out = program.configureOutput().writeOut;
           if (fixtureDrift !== undefined) program.configureOutput().writeErr?.(`warning: ${(fixtureDrift as FixtureDrift).message}\n`);
           for (const a of report.assertions) out?.(`${verifyAssertionLine(a)}\n`);
+          if (noReset !== undefined) out?.(`${noReset}\n`);
           const s = report.summary;
           const targeted = s.targeted > 0 ? `, ${s.targeted} targeted` : "";
           const reused = report.reusedPairs > 0 ? `, ${report.reusedPairs} pairs reused from a checkpoint` : "";

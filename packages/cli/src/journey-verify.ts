@@ -798,7 +798,7 @@ export interface JourneyVerifyPlanReport {
   readonly mutations: readonly Pick<JourneyMutation, "kind" | "step" | "id" | "param" | "source">[];
   readonly pairs: readonly { readonly site: string; readonly check: string; readonly mutation: string; readonly declared?: true }[];
   readonly assertions: readonly { readonly site: string; readonly check: string; readonly mutations: readonly string[] }[];
-  readonly summary: Readonly<Record<"mutations" | "pairs" | "assertions" | "unpaired" | "minimumReplays", number>>;
+  readonly summary: Readonly<Record<"mutations" | "pairs" | "assertions" | "unpaired" | "minimumReplays" | "writeReplays", number>>;
 }
 
 /**
@@ -809,6 +809,22 @@ export interface JourneyVerifyPlanReport {
 function minimumReplaysOf(plan: { readonly mutations: readonly unknown[]; readonly pairs: readonly unknown[] }): number {
   if (plan.mutations.length === 0) return 1;
   return plan.mutations.length + (plan.pairs.length === 0 ? 2 : 3);
+}
+
+/**
+ * How many of those replays can send a real write: all but a mutation that removes the Journey's only
+ * write step. Replays that stop at an earlier failure send less, so this is what they can send, not what they will.
+ */
+function writeReplaysOf(plan: { readonly mutations: readonly Pick<JourneyMutation, "kind" | "step">[]; readonly pairs: readonly unknown[] }, writeSteps: readonly { readonly step: number }[]): number {
+  if (writeSteps.length === 0) return 0;
+  const removesEveryWrite = (m: Pick<JourneyMutation, "kind" | "step">): boolean => (m.kind === "skip" || m.kind === "block-write") && writeSteps.every((w) => w.step === m.step);
+  return minimumReplaysOf(plan) - plan.mutations.filter(removesEveryWrite).length;
+}
+
+/** The one line a proof with no reset hook or fixture prints, in `--plan` and in its report. */
+export function verifyNoResetLine(summary: JourneyVerifyPlanReport["summary"]): string {
+  const more = summary.writeReplays === 0 ? "" : " (relaxed replays, controls and re-runs can add more)";
+  return `no reset hook or fixture: nothing undoes what a replay writes, and ${summary.writeReplays} of the ${summary.minimumReplays} planned replays can send real writes${more}`;
 }
 
 /**
@@ -843,6 +859,7 @@ export async function planJourneyVerification(
       assertions: assertions.length,
       unpaired: assertions.filter((assertion) => assertion.mutations.length === 0).length,
       minimumReplays: minimumReplaysOf(plan),
+      writeReplays: writeReplaysOf(plan, journeyWriteSteps(journey, opts.readRequests === undefined ? {} : { readRequests: opts.readRequests })),
     },
   };
 }
