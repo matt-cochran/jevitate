@@ -83,7 +83,7 @@ export function journeyProofHash(journey: Journey): string {
     ...p,
     steps: p.steps.map((s) => omit(s, STEP_PROSE)),
   }));
-  // Planner semantics are part of the evidence identity. Legacy combined data/action
-  // obligations, last-write pairing and unknown-request blocks must not remain fresh.
-  return contentHash(stripDescriptorMetadata({ mutationPlannerVersion: 5, metadata, recording }));
+  // Planner semantics are part of the evidence identity. Generated waived postconditions
+  // no longer assert action-target survival; previous replay receipts must not remain fresh.
+  return contentHash(stripDescriptorMetadata({ mutationPlannerVersion: 6, metadata, recording }));
 }

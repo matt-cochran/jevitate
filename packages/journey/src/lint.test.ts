@@ -2,8 +2,8 @@ import { describe, it, expect } from "vitest";
 import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Recording, RecordedStep } from "@jevitate/recording";
-import { journeyWriteSteps, lintJourney, lintUploadFixtures, type Journey } from "./index.js";
+import type { Recording, RecordedStep, Step } from "@jevitate/recording";
+import { journeyWriteSteps, lintJourney, lintUploadFixtures, planJourneyMutations, judgeAssertions, mutationProofVerdict, type Journey, type MutationRunResult } from "./index.js";
 
 // #401 Part A — the pure assertion-strength lint. Fixtures are small inline Journeys (see
 // assertions.test.ts / journey.test.ts for the shape).
@@ -271,6 +271,107 @@ describe("#401 lintJourney", () => {
       },
     ]);
     expect(lintJourney(journey, { readRequests: ["/api/v1/tool/crm-companies/query"] }).some((f) => f.rule === "no-persistence-check")).toBe(false);
+  });
+});
+
+describe("local visible UI outcomes remain separate from HTTP effects", () => {
+  function templates(requests?: string[]): RecordedStep {
+    return {
+      step: {
+        kind: "click", target: { testId: "tool-sub-nav-item-templates", display: { role: "button", name: "TemplatesCampaign templates" } },
+        expect: { kind: "visible", target: { testId: "instant-campaign-templates-heading" } },
+      },
+      expectedResult: "The Templates heading is visible",
+      delta: { verdict: "relevant-change", why: "Templates opened", changes: ["Templates heading"], overheadMs: 1, ...(requests === undefined ? {} : { requests }) },
+    };
+  }
+
+  it("credits the actual Templates own heading assertion consistently without clearing persistence uncertainty", () => {
+    const journey = j([templates()]);
+    expect(lintJourney(journey).map((f) => ({ rule: f.rule, level: f.level }))).toEqual([{ rule: "no-persistence-check", level: "warning" }]);
+    expect(planJourneyMutations(journey)).toEqual({ mutations: [{ kind: "skip", step: 1, id: "skip:1" }], pairs: [{ site: "step:1", mutation: "skip:1" }] });
+  });
+
+  it("credits a different dialog's own visible outcome even with no captured delta", () => {
+    const journey = j([{ step: { kind: "click", target: { testId: "open" }, expect: { kind: "visible", target: { role: "dialog", name: "Review" } } }, expectedResult: "Review opens" }]);
+    expect(lintJourney(journey)).toEqual([]);
+  });
+
+  it("does not credit the same operative target when only display/tracking metadata changes", () => {
+    const open = templates();
+    open.step = {
+      kind: "click", target: { testId: "open", display: { name: "Open before" }, tflowId: "before", testIdAttr: "data-test-before" },
+      expect: { kind: "visible", target: { testId: "open", display: { name: "Open after" }, tflowId: "after", testIdAttr: "data-test-after" } },
+    };
+    const rules = lintJourney(j([open])).map((f) => f.rule);
+    for (const rule of ["write-without-effect", "visibility-only", "nothing-after-last-write", "intent-uncovered"]) expect(rules).toContain(rule);
+  });
+
+  const unsupported: Step[] = [
+    { kind: "navigate", url: "/templates", expect: { kind: "visible", target: { testId: "heading" } } },
+    { kind: "assert", check: { kind: "visible", target: { testId: "heading" } } },
+    { kind: "handback", prompt: "Open templates", resume: { kind: "visible", target: { testId: "heading" } } },
+    { kind: "press", key: "Enter", expect: { kind: "visible", target: { testId: "heading" } } },
+  ];
+  it.each(unsupported)("does not infer a distinct action target for $kind visibility", (step) => {
+    const rules = lintJourney(j([{ step, expectedResult: "Templates opens" }])).map((f) => f.rule);
+    expect(rules).toContain("visibility-only");
+    expect(rules).toContain("intent-uncovered");
+  });
+
+  it("keeps existing stronger outcomes on untargeted press actions", () => {
+    const journey = j([{ step: { kind: "press", key: "Enter", expect: { kind: "textIncludes", target: { role: "status", name: "Result" }, text: "Opened" } }, expectedResult: "Result opens" }]);
+    expect(lintJourney(journey)).toEqual([]);
+  });
+
+  it("does not credit bare final visibility as a strong HTTP-write effect", () => {
+    const write = templates(["POST /api/templates → 201"]);
+    write.step = { kind: "click", target: { testId: "save" }, expect: { kind: "urlIncludes", text: "" } };
+    const rules = lintJourney(j([write], { endState: [{ kind: "page", assertion: { kind: "visible", target: { testId: "heading" } } }] })).map((f) => f.rule);
+    for (const rule of ["write-without-effect", "visibility-only", "nothing-after-last-write", "intent-uncovered"]) expect(rules).toContain(rule);
+  });
+
+  // Each case is one `requests` list: it.each spreads an inner array into arguments, so each is wrapped.
+  it.each([[[]], [["GET /templates → 200"]], [["malformed"]], [["GET /templates → 200", "... truncated capture"]]] as string[][][])(
+    "keeps persistence uncertainty on a UI effect with incomplete capture %j", (requests) => {
+      expect(lintJourney(j([templates(requests)])).map((f) => ({ rule: f.rule, level: f.level }))).toEqual([{ rule: "no-persistence-check", level: "warning" }]);
+    },
+  );
+
+  it("does not credit visible UI output for a positively observed HTTP write", () => {
+    const findings = lintJourney(j([templates(["POST /api/templates → 201"])]));
+    for (const rule of ["write-without-effect", "visibility-only", "nothing-after-last-write", "intent-uncovered"]) expect(findings.map((f) => f.rule)).toContain(rule);
+    expect(findings.find((f) => f.rule === "no-persistence-check")?.level).toBe("warning");
+  });
+
+  it("keeps declared HTTP expectations as the stronger evidence rather than adding a UI exception", () => {
+    const write = templates();
+    write.expectRequests = [{ kind: "responseStatus", method: "POST", pathGlob: "/api/templates", status: { class: 2 } }];
+    const before = structuredClone(write);
+    const findings = lintJourney(j([write]));
+    expect(findings.map((f) => f.rule)).toEqual(["no-persistence-check"]);
+    const noUiClaim = structuredClone(write);
+    noUiClaim.step = { kind: "click", target: { testId: "tool-sub-nav-item-templates" }, expect: { kind: "urlIncludes", text: "" } };
+    expect(lintJourney(j([noUiClaim]))).toEqual(findings);
+    expect(write).toEqual(before);
+    expect(planJourneyMutations(j([write])).mutations.map((m) => m.id)).toEqual(["skip:1", "block-write:1"]);
+  });
+
+  it("uses the current read classifier: a configured read POST outranks the page delta (#763)", () => {
+    const journey = j([templates(["POST /api/templates/query → 200"])]);
+    expect(lintJourney(journey).map((f) => f.rule)).toContain("write-without-effect");
+    expect(lintJourney(journey, { readRequests: ["/api/templates/query"] })).toEqual([]);
+  });
+
+  it("does not manufacture a pair for an unrelated final GET/status obligation", () => {
+    const journey = j([templates(["GET /templates → 200"])], { endState: [{ kind: "responseStatus", method: "GET", pathGlob: "/unrelated", status: { class: 2 } }] });
+    const plan = planJourneyMutations(journey);
+    const results = new Map<string, MutationRunResult>([["skip:1", { outcome: "failed", failedSites: [{ where: "step", step: 1, postcondition: true }] }]]);
+    const assertions = judgeAssertions(journey, plan, results);
+    expect(assertions.find((a) => a.site === "end-state:0")).toEqual({ site: "end-state:0", verdict: "unpaired", required: true });
+    expect(plan.pairs).toEqual([{ site: "step:1", mutation: "skip:1" }]);
+    expect(mutationProofVerdict({ basePassed: true, mutations: [...results.values()], assertions }).verdict).toBe("inconclusive");
+    expect(lintJourney(journey).map((f) => f.rule)).toContain("no-persistence-check");
   });
 });
 

@@ -42,7 +42,7 @@ interface Obligation {
 interface Report {
   verdict: string;
   assertions: { site: string; verdict: string; obligations?: Obligation[] }[];
-  mutations: { id: string; outcome: string }[];
+  mutations: { id: string; outcome: string; targeted?: { site: string; relaxedSites: string[]; control?: string; refused?: string }[] }[];
 }
 
 async function verify(id: string): Promise<Report> {
@@ -68,9 +68,10 @@ beforeAll(async () => {
   server = createServer((req, res) => {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(`<!doctype html><html><body>
       <h1>Apply</h1><label>Reply <input aria-label="Reply"></label>
-      <button type="button">Apply</button><label>Applied <input aria-label="Applied" readonly></label>
+      <div role="dialog"><button type="button">Apply</button></div><label>Applied <input aria-label="Applied" readonly></label>
       <script>document.querySelector('button').onclick = () => {
         document.querySelector('[aria-label="Applied"]').value = ${req.url === "/constant" ? JSON.stringify(REPLY) : "document.querySelector('[aria-label=Reply]').value"};
+        document.querySelector('[role=dialog]').remove();
       };</script></body></html>`);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -84,7 +85,7 @@ afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-describe("Apply requires both data sensitivity and UI action necessity (served)", () => {
+describe("Apply closes its own dialog and requires both data and action sensitivity (served)", () => {
   it("proves an honest Apply through independent data and action witnesses", () => {
     expect(echo.verdict).toBe("proven");
     for (const site of ["step:3", "end-state:0"]) {
@@ -94,6 +95,13 @@ describe("Apply requires both data sensitivity and UI action necessity (served)"
       ]);
     }
     expect(echo.mutations.some((m) => m.id.startsWith("block-write:"))).toBe(false);
+    // The final data proof must pass the removed Apply control with its original own check
+    // waived, then fail the still-exact final value check with a passing unmutated control.
+    for (const id of ["stale-value:2", "swap-param:reply", "truncate-param:reply"]) {
+      expect(echo.mutations.find((m) => m.id === id)?.targeted?.find((t) => t.site === "end-state:0")).toEqual(expect.objectContaining({
+        relaxedSites: ["step:3"], outcome: "failed", control: "passed",
+      }));
+    }
   });
 
   it("rejects a constant Apply despite a sensitive skip and identical own/final param checks", () => {
