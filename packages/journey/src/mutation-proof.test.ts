@@ -422,7 +422,7 @@ describe("#554 relaxed replay", () => {
       { site: "step:2", verdict: "sensitive", provedBy: "stale-value:2" },
       { site: "step:3", verdict: "sensitive", provedBy: "skip:3" },
       { site: "step-request:3:0", verdict: "sensitive", provedBy: "skip:3" },
-      { site: "end-state:0", verdict: "sensitive", provedBy: "stale-value:2", obligations: [
+      { site: "end-state:0", verdict: "sensitive", provedBy: "skip:3", obligations: [
         { kind: "data", verdict: "sensitive", provedBy: "stale-value:2" },
         { kind: "action", verdict: "sensitive", provedBy: "skip:3" },
       ] },
