@@ -35,7 +35,7 @@ describe("UI effects and known HTTP writes are distinct mutation candidates", ()
     expect(planJourneyMutations(journey([click("apply", ["GET /telemetry → 200"])] )).mutations.map((m) => m.id)).toEqual(["skip:1"]);
   });
 
-  it.each([[], ["GET /telemetry → 200"], ["malformed"], ["unrecognized method"], Array.from({ length: 10 }, (_, i) => `GET /poll/${i} → 200`)])(
+  it.each([[], ["malformed"], ["unrecognized method"], Array.from({ length: 10 }, (_, i) => `GET /poll/${i} → 200`)])(
     "retains persistence uncertainty with incomplete request evidence %j",
     (requests) => {
       expect(lintJourney(journey([click("apply", requests)])).some((f) => f.rule === "no-persistence-check")).toBe(true);

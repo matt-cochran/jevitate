@@ -269,14 +269,14 @@ describe("#401 lintJourney", () => {
     expect(lintJourney(journey, { readRequests: ["Estimate*"] }).some((f) => f.rule === "no-persistence-check")).toBe(false);
   });
 
-  it("retains unknown-write coverage when a partial trace contains a configured read-only REST POST", () => {
+  it("does not override an explicitly configured read-only REST POST with the page-delta fallback", () => {
     const journey = j([
       {
         step: { kind: "click", target: { testId: "companies" }, expect: { kind: "textIncludes", target: { role: "heading" }, text: "Companies" } },
         delta: { verdict: "relevant-change", why: "query rendered companies", changes: ["Companies heading"], requests: ["POST /api/v1/tool/crm-companies/query → 200"], overheadMs: 1 },
       },
     ]);
-    expect(lintJourney(journey, { readRequests: ["/api/v1/tool/crm-companies/query"] }).some((f) => f.rule === "no-persistence-check")).toBe(true);
+    expect(lintJourney(journey, { readRequests: ["/api/v1/tool/crm-companies/query"] }).some((f) => f.rule === "no-persistence-check")).toBe(false);
   });
 });
 

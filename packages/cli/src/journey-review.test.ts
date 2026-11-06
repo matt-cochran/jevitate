@@ -106,7 +106,7 @@ describe("#432 buildJourneyReview", () => {
 
     const reviewed = buildJourneyReview(journey, { safety: { readRequests: ["/api/v1/tool/crm-companies/query"] } });
 
-    expect(reviewed.proof.lint.findings.some((finding) => finding.rule === "no-persistence-check")).toBe(true);
+    expect(reviewed.proof.lint.findings.some((finding) => finding.rule === "no-persistence-check")).toBe(false);
     expect(reviewed.sideEffects.writeRequests).toEqual([]);
   });
 

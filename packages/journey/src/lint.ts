@@ -148,6 +148,9 @@ interface WriteRequest {
 }
 
 const REQUEST_LINE = /^(\S+)\s+(\S+)/;
+const HTTP_REQUEST_LINE = /^(?:GET|HEAD|OPTIONS|POST|PUT|PATCH|DELETE)\s+\S+/;
+/** `ActionDeltaRecord.requests` keeps this many lines at most, so a full list may have dropped a write. */
+const DELTA_REQUEST_CAP = 10;
 
 function flattenSteps(journey: Journey): RecordedStep[] {
   const out: RecordedStep[] = [];
@@ -177,8 +180,11 @@ function isWriteStep(recorded: RecordedStep, classify: WriteClassifier, requests
   if (requests.length > 0) return true;
   // (b) a step's own request expectation names a write method for its path.
   if ((recorded.expectRequests ?? []).some((check) => checkNamesWrite(check, classify))) return true;
-  // Capture is a partial window, not a certificate of absent writes. GETs, configured
-  // read RPCs and unrelated expectations cannot erase uncertainty about a changed UI.
+  // #805: a captured trace of nothing but reads means a client-side transition, not a persisted write.
+  // Only a trace that can be read counts: a malformed line or a full, possibly cut-off list stays unknown.
+  const lines = recorded.delta?.requests ?? [];
+  const readOnlyTrace = lines.length > 0 && lines.length < DELTA_REQUEST_CAP && lines.every((line) => HTTP_REQUEST_LINE.test(line.trim()));
+  if (readOnlyTrace || (recorded.expectRequests?.length ?? 0) > 0) return false;
   // (c) a state-changing step whose delta changed the page, even if the request was not recorded.
   return recorded.delta?.verdict === "relevant-change" && STATE_CHANGING.has(recorded.step.kind);
 }

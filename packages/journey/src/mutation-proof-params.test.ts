@@ -174,7 +174,7 @@ describe("#565 classification and verdict of parameter-relative checks", () => {
 
   it("a skip that breaks the end state does not hide a parameter the check ignores", () => {
     const j = composeJourney();
-    j.recording.pages[0]!.steps[3]!.delta = { verdict: "relevant-change", why: "preview", changes: ["Reply:"], requests: ["GET /telemetry → 200"], overheadMs: 1 };
+    j.recording.pages[0]!.steps[3]!.delta = { verdict: "relevant-change", why: "preview", changes: ["Reply:"], requests: [], overheadMs: 1 };
     const p = planJourneyMutations(j, { params: { reply: "Thanks" } });
     expect(p.pairs).toContainEqual({ site: "end-state:0", mutation: "skip:4" });
     const ignored: MutationRunResult = { ...failedAtFill, relaxed: { outcome: "passed", failedSites: [] } };
