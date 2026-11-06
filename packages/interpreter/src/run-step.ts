@@ -84,12 +84,16 @@ async function selectAlternativeValue(locator: Locator, avoid: string): Promise<
 /** What a redactor writes in place of a value (`@jevitate/ai-core`'s REDACTION_MASK). */
 const REDACTION_MASK = "«redacted»";
 
+/** Redaction is for what a person or a model reads. Masked text is never what the page should get. */
+function assertNotMasked(name: string, value: string): void {
+  if (value.includes(REDACTION_MASK)) throw new Error(`E_REDACTED_VALUE: ${name} holds a redacted value, and a run never sends one to a page; the value was lost on the way here`);
+}
+
 export function resolveValue(value: ValueOrVar, vars: Map<string, string>): string {
   if ("var" in value) {
     const v = vars.get(value.var);
     if (v === undefined) throw new Error(`unknown variable: ${value.var}`);
-    // Redaction is for what a person or a model reads. Masked text is never what the page should get.
-    if (v.includes(REDACTION_MASK)) throw new Error(`E_REDACTED_VALUE: ${value.var} holds a redacted value, and a run never types one; the value was lost on the way here`);
+    assertNotMasked(value.var, v);
     return v;
   }
   if (value.redacted) {
@@ -97,6 +101,7 @@ export function resolveValue(value: ValueOrVar, vars: Map<string, string>): stri
       "cannot fill with a redacted constant value; use a variable or an unredacted value",
     );
   }
+  assertNotMasked("a recorded value", value.value);
   return value.value;
 }
 
@@ -291,6 +296,7 @@ export async function runStep(
     case "navigate": {
       // #399: `${param}` placeholders resolve from the vars (strictly encoded, origin kept); a
       // navigation error never echoes a substituted value, and the postcondition names the template.
+      for (const name of navigateUrlParams(step.url)) assertNotMasked(name, vars.get(name) ?? "");
       const url = resolveNavigateUrl(step.url, vars);
       try {
         await Navigate.to(url).performAs(actor);
@@ -411,7 +417,7 @@ export async function runStep(
         action: step.action,
         ...(value === undefined ? {} : { value }),
         ...(step.format === undefined ? {} : { format: step.format }),
-        ...(step.value === undefined ? {} : { beforeType: () => assertBoundSecretOrigin(actor, step.value!, targetOpts.boundSecretParams), insertWhole: isBoundSecret(step.value, targetOpts.boundSecretParams) }),
+        ...(step.value === undefined ? {} : { beforeType: () => assertBoundSecretOrigin(actor, step.value!, targetOpts.boundSecretParams), boundSecret: isBoundSecret(step.value, targetOpts.boundSecretParams) }),
       });
       await postcondition(actor, expected(step.expect), step.waitFor, "editText", index, targetOpts);
       return { kind: "done" };

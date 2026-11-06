@@ -1,4 +1,3 @@
-import { registerModelSecrets } from "@jevitate/ai-core";
 import type { BoundSecretParams } from "./secret-params.js";
 import type { JourneyRunRecorder } from "./journey-run-record.js";
 import { allowedOriginSet, offAllowlistWriteOrigin, prepareMcpRunGuard } from "./mcp-run-guard.js";
@@ -285,6 +284,8 @@ export function redactSecretParams<T>(result: T, journey: Journey, params: Recor
  * #564: a run's full secret set — its secret-param values plus every value the run bound under a
  * credential-like name (an `extract as: "apiKey"` output, read from the result's `output`).
  */
+const SECRET_BOUND_NO_HEAL = "this run holds a secret (a secret parameter, a fixture secret or an extracted credential), and nothing secret-bound goes to a model. Fix the step by hand, or heal a run that needs no secret";
+
 export function runSecretValues(secrets: readonly string[], result: unknown, nonSecret: ReadonlySet<string> = new Set()): string[] {
   const output = result !== null && typeof result === "object" && "output" in result ? (result as { output: unknown }).output : undefined;
   return [...new Set([...secrets, ...secretNamedValues(output, nonSecret)])];
@@ -625,7 +626,6 @@ export async function runJourneyProgrammatically(
     // #250/#251: a recorded or screenshotted run carries the live pixel mask from its first paint.
     // A fixture's credential-named output is redacted by name, wherever a param carried it.
     const secrets = [...new Set([...secretParamValues(stored, params), ...(fx?.secrets() ?? [])])];
-    registerModelSecrets(secrets);
     const mask = opts.mask ?? new SecretPixelMask(secrets);
     const capturing = opts.session === undefined && (opts.browser?.recordVideo !== undefined || opts.screenshots !== undefined);
     const openPort = (): BrowserPort => {
@@ -724,7 +724,6 @@ export async function runJourneyProgrammatically(
         opts.runRecorder?.noteValue(value);
         if (name === undefined || !isSecretName(name) || nonSecretParams.has(name) || value.trim() === "") return;
         extractedCredentials.add(value);
-        registerModelSecrets([value]);
         await mask.addSecret(value);
       };
       const interpreter =
@@ -744,7 +743,7 @@ export async function runJourneyProgrammatically(
       const heal: JourneyHealOptions | undefined =
         opts.heal === undefined || healGuard === undefined
           ? undefined
-          : { scope: opts.heal.scope, riskOf: journeyStepRisk(), writeGuard: healGuard.guard, allowedOrigins, observe: healObserver(healDir, mask) };
+          : { scope: opts.heal.scope, riskOf: journeyStepRisk(), writeGuard: healGuard.guard, allowedOrigins, noHealBecause: () => (secrets.length > 0 || extractedCredentials.size > 0 ? SECRET_BOUND_NO_HEAL : undefined), observe: healObserver(healDir, mask) };
       const runner = new JourneyRunner(actor, interpreter, undefined, undefined, opts.selfHealer, heal);
       let result: JourneyRunResult;
       // #564: the run's secrets also cover every value it bound under a credential-like name (an

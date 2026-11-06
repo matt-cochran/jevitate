@@ -298,7 +298,7 @@ describe("JourneyRunner change-aware self-heal (#453)", () => {
     expect(result.heal?.budget.used.modelCalls).toBe(1);
   });
 
-  it("#399: the healer is handed the run's secret parameter values (a token in a navigate URL) to redact", async () => {
+  it("a run that holds a secret never consults the healer: the step fails as without a heal, and says why", async () => {
     const healer = modelHealer(async () => ({ candidates: [], usage: { modelCalls: 1 } }));
     const recording: Recording = {
       version: "1.0",
@@ -314,9 +314,11 @@ describe("JourneyRunner change-aware self-heal (#453)", () => {
       ],
     };
     const metadata = { ...baseMetadata, parameters: [{ name: "inviteToken", secret: true }] };
-    const runner = new JourneyRunner(fakeActor, brokenAtStep1(), undefined, undefined, healer, { scope: renameScope({ kind: "test-id", after: undefined }) });
-    await run(runner, recording, hybrid(), { inviteToken: "tok-399" }, metadata);
-    expect(healer.proposeCandidates).toHaveBeenCalledWith(expect.objectContaining({ secrets: ["tok-399"] }));
+    const runner = new JourneyRunner(fakeActor, brokenAtStep1(), undefined, undefined, healer, { scope: renameScope({ kind: "test-id", after: undefined }), noHealBecause: () => "it holds a secret" });
+    const result = await run(runner, recording, hybrid(), { inviteToken: "tok-399" }, metadata);
+    expect(healer.proposeCandidates).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ outcome: "quarantined" });
+    expect((result as { reason: string }).reason).toContain("self-heal skipped: it holds a secret");
   });
 
   it("fail-closed (default) never consults the healer, even with an explaining change", async () => {

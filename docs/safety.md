@@ -357,16 +357,28 @@ built-in verb (`Preview*`, `Recalculate*`, …).
   review of `.jevitate/` is what catches that.
 - A value from a binding goes in only at a field, on the binding's origin, read with the field in hand,
   or the run fails with `E_SECRET_ORIGIN_REFUSED`; a `navigate` URL or `http` check holding one refuses
-  before anything runs. Limit: a page that navigates in the instant between that read and the value
-  going in can't be excluded, though an element handle dies with its document and `editText` inserts
-  the whole value at once.
-- Every model call passes one point, the gateway (`OpenRouterGenerationGateway`, `JevJudgmentGateway`).
-  It masks every value the process's runs registered, whoever the caller is: secret parameters, fixture
-  secrets and credential-named outputs, credentials extracted so far. A secret the page transforms
-  (lower-cased, say) is not recognised. Evidence screenshots mask the same values.
-- Redaction is for what a person or a model reads, never for what a page gets: a run that would type
-  masked text fails (`E_REDACTED_VALUE`). `journey chain` hands on what the producer extracted, except
-  a value under a name the narrower rule refuses (`apiKey`, `token`), so that consumer fails instead.
+  before anything runs. `editText` types real keys and checks before each one that the element's
+  document is there, holds the focus and is on that origin. Limit: a page that navigates in the instant
+  after that check can receive the key in flight, about one character, and nothing after it.
+- Nothing secret-bound goes to a model. A run holding a secret parameter, a fixture secret or a
+  credential-named output, or an extracted credential, doesn't self-heal: the step fails as it would
+  without a heal, and says so. `journey annotate`, `annotate_journey` and `create_demo` refuse a Journey
+  needing one (`E_MODEL_REFUSED_SECRET`). **The cost: a secret-bound Journey can't self-heal or be
+  annotated in 0.29.0.** `explore --strategy coverage|exploratory` and `--feature` refuse `--secret`
+  (`E_EXPLORE_SECRET_UNSUPPORTED`), since they can't keep it out.
+- Goal, adversarial and usability runs keep their `--secret` masking, applied as the page is read. Limit:
+  a control's name is clipped to 200 characters first, so a secret across that cut can reach the model in
+  part. A secret the page transforms (lower-cased, say) is not recognised.
+- The gateways (`OpenRouterGenerationGateway`, `JevJudgmentGateway`) hold a backstop for a live goal run's
+  values of 8 characters or more, gone when the run ends: masked in every string and key, then checked,
+  and a value still there stops the call. Past 2000 live values a model call fails. A secret under 8
+  characters isn't masked there. A replay holding one makes no model call at all. A goal, adversarial or
+  usability run still makes them, and relies on the masking above, so a short `--secret` is safe only as
+  far as that masking goes.
+- Redaction is for what a person or a model reads, never for what a page gets: a run that would type or
+  navigate with masked text fails (`E_REDACTED_VALUE`), which includes a value that really does contain
+  `«redacted»`. `journey chain` hands on what the producer extracted, except a value under a name the
+  narrower rule refuses (`apiKey`, `token`), so that consumer fails instead.
 - `--storage-state` files go only to the browser. Artifacts record their path, never their
   contents.
 - `jevitate login` (#427, #449) reads credentials only from the environment variables its flags

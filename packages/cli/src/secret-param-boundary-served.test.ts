@@ -18,7 +18,8 @@ import { useSkippingTime } from "../../explore/src/testkit.js";
 import { safeRunPolicy } from "@jevitate/domain";
 import { runJourneyProgrammatically } from "./journey-api.js";
 import { makeEvidenceSelfHealer } from "./self-heal-adapter.js";
-import { annotateJourney } from "./journey-annotate-api.js";
+import { annotateJourney, SecretBoundJourneyError } from "./journey-annotate-api.js";
+import { refusalOf } from "./demo-aspect-cli.js";
 import { OpenRouterGenerationGateway, envCredentialStore, type GenerationPort } from "@jevitate/ai-core";
 import { readJourneyChangeScope } from "./journey-heal.js";
 import { MissionFixtures } from "./mission-fixtures.js";
@@ -175,6 +176,12 @@ beforeAll(async () => {
     if (leavesFor !== undefined && (req.url ?? "").startsWith("/edit-")) {
       const leave = `location.href=${JSON.stringify(`${leavesFor}/`)}`;
       const on = req.url === "/edit-keydown" ? `onkeydown='${leave}' onbeforeinput='${leave}'` : req.url === "/edit-plain" ? `onkeydown='this.dataset.k=+(this.dataset.k||0)+1;document.querySelector("[data-testid=keys]").textContent="keys="+this.dataset.k'` : "";
+      const modelEvent = /^\/edit-model-(\w+)$/.exec(req.url ?? "")?.[1];
+      if (modelEvent !== undefined) {
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end(`<label>Password <input type=password></label><div data-testid=ed contenteditable>x</div><p data-testid=keys></p><script>let n=0;document.querySelector("[data-testid=ed]").addEventListener(${JSON.stringify(modelEvent)},(e)=>{if(${JSON.stringify(modelEvent)}!=="keydown"||e.key.length===1){n+=1;document.querySelector("[data-testid=keys]").textContent="model="+n}})</script>`);
+        return;
+      }
       const script = req.url === "/edit-select" ? `<script>document.addEventListener("selectionchange",()=>{if(document.activeElement&&document.activeElement.isContentEditable)${leave}})</script>` : "";
       res.writeHead(200, { "content-type": "text/html" });
       res.end(`<label>Password <input type=password></label><div data-testid=ed contenteditable ${on}>x</div><p data-testid=keys></p>${script}`);
@@ -632,6 +639,13 @@ describe("[realtime] the page moves while the step waits (R1, R2)", { timeout: 1
     expect(leaks).toEqual([]);
   });
 
+  it.each(["keydown", "beforeinput", "textInput"])("a bound editText reaches an editor whose model reads %s, with real keys (E3)", async (event) => {
+    sec(`edit-model-${event}`, `/edit-model-${event}`, [fillStep, { step: { kind: "editText", target: { testId: "ed" }, anchor: { at: "end" }, action: "insertAfter", value: { var: "secret1" }, expect: { kind: "textIncludes", target: { testId: "keys" }, text: `model=${VALUE.length}` } } }]);
+    const r = await cli(["journey", "run", `edit-model-${event}`, "--env", "local", "--json"]);
+    expect(JSON.parse(r.out), r.out).toMatchObject({ ok: true, data: { outcome: "ok" } });
+    expect(r.out + r.err).not.toContain(VALUE);
+  });
+
   it("a plain value keeps typing key by key: key events still reach an editor", async () => {
     const r = await cli(["journey", "run", "edit-plain", "--param", "who=abc", "--json"]);
     expect(JSON.parse(r.out), r.out).toMatchObject({ ok: true, data: { outcome: "ok" } });
@@ -658,44 +672,6 @@ function gatewayRecording(sent: unknown[], answer: (task: string) => unknown): G
     }) as never,
   });
 }
-
-describe("a heal's model payload holds no secret of the run (R3)", { timeout: 120_000 }, () => {
-  useSkippingTime();
-  const SEC_OUT = "SecOutVal9Kx2";
-  const EXTRACTED = "ExtractVal5Rt1";
-
-  it("secretOutputs, a credential-named output and an extracted apiKey are redacted in heal.rank", async () => {
-    showsSecrets = `<button>Copy invite ${SEC_OUT}</button><button>Copy key ${MINTED}</button><button id=minted data-v="${EXTRACTED}">Minted ${EXTRACTED}</button>`;
-    const j = journey("heal-secrets");
-    j.recording.pages[0]!.steps = [
-      { step: { kind: "navigate", url: "/", expect: { kind: "visible", target: { testId: "pw" } } } },
-      { step: { kind: "fill", target: { label: "Password" }, value: { var: "secret1" }, expect: { kind: "visible", target: { testId: "pw" } } } },
-      { step: { kind: "extract", target: { css: "#minted" }, as: "apiKey", attr: "data-v", expect: { kind: "visible", target: { testId: "pw" } } } },
-      { step: { kind: "click", target: { role: "button", name: "Nowhere" }, expect: { kind: "visible", target: { testId: "pw" } } } },
-    ] as never;
-    approved(j);
-    writeFileSync(join(journeysDir, "heal-secrets.json"), JSON.stringify(j));
-    const inputs: unknown[] = [];
-    const gen = gatewayRecording(inputs, () => ({ order: [], control: null }));
-    const scope = await readJourneyChangeScope({ selfHeal: "hybrid", changeNotes: ["renamed Nowhere to Elsewhere"] } as never, journeysDir);
-    const result = await runJourneyProgrammatically({
-      dir: journeysDir,
-      id: "heal-secrets",
-      params: { secret1: VALUE },
-      policy: { ...safeRunPolicy(), selfHeal: { mode: "hybrid" } } as never,
-      selfHealer: makeEvidenceSelfHealer(gen),
-      heal: { scope },
-      fixtures: () => new MissionFixtures({ spec: { setup: [{ method: "POST", url: `${origin}/mint`, outputs: { minted: "$.sec", authToken: "$.tok" }, secretOutputs: ["minted"] }] }, auth: {}, allowlist: [origin], baseUrl: origin } as never),
-    } as never).finally(() => {
-      showsSecrets = "";
-    });
-    const payload = JSON.stringify(inputs);
-    expect(inputs.length, JSON.stringify(result)).toBeGreaterThan(0);
-    expect(payload).toContain("Copy invite"); // the inventory did reach the model...
-    for (const v of [SEC_OUT, EXTRACTED, MINTED, VALUE]) expect(payload).not.toContain(v); // ...without these
-    expect(JSON.stringify(result)).not.toContain(EXTRACTED);
-  });
-});
 
 describe("one label, two secret parameters (M2)", { timeout: 120_000 }, () => {
   useSkippingTime();
@@ -771,34 +747,137 @@ describe("verify-fix and regression --param (L2)", () => {
   });
 });
 
-describe("the model boundary: a caller with no redaction of its own (D4)", { timeout: 120_000 }, () => {
+describe("nothing secret-bound goes to a model: self-heal", { timeout: 120_000 }, () => {
   useSkippingTime();
-  it("annotate's model calls hold no fixture secret and no extracted credential", async () => {
-    showsSecrets = `<button>Copy invite SecOutVal9Kx2</button><button>Copy key ${MINTED}</button><button id=minted data-v="ExtractVal5Rt1">Minted ExtractVal5Rt1</button>`;
-    const j = journey("annotate-secrets");
-    j.recording.pages[0]!.steps = [
-      { step: { kind: "navigate", url: "/", expect: { kind: "visible", target: { testId: "pw" } } } },
-      { step: { kind: "fill", target: { label: "Password" }, value: { var: "secret1" }, expect: { kind: "visible", target: { testId: "pw" } } } },
-      { step: { kind: "extract", target: { css: "#minted" }, as: "apiKey", attr: "data-v", expect: { kind: "visible", target: { testId: "pw" } } } },
-    ] as never;
+  const steps = (extra: unknown[] = []): never => [
+    { step: { kind: "navigate", url: "/", expect: { kind: "visible", target: { testId: "pw" } } } },
+    ...extra,
+    { step: { kind: "click", target: { role: "button", name: "Nowhere" }, expect: { kind: "visible", target: { testId: "pw" } } } },
+  ] as never;
+  const fillSecret = { step: { kind: "fill", target: { label: "Password" }, value: { var: "secret1" }, expect: { kind: "visible", target: { testId: "pw" } } } };
+  const extractKey = { step: { kind: "extract", target: { css: "#minted" }, as: "apiKey", attr: "data-v", expect: { kind: "visible", target: { testId: "pw" } } } };
+  const fixtureOf = (outputs: Record<string, string>, secretOutputs: string[] = []) => (): never =>
+    new MissionFixtures({ spec: { setup: [{ method: "POST", url: `${origin}/mint`, outputs, secretOutputs }] }, auth: {}, allowlist: [origin], baseUrl: origin } as never) as never;
+  const heal = async (id: string, j: Journey, params: Record<string, string>, extra: Record<string, unknown> = {}): Promise<{ sent: unknown[]; text: string }> => {
     approved(j);
-    writeFileSync(join(journeysDir, "annotate-secrets.json"), JSON.stringify(j));
+    writeFileSync(join(journeysDir, `${id}.json`), JSON.stringify(j));
     const sent: unknown[] = [];
-    const gen = gatewayRecording(sent, (task) => (task === "journey.goal" ? { goal: "g", successCriteria: [] } : { objective: "o", expectedResult: "e" }));
-    await annotateJourney({
-      dir: journeysDir,
-      id: "annotate-secrets",
-      params: { secret1: VALUE },
-      gen,
-      now: () => "2026-11-06T00:00:00.000Z",
-      fixtures: () => new MissionFixtures({ spec: { setup: [{ method: "POST", url: `${origin}/mint`, outputs: { minted: "$.sec", authToken: "$.tok" }, secretOutputs: ["minted"] }] }, auth: {}, allowlist: [origin], baseUrl: origin } as never),
-    } as never).catch(() => undefined).finally(() => {
+    const gen = gatewayRecording(sent, () => ({ order: [], control: null }));
+    const scope = await readJourneyChangeScope({ selfHeal: "hybrid", changeNotes: ["renamed Nowhere to Elsewhere"] } as never, journeysDir);
+    const { marked = "", ...runExtra } = extra as { marked?: string };
+    showsSecrets = `<button id=minted data-v="ExtractVal5Rt1">Minted</button>${marked}`;
+    const result = await runJourneyProgrammatically({ dir: journeysDir, id, params, policy: { ...safeRunPolicy(), selfHeal: { mode: "hybrid" } } as never, selfHealer: makeEvidenceSelfHealer(gen), heal: { scope }, ...runExtra } as never).finally(() => {
       showsSecrets = "";
     });
-    const payload = JSON.stringify(sent);
-    expect(sent.length).toBeGreaterThan(0);
-    expect(payload).toContain("Copy invite");
-    for (const v of ["SecOutVal9Kx2", MINTED, "ExtractVal5Rt1", VALUE]) expect(payload).not.toContain(v);
+    return { sent, text: JSON.stringify(result) };
+  };
+  const noSecretJourney = (id: string, extra: unknown[] = []): Journey => {
+    const j = journey(id, "who");
+    j.metadata.params = [];
+    j.metadata.parameters = [];
+    j.recording.pages[0]!.steps = steps(extra);
+    return j;
+  };
+
+  it.each([
+    ["a secret parameter", (id: string) => { const j = journey(id); j.recording.pages[0]!.steps = steps([fillSecret]); return j; }, { secret1: VALUE }, {}],
+    ["an extracted credential", (id: string) => noSecretJourney(id, [extractKey]), {}, {}],
+    ["a secretOutputs value", (id: string) => noSecretJourney(id), {}, { fixtures: fixtureOf({ minted: "$.sec" }, ["minted"]) }],
+    ["a credential-named fixture output", (id: string) => noSecretJourney(id), {}, { fixtures: fixtureOf({ authToken: "$.tok" }) }],
+  ])("holding %s: no model call, the step fails as without a heal, and says why", async (_what, make, params, extra) => {
+    const id = `heal-off-${_what.replace(/\W+/g, "-")}`;
+    const r = await heal(id, make(id), params as Record<string, string>, extra);
+    expect(r.sent).toEqual([]);
+    expect(r.text).toContain('"outcome":"quarantined"');
+    expect(r.text).toContain("self-heal skipped");
+    expect(r.text).not.toContain(VALUE);
+  });
+
+  it("a run holding none still heals: the model is asked", async () => {
+    const r = await heal("heal-on", noSecretJourney("heal-on"), {});
+    expect(r.sent.length).toBeGreaterThan(0);
+    expect(r.text).not.toContain("self-heal skipped");
+  });
+
+  it("a non-secret param heals, and a value the app marks secret still isn't sent", async () => {
+    const id = "heal-plain-param";
+    const j = noSecretJourney(id, [{ step: { kind: "fill", target: { testId: "who" }, value: { var: "who" }, expect: { kind: "visible", target: { testId: "who" } } } }]);
+    j.metadata.params = ["who"];
+    j.metadata.parameters = [{ name: "who" }];
+    const r = await heal(id, j, { who: "Ada-Plain" }, { marked: `<input type=password aria-label="Pin" value="MarkedPwVal9Kx2"><p data-jevitate-mask>MarkedTextVal7Qm</p>` });
+    expect(r.sent.length).toBeGreaterThan(0);
+    for (const v of ["MarkedPwVal9Kx2", "MarkedTextVal7Qm"]) expect(JSON.stringify(r.sent)).not.toContain(v);
+  });
+});
+
+describe("nothing secret-bound goes to a model: annotate", { timeout: 120_000 }, () => {
+  useSkippingTime();
+  const annotate = async (j: Journey, params: Record<string, string>, extra: Record<string, unknown> = {}): Promise<{ sent: unknown[]; err: unknown }> => {
+    approved(j);
+    writeFileSync(join(journeysDir, `${j.metadata.id}.json`), JSON.stringify(j));
+    const sent: unknown[] = [];
+    const gen = gatewayRecording(sent, (task) => (task === "journey.goal" ? { goal: "g", successCriteria: [] } : { objective: "o", expectedResult: "e" }));
+    const err = await annotateJourney({ dir: journeysDir, id: j.metadata.id, params, gen, now: () => "2026-11-06T00:00:00.000Z", ...extra } as never).then(() => undefined, (e: unknown) => e);
+    return { sent, err };
+  };
+  const plain = (id: string, extra: unknown[] = []): Journey => {
+    const j = journey(id, "who");
+    j.metadata.params = [];
+    j.metadata.parameters = [];
+    j.recording.pages[0]!.steps = [{ step: { kind: "navigate", url: "/", expect: { kind: "visible", target: { testId: "pw" } } } }, ...extra] as never;
+    return j;
+  };
+  const fixtureOf = (outputs: Record<string, string>, secretOutputs: string[] = []) => (): never =>
+    new MissionFixtures({ spec: { setup: [{ method: "POST", url: `${origin}/mint`, outputs, secretOutputs }] }, auth: {}, allowlist: [origin], baseUrl: origin } as never) as never;
+
+  it.each([
+    ["a secret parameter", () => journey("an-param"), { secret1: VALUE }, {}],
+    ["an extracted credential", () => plain("an-extract", [{ step: { kind: "extract", target: { testId: "pw" }, as: "apiKey", attr: "id", expect: { kind: "visible", target: { testId: "pw" } } } }]), {}, {}],
+    ["a secretOutputs value", () => plain("an-secret-output"), {}, { fixtures: fixtureOf({ minted: "$.sec" }, ["minted"]) }],
+    ["a credential-named fixture output", () => plain("an-auth-output"), {}, { fixtures: fixtureOf({ authToken: "$.tok" }) }],
+  ])("needing %s: refused by name, and no model call", async (_what, make, params, extra) => {
+    const r = await annotate(make(), params as Record<string, string>, extra);
+    expect(r.err).toBeInstanceOf(SecretBoundJourneyError);
+    expect((r.err as SecretBoundJourneyError).code).toBe("E_MODEL_REFUSED_SECRET");
+    expect(r.sent).toEqual([]);
+  });
+
+  it("annotate_journey says so over MCP, by name", async () => {
+    const r = await call("annotate_journey", { id: "login", fakeAi: true });
+    expect(r.body).toMatchObject({ code: "E_MODEL_REFUSED_SECRET" });
+    expect(pageLoads).toBe(0);
+  });
+
+  it("create_demo's error mapping names it", () => {
+    expect(refusalOf(new SecretBoundJourneyError("x", ["secret parameter y"]))).toMatchObject({ code: "E_MODEL_REFUSED_SECRET" });
+  });
+
+  it("a Journey needing none is still annotated", async () => {
+    const r = await annotate(plain("an-plain"), {});
+    expect(r.err).toBeUndefined();
+    expect(r.sent.length).toBeGreaterThan(0);
+  });
+
+  it("a non-secret param is annotated, and a password field's value isn't sent", async () => {
+    showsSecrets = `<input type=password aria-label="Pin" value="MarkedPwVal9Kx2">`;
+    const j = plain("an-plain-param", [{ step: { kind: "fill", target: { testId: "who" }, value: { var: "who" }, expect: { kind: "visible", target: { testId: "who" } } } }]);
+    j.metadata.params = ["who"];
+    j.metadata.parameters = [{ name: "who" }];
+    const r = await annotate(j, { who: "Ada-Plain" }).finally(() => {
+      showsSecrets = "";
+    });
+    expect(r.err).toBeUndefined();
+    expect(r.sent.length).toBeGreaterThan(0);
+    expect(JSON.stringify(r.sent)).not.toContain("MarkedPwVal9Kx2");
+  });
+});
+
+describe("explore --secret on a strategy that can't keep it out (E4)", { timeout: 60_000 }, () => {
+  it.each(["coverage", "exploratory"])("%s refuses before anything runs", async (strategy) => {
+    const r = await cli(["explore", "--url", `${origin}/`, "--strategy", strategy, "--secret", `env:${VAR}`, "--allow", origin, "--json"]);
+    expect(JSON.parse(r.out)).toMatchObject({ ok: false, error: { code: "E_EXPLORE_SECRET_UNSUPPORTED" } });
+    expect(pageLoads).toBe(0);
+    expect(r.out + r.err).not.toContain(VALUE);
   });
 });
 
@@ -846,6 +925,18 @@ describe("masked text never goes into a field (D5)", { timeout: 120_000 }, () =>
     const r = await cli(["journey", "chain", "--from", "chain-from", "--to", "chain-to", "--requests", join(root, "chain-requests.jsonl"), "--json"]);
     expect(r.exitCode, r.out).not.toBe(0);
     expect(typedWho).toEqual([]);
+    expect(r.out).not.toContain("real-key-value-99");
+  });
+
+  it("apiKey in a consumer's navigate URL: fails, no /item/«redacted» with exit 0 (E5)", async () => {
+    chainJourneys("apiKey", "real-key-value-99");
+    const consumer = JSON.parse(readFileSync(join(journeysDir, "chain-to.json"), "utf8")) as Journey;
+    consumer.recording.pages[0]!.steps.push({ step: { kind: "navigate", url: "/item/${reply}", expect: { kind: "visible", target: { css: "body" } } }, stepId: "c4" } as never);
+    consumer.recording.pages[0]!.steps.splice(2, 1);
+    approved(consumer);
+    writeFileSync(join(journeysDir, "chain-to.json"), JSON.stringify(consumer));
+    const r = await cli(["journey", "chain", "--from", "chain-from", "--to", "chain-to", "--requests", join(root, "chain-requests.jsonl"), "--json"]);
+    expect(r.exitCode, r.out).not.toBe(0);
     expect(r.out).not.toContain("real-key-value-99");
   });
 

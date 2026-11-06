@@ -1,3 +1,4 @@
+import { SecretBoundJourneyError } from "./journey-annotate-api.js";
 import { UnvettedLinksError, resolveCatalogDir } from "./catalog-api.js";
 import { approvalRefusal, checkNonInteractiveReason, makeApprovalConfirm } from "./approval-provenance.js";
 import { CatalogInputError } from "./catalog.js";
@@ -71,7 +72,7 @@ import { clock } from "@jevitate/domain";
  */
 
 /** A thrown refusal → its envelope (exit 64 for usage/input codes, else 2), or rethrow-worthy null. */
-function refusalOf(err: unknown): { code: string; message: string } | null {
+export function refusalOf(err: unknown): { code: string; message: string } | null {
   if (
     err instanceof DemoAspectArgsError ||
     err instanceof DemoProductionEnvironmentError ||
@@ -95,6 +96,7 @@ function refusalOf(err: unknown): { code: string; message: string } | null {
   if (err instanceof UnauthorizedExploreTargetError) return { code: "E_UNAUTHORIZED_EXPLORE_TARGET", message: err.message };
   if (err instanceof TargetConfigError) return { code: "E_TARGET_CONFIG", message: err.message };
   if (err instanceof SecretLeakError) return { code: "E_DEMO_SECRET", message: err.message };
+  if (err instanceof SecretBoundJourneyError) return { code: err.code, message: err.message };
   if (err instanceof FixtureSetupError) return { code: "E_DEMO", message: err.message };
   return null;
 }

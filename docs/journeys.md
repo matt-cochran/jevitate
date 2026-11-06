@@ -925,7 +925,14 @@ A bound value goes in only at a field, on the origin its binding applies to: the
 hand on `fill`, `select` and `editText`. Anywhere else, such as after a redirect, nothing is typed and
 the step fails with `E_SECRET_ORIGIN_REFUSED`. A `navigate` URL or an `http` check that holds a bound
 parameter refuses the same way before anything runs. For a sign-in on another origin (SSO), run
-`journey run --secret-field … --allow <origin>`. A value given with `--param` has none of these checks.
+`journey run --secret-field … --allow <origin>`. A value given with `--param` isn't held to an origin:
+it can go to an allowlisted origin in a `navigate` URL or an `http` check. The one exception is an `http`
+check naming a parameter the narrower rule below refuses, such as `password`: `E_HTTP_CHECK_SECRET_REF`.
+
+A secret-bound Journey can't self-heal or be annotated in 0.29.0, because nothing secret-bound goes to a
+model. The step fails as it would without a heal, saying the heal was skipped, and annotate refuses with
+`E_MODEL_REFUSED_SECRET`. That covers a secret parameter, a fixture secret or credential-named output,
+and an extracted credential.
 
 A value is never guessed. If two secret parameters match one binding, or one parameter matches two,
 nothing runs (`E_JOURNEY_RUN_ARGS`). Bind each by a
