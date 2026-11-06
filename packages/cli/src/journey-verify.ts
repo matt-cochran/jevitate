@@ -473,6 +473,11 @@ class ReplayProbe {
     this.#scope = scope;
   }
 
+  /** The replay opened a browser. */
+  get opened(): boolean {
+    return this.#sessionsOpened > 0;
+  }
+
   /** Writes in scope the replay still had open as its session closed: each may yet land in the next replay. */
   get writesInFlightAtClose(): number {
     return this.#openAtClose.length;
@@ -1176,7 +1181,13 @@ async function attemptReplay(c: ReplayContext, m: JourneyMutation, describe: (j:
     };
   } catch (err) {
     // A stall ends the proof: it never reads as one mutation's error, which could still end `proven`.
-    if (err instanceof JourneyVerifyStalledError) throw err;
+    if (err instanceof JourneyVerifyStalledError) {
+      // A stall leaves a resumable checkpoint, so what the replay left open has to be on it. A replay whose close
+      // never finished (a frozen renderer, a hold) can't say what was open: that counts as open.
+      if (opened !== undefined && err.sessionsClosed) checkWritesLeftOpen(opened);
+      else if (opened !== undefined && opened.opened) taint("write-open", m.id);
+      throw err;
+    }
     if (opened !== undefined) checkWritesLeftOpen(opened);
     return { outcome: "error", failedSites: [], reason: err instanceof Error ? err.message : String(err) };
   }

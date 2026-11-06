@@ -63,8 +63,8 @@ What `journey verify --mutate` runs, in order:
 A blocked write's recorded lines stay blocked for the rest of that replay, except while a later step that records the
 same line runs. If one is answered anyway (a popup, a worker), that mutation reads `not-applied`. Open writes are
 counted when they go to the Journey's own origins or a line it recorded, and a line it did not record that repeats is
-background. A write still open when any replay closes makes the proof `inconclusive`, and nothing further runs, as
-with a failed fixture restore. A mutated replay that stopped early still stays open as long as the base did.
+background. A write still open when any replay closes, or that replay throws or stalls, makes the proof `inconclusive`, and nothing further
+runs, as with a failed fixture restore. A stalled replay whose close never finished can't say what was open, and counts as having a write open, and a resume reads the same. A mutated replay that stopped early still stays open as long as the base did.
 
 ### What a proof assumes
 
@@ -104,8 +104,9 @@ Some readings are limits rather than assumptions: they are never `proven`, but t
 
 `journey verify <id> --mutate` writes a progress receipt to `.jevitate/logs/verify-progress/` as it goes, atomically,
 after each pair (one planned mutation with all its replays). `journey verify <id> --status` reads it: live, exited
-or stale verifier (pid plus the kernel's start time, so a reused pid is `stale`), pairs finished of the total, the
-current pair, and whether a resume could run. It opens no browser, runs no hook and reads nothing of the app's.
+or stale verifier (pid plus the kernel's start time, so a reused pid is `stale`), pairs finished of the total (`completed`
+counts what a resume keeps, and `toRunAgain` the errored or control-short pairs it would run again), the current pair,
+and whether a resume could run. It opens no browser, runs no hook and reads nothing of the app's.
 MCP: `verify_journey` with `status: true`, which answers even while the same server is running that proof.
 
 `journey verify <id> --mutate --resume` (MCP: `mutate: true, resume: true`) continues an interrupted proof with the
@@ -113,7 +114,8 @@ same flags. The base replay runs again and must pass, the pair that was interrup
 and finished pairs are reused. A pair with an errored replay is not reused: it runs again, in an interrupted proof
 and in one that finished `inconclusive` on errored replays and nothing else, which `--resume` also accepts. Nor is a
 pair that skipped its control because the verdict looked decided: another pair's error may be why, and the resume
-repairs that, so the pair runs again and decides afresh whether its control is needed. A proof whose independence replay errored is such a proof: the resume runs that replay again against its own base, as every resume does, and an error there leaves it `inconclusive`. The closing replay always runs. The result says how many pairs were reused in
+repairs that, so the pair runs again and decides afresh whether its control is needed. A pair run again is a real
+replay: it sends its real writes to the app a second time, so restore state between runs if that matters. A proof whose independence replay errored is such a proof: the resume runs that replay again against its own base, as every resume does, and an error there leaves it `inconclusive`. The closing replay always runs. The result says how many pairs were reused in
 `reusedPairs` (0 on a run that did not resume), each one is marked `reused: true`, and the verdict comes from the
 same rule over the same results as an uninterrupted proof. A plain `--mutate` starts again and replaces the
 checkpoint, unless a live verifier owns it, in which case it runs without progress of its own.
@@ -122,7 +124,7 @@ A resume never starts over silently. It exits 2 with `E_JOURNEY_VERIFY_RESUME_RE
 
 | `reason` | Why |
 | --- | --- |
-| `no-checkpoint`, `finished`, `live-verifier`, `other-host` | nothing to resume (`finished`: the proof ended with a verdict a re-run of errored pairs could not change), or a verifier owns it or cannot be checked from this host |
+| `no-checkpoint`, `finished`, `live-verifier`, `other-host` | nothing to resume (`finished`: the proof ended with a verdict a re-run of errored pairs could not change; if a replay may have decided another, as with a write left open, fix that and rerun with plain `--mutate`), or a verifier owns it or cannot be checked from this host |
 | `journey-hash`, `mutation-plan`, `params`, `hook`, `origin`, `browser`, `cli-build` | what the proof ran under changed. A build that cannot name itself counts as changed |
 | `too-old` | a reused result is over 24 hours old |
 | `corrupt`, `integrity`, `not-regular-file`, `key-unavailable`, `not-writable` | the file is damaged or was changed outside jevitate, a link or FIFO is at its path, or the key below cannot be used |

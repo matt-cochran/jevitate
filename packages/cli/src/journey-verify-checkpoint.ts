@@ -555,6 +555,13 @@ const reusableOnResume = (pair: CheckpointPair): boolean => !mutationErrored(reu
 /** A proof that ended on errored replays has a gap a resume can fill. Any other finished proof has said all it can. */
 const finishedForGood = (body: Pick<CheckpointBody, "state" | "verdict" | "errorGap">): boolean => body.state === "finished" && !(body.verdict === "inconclusive" && body.errorGap === true);
 
+/** Why a finished proof takes no resume. One a replay may have decided has nothing a resume could stand on, and it says what will help. */
+function finishedDetail(body: CheckpointBody): string {
+  const ended = `this proof already finished (${body.verdict ?? "no verdict"})`;
+  const tainted = body.taint.restoreFailed || body.taint.notIsolatedBy !== null || body.taint.isolation !== null;
+  return tainted ? `${ended}, and a replay may have decided another, so no result of it can be reused; fix that cause, then rerun with plain --mutate` : `${ended}; its receipt stands`;
+}
+
 export interface ResumeState {
   readonly pairs: ReadonlyMap<string, CheckpointPair>;
   readonly restoreFailed: boolean;
@@ -739,7 +746,7 @@ export async function openProofCheckpoint(
     const verifier = verifierStateOf(body);
     if (verifier === "live") return refuse("live-verifier", `verifier ${body.verifier.pid} is still running this proof; read it with --status`);
     if (body.state === "running" && body.verifier.host !== hostname()) return refuse("other-host", `verifier ${body.verifier.pid} ran on host ${body.verifier.host}, where this host cannot check it`);
-    if (finishedForGood(body)) return refuse("finished", `this proof already finished (${body.verdict ?? "no verdict"}); its receipt stands`);
+    if (finishedForGood(body)) return refuse("finished", finishedDetail(body));
     if (body.journeyHash !== proof.journeyHash) return refuse("journey-hash", "the Journey changed since the checkpoint");
     if (body.planDigest !== planDigest) return refuse("mutation-plan", "the mutation plan changed since the checkpoint");
     if (body.bindings.params !== bindings.params) return refuse("params", "the parameters differ from the checkpoint's");
@@ -928,7 +935,10 @@ export interface VerifyProgressStatus {
     readonly state: CheckpointBody["state"];
     readonly verdict?: MutationProofVerdict;
     readonly phase: CheckpointBody["phase"];
+    /** Pairs finished that a resume keeps. */
     readonly completed: number;
+    /** Pairs that ran but that a resume would run again: errored, or short of a control. Zero once a proof takes no resume. */
+    readonly toRunAgain: number;
     readonly total: number;
     readonly currentPair: string | null;
     readonly replay: number;
@@ -985,7 +995,8 @@ export function readVerifyProgress(path: string, keyFile: string, journeyId: str
       state: body.state,
       ...optional("verdict", body.verdict),
       phase: body.phase,
-      completed: body.completed.length,
+      completed: finishedForGood(body) ? body.completed.length : body.completed.filter(reusableOnResume).length,
+      toRunAgain: finishedForGood(body) ? 0 : body.completed.filter((p) => !reusableOnResume(p)).length,
       total: body.total,
       currentPair: body.currentPair,
       replay: body.replay,
@@ -1010,5 +1021,5 @@ export function verifyProgressLine(s: VerifyProgressStatus): string {
   const p = s.progress;
   const current = p.currentPair === null ? p.phase : `pair ${p.currentPair}`;
   const resume = s.resume.possible ? "resumable" : `not resumable (${s.resume.refusal ?? "unknown"})`;
-  return `journey '${s.journeyId}': verifier ${s.verifier} (pid ${p.verifierPid}), ${p.state}${p.verdict === undefined ? "" : ` ${p.verdict}`}, ${p.completed}/${p.total} pairs, at ${current}, replay ${p.replay}, updated ${p.updatedAt}, ${resume}\n`;
+  return `journey '${s.journeyId}': verifier ${s.verifier} (pid ${p.verifierPid}), ${p.state}${p.verdict === undefined ? "" : ` ${p.verdict}`}, ${p.completed}/${p.total} pairs${p.toRunAgain === 0 ? "" : ` (${p.toRunAgain} more ran, errored or short of a control, and a resume runs them again)`}, at ${current}, replay ${p.replay}, updated ${p.updatedAt}, ${resume}\n`;
 }

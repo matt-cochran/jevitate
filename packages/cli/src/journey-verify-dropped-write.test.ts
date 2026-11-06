@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -7,7 +7,8 @@ import { FakeClock, installClock, resetClock } from "@jevitate/domain";
 import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import type { BrowserPort, BrowserSession } from "@jevitate/playwright";
 import type { JourneyVerifySeams } from "./journey-cli/verify.js";
-import { verifyJourneyMutations, type JourneyVerifyReport } from "./journey-verify.js";
+import { verifyCheckpointPath } from "./journey-verify-checkpoint.js";
+import { JourneyVerifyStalledError, verifyJourneyMutations, type JourneyVerifyReport } from "./journey-verify.js";
 
 /**
  * A write open when a new document loads is gone with the old one, and the browser may report nothing
@@ -57,10 +58,13 @@ const newDocument = ({ context, page }: Browser): void => {
 
 let dir: string;
 let fake: FakeClock;
+const progressPath = (): string => verifyCheckpointPath(join(dir, ".jevitate"), dir, ID);
+const taintOnFile = (): unknown => (JSON.parse(readFileSync(progressPath(), "utf8")) as { body: { taint: unknown } }).body.taint;
+const stalled = (sessionsClosed: boolean): JourneyVerifyStalledError => new JourneyVerifyStalledError({ replay: 3 }, 1, sessionsClosed);
 const realTimer = setTimeout;
 
 /** A proof whose first mutated replay does `during` on its browser, then closes it. */
-async function proveWith(during: (browser: Browser) => void, thenThrow = false): Promise<JourneyVerifyReport> {
+async function proveWith(during: (browser: Browser) => void, thenThrow: boolean | Error = false, resume?: boolean): Promise<JourneyVerifyReport> {
   let replay = 0;
   let browser: Browser;
   const browserPortFactory = (): BrowserPort => ({
@@ -79,11 +83,14 @@ async function proveWith(during: (browser: Browser) => void, thenThrow = false):
     // The base replay, then the independence replay, then the first mutated one.
     if (replay === 3) during(browser);
     await options.observer?.afterStep?.({ index: 0, actor, outcome: "done" } as never);
-    await session.close();
-    if (thenThrow && replay === 3) throw new Error("Target page, context or browser has been closed");
+    const stalledOpen = thenThrow instanceof JourneyVerifyStalledError && !thenThrow.sessionsClosed && replay === 3;
+    if (!stalledOpen) await session.close();
+    if (thenThrow instanceof Error && replay === 3) throw thenThrow;
+    if (thenThrow === true && replay === 3) throw new Error("Target page, context or browser has been closed");
     return passed;
   }) as unknown as Run;
-  const proving = verifyJourneyMutations({ dir, id: ID, params: {}, browserPortFactory }, run);
+  const checkpoint = resume === undefined ? {} : { checkpoint: { path: progressPath(), keyFile: join(dir, "k.key"), resume, build: { version: "t", commit: "c", builtAt: "b", tree: "tr" }, config: { hook: {}, origin: {}, browser: {} } } };
+  const proving = verifyJourneyMutations({ dir, id: ID, params: {}, browserPortFactory, ...checkpoint }, run);
   let done = false;
   const ended = proving.finally(() => void (done = true));
   ended.catch(() => undefined);
@@ -133,6 +140,29 @@ describe("a write a new document dropped", () => {
     const report = await proveWith(() => undefined, true);
     expect(report.mutations[0]).toMatchObject({ outcome: "error" });
     expect(report.reason ?? "").not.toMatch(UNANSWERED);
+  });
+
+  describe("a replay that stalls", () => {
+    const WRITE_OPEN = { restoreFailed: false, notIsolatedBy: "skip:1", isolation: "write-open" };
+    const CLEAN = { restoreFailed: false, notIsolatedBy: null, isolation: null };
+
+    it("with a write open taints its checkpoint: the resume says so, and never reads `proven`", async () => {
+      await expect(proveWith(write, stalled(true), false)).rejects.toBeInstanceOf(JourneyVerifyStalledError);
+      expect(taintOnFile()).toEqual(WRITE_OPEN);
+      const resumed = await proveWith(() => undefined, false, true);
+      expect(resumed.verdict).toBe("inconclusive");
+      expect(resumed.reason).toMatch(UNANSWERED);
+    });
+
+    it("whose close never finished can't say what was open, which counts as open", async () => {
+      await expect(proveWith(() => undefined, stalled(false), false)).rejects.toBeInstanceOf(JourneyVerifyStalledError);
+      expect(taintOnFile()).toEqual(WRITE_OPEN);
+    });
+
+    it("with nothing open and a close that finished stays resumable and clean", async () => {
+      await expect(proveWith(() => undefined, stalled(true), false)).rejects.toBeInstanceOf(JourneyVerifyStalledError);
+      expect(taintOnFile()).toEqual(CLEAN);
+    });
   });
 
   it("a write the new document sent itself is not dropped with the old one", async () => {

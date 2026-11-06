@@ -22,6 +22,7 @@ import {
   checkpointPairOf,
   readVerifyProgress,
   resumeRefusalAgainstBase,
+  verifyProgressLine,
   REPLAY_RECORD_KINDS,
   reusedProofFields,
   verifierStateOf,
@@ -691,6 +692,23 @@ describe("a resume and an errored pair", () => {
       ["stale-value:2", undefined],
     ]);
     expect(notes.join("\n")).toContain("1 of 3 pairs finished and 2 errored or short of a control");
+  });
+
+  it("--status counts as completed only what a resume keeps, and says what it would run again", async () => {
+    await proveLabelled(labelled(erroringBlock), false);
+    writeSigned((body) => ({ ...body, completed: body.completed.map((p) => (p.id === "stale-value:2" ? { ...p, controlSkipped: true as const } : p)) }));
+    const status = readVerifyProgress(path, keyFile, ID);
+    expect(status.progress).toMatchObject({ completed: 1, toRunAgain: 2, total: 3 });
+    expect(verifyProgressLine(status)).toContain("1/3 pairs (2 more ran, errored or short of a control, and a resume runs them again)");
+  });
+
+  it("names the fix when a finished proof was tainted: a resume can't stand on it, and plain --mutate is what helps", async () => {
+    await proveLabelled(labelled(proving), false);
+    writeSigned((body) => ({ ...body, verdict: "inconclusive" as const, taint: { restoreFailed: false, notIsolatedBy: "skip:3", isolation: "write-open" as const } }));
+    await expect(prove(labelled(proving).run, request(true))).rejects.toThrow(/refused \(finished\).*rerun with plain --mutate/);
+    const status = readVerifyProgress(path, keyFile, ID);
+    expect(status.resume).toEqual({ possible: false, refusal: "finished" });
+    expect(status.progress).toMatchObject({ completed: 3, toRunAgain: 0 });
   });
 
   it("after an interruption, does not reuse an errored pair", async () => {
