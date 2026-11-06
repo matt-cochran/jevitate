@@ -239,6 +239,11 @@ real writes. Which guards apply depends on who starts it. These are the ones in 
 | Site policy (pacing, minimum interval, budgets, quiet hours) | Yes on a Journey's run, `{error: throttled}` | Yes. With no policy set, nothing is limited |
 | A value-free record of the run in `logs/<date>/journey-run-*.json` | Yes on `run_journey` | Yes on `journey run` |
 
+A control in a closed shadow root is judged only by its host's name. A closed root is opaque, so the click guard
+reads the role and name of the element the step resolved, which is the host (and the step's recorded label, if it
+has one): a Delete button inside a closed root, on a host with an innocent name, is not refused. A target's
+`safety.deny` reads the same name.
+
 The run's record is value-free as far as the run can know: a parameter or extracted value is masked, a non-standard
 method reads `OTHER`, and a path keeps only what the Journey recorded as literal route text, so it is coarse by design.
 A token in an off-site origin that the run never knew as a value can't be masked, and is stored as that origin.
