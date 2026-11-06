@@ -28,7 +28,7 @@ let pageViews = 0;
 
 function journey(id: string, meta: Partial<Journey["metadata"]> = {}): Journey {
   return {
-    metadata: { id, name: id, promoted: false, params: [], parameters: [{ name: "note", description: "a note", secret: true }], createdAtIso: "2026-11-05T00:00:00.000Z", ...meta },
+    metadata: { id, name: id, promoted: false, params: [], parameters: [{ name: "note", description: "a note" }], createdAtIso: "2026-11-05T00:00:00.000Z", ...meta },
     recording: {
       version: "1",
       site: origin,

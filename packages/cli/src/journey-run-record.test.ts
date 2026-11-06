@@ -76,8 +76,12 @@ function records(): Array<{ path: string; text: string; record: JourneyRunRecord
 }
 
 const mcpRun = async (id: string): Promise<{ text: string; body: Record<string, unknown> }> => {
-  const tool = buildMcpTools({ journeysDir, pathRoots: [root], runRecordLogsRoot: logs }).find((t) => t.name === "run_journey")!;
-  const text = (await tool.handler({ id, params: { apiKey: SECRET, customer: PLAIN } })).content[0]!.text;
+  // The secret parameter comes from the operator's targets.json: an MCP request never carries one.
+  vi.stubEnv("JEV_RECORD_API_KEY", SECRET);
+  writeFileSync(join(root, "environments.json"), JSON.stringify({ local: { baseUrl: origin } }));
+  writeFileSync(join(root, "targets.json"), JSON.stringify({ [origin]: { secretFields: ["testId=note=env:JEV_RECORD_API_KEY"] } }));
+  const tool = buildMcpTools({ journeysDir, pathRoots: [root], runRecordLogsRoot: logs, environmentsFile: join(root, "environments.json"), targetsConfigPath: join(root, "targets.json") }).find((t) => t.name === "run_journey")!;
+  const text = (await tool.handler({ id, env: "local", params: { customer: PLAIN } })).content[0]!.text;
   return { text, body: JSON.parse(text) as Record<string, unknown> };
 };
 

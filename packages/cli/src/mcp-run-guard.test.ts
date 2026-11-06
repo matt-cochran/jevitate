@@ -301,7 +301,7 @@ describe("#789 destructive controls over MCP", () => {
 
   it("a refusal carries no page text and no parameter value", async () => {
     const fill = { step: { kind: "fill", target: { testId: "tenant" }, value: { var: "customer" }, expect: { kind: "visible", target: { testId: "tenant" } } } } as RecordedStep;
-    seed(journey("del-named", [fill, click("named", "gone")], [{ name: "customer", description: "who", secret: true }]));
+    seed(journey("del-named", [fill, click("named", "gone")], [{ name: "customer", description: "who" }]));
     const r = await run("del-named", { customer: "customer-xyz" });
     expect(r.body.code, r.text).toBe("E_RUN_REFUSED_DESTRUCTIVE");
     expect(r.text).not.toContain("customer-xyz");

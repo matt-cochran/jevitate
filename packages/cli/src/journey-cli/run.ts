@@ -29,13 +29,16 @@ import { withRecordedFixtures, fixtureDriftFor, type FixtureDrift } from "../jou
 import { withEngine } from "../engine.js";
 import { BoundaryNoHealError, handbackExitCode, handbackLine } from "../journey-handback.js";
 import { type EmulationSpec } from "@jevitate/playwright";
+import { SecretFieldSpecError } from "@jevitate/explore";
+import { withSecretParams, warnSecretParamsOnArgv } from "../secret-params.js";
 import { environmentFromFlags, fixtureRebaseUrl, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
 
 /** Registers `jevitate journey run`. */
 export function registerJourneyRun(journey: Command, program: Command, deps: CliDeps): void {
   withScreenshotsFlag(withReplayAllowFlag(withEnvironmentFlags(withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(withProjectFlags(journey.command("run <id>"))))), { recordVideo: true }))))
     .option("--dir <path>", DEPRECATED_DIR_HELP)
-    .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
+    .option("--param <kv>", "param as key=value (repeatable); a secret one is on the command line: use --secret-field", collectParam, {} as Record<string, string>)
+    .option("--secret-field <binding>", "a secret parameter from the environment, off the command line: '<label|testId|id|name>=<value>=env:<VAR>' (repeatable), matched on the recorded step that types it, e.g. 'label=Password=env:APP_PASSWORD'. The environment's secretFields in ~/.jevitate/targets.json apply the same way; --param wins", (v: string, prev: string[]) => [...prev, v], [] as string[])
     .option(
       "--storage-state <file>",
       "Playwright storageState JSON to start the session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist",
@@ -86,7 +89,8 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         ...(ownFixtureFlags.after === undefined && environment?.hooks?.after !== undefined ? { after: environment.hooks.after } : {}),
       };
       const {
-        param,
+        param: paramFlags,
+        secretField,
         storageState: storageStateFlag,
         selfHeal,
         real,
@@ -115,6 +119,7 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         actionDeltas?: boolean;
         stepResponseTimeout?: number;
         param: Record<string, string>;
+        secretField: string[];
         storageState?: string;
         selfHeal: string;
         real?: boolean;
@@ -122,6 +127,16 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         jevProvider?: string;
         json?: boolean;
       } & EmulationFlags & ScreenshotsFlags>();
+      // A secret parameter from the environment (--secret-field, targets.json), before any browser opens.
+      let param: Record<string, string>;
+      try {
+        param = await withSecretParams({ dir: runJourneysDir, id, params: paramFlags, flags: secretField, targetFields: environment?.secretFields, env: deps.explore?.env ?? process.env });
+      } catch (err) {
+        if (!(err instanceof SecretFieldSpecError)) throw err;
+        emitJson(program, fail("E_JOURNEY_RUN_ARGS", err.message));
+        return;
+      }
+      await warnSecretParamsOnArgv(program.configureOutput().writeErr, runJourneysDir, [id], paramFlags);
       // --storage-state wins; else the environment's own session (~/.jevitate/targets.json[<origin>]).
       const storageState = storageStateFlag ?? environment?.storageState;
 

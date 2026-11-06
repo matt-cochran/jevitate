@@ -15,6 +15,7 @@ import {
   withEmulationFlags,
   writeRawResult,
 } from "../cli-shared.js";
+import { warnSecretParamsOnArgv } from "../secret-params.js";
 import {
   type EnvironmentFlags,
   environmentFromFlags,
@@ -61,6 +62,7 @@ export function registerJourneyChain(journey: Command, program: Command, deps: C
         allowDraft?: boolean;
         param: Record<string, string>;
       }>();
+      await warnSecretParamsOnArgv(program.configureOutput().writeErr, chainJourneysDir, [from, to], param);
       const { env: envName, baseUrl } = this.opts<EnvironmentFlags>();
       // #247: --env/--base-url choose where both runs go (unknown env / bad file → 64, nothing opened).
       let environment: ResolvedJourneyEnvironment | undefined;

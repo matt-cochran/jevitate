@@ -1,3 +1,4 @@
+import { warnSecretParamsOnArgv } from "./secret-params.js";
 import { existsSync } from "node:fs";
 import type { Command } from "commander";
 import { ParamValidationError, formatAnnotationChanges } from "@jevitate/journey";
@@ -80,6 +81,7 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
       const layout = journeyLayout(program, deps, { project, journeysDir: journeysDirFlag, dir });
       if (layout === null) return;
       const journeysDir = layout.journeysDir;
+      await warnSecretParamsOnArgv(program.configureOutput().writeErr, journeysDir, [id], param);
 
       if (approve === true) {
         if (

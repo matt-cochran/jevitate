@@ -206,7 +206,8 @@ the author command takes the same run-shaping flags: `--secret`, `--secret-field
 hang flags, `--save-storage-state`, `--viewport`/`--device`/`--geolocation` and `--screenshots`.
 Reproduce whatever setup the goal run needed. A field that code typed (a `--secret-field` or
 `--totp` binding) is never kept in the Journey: it becomes a secret parameter (`secret1`, …,
-declared `secret: true`) that `journey run --param secret1=…` supplies.
+declared `secret: true`) that the same binding supplies at replay
+([Secret parameters on a replay](#secret-parameters-on-a-replay)).
 
 Every take writes its own result, transcript and Recording (under `--out`, default
 `.jevitate/logs/<date>`). When the discovery take does not reach the goal, the `not-reached` result
@@ -890,6 +891,40 @@ A secret parameter's value is redacted in the `journey run` output, in `journey 
 evidence, drafts and output, and in anything sent to a model. A parameter whose name looks like a
 credential (`password`, `token`, `apiKey`, `otp`, …) is treated as secret even when the Journey
 does not declare it.
+
+### Secret parameters on a replay
+
+A secret parameter's value stays off the command line and out of every MCP request:
+
+```bash
+APP_PASSWORD=… jevitate journey run login --secret-field 'label=Password=env:APP_PASSWORD'
+```
+
+`--secret-field` takes the binding the Journey was authored with. The value comes from the
+environment variable, and the binding is matched against the recorded target of the step that types
+the parameter, by `label`, `testId`, `id` or `name`. `type=` needs a live field, so it cannot match
+on a replay, and a `cmd:` source is for goal runs. A binding that supplies no secret parameter is a
+usage error (`E_JOURNEY_RUN_ARGS`).
+
+With `--env` or `--base-url`, the `secretFields` for that origin in `~/.jevitate/targets.json` apply
+the same way, so no flag is needed. `--param` wins over `--secret-field`, which wins over
+`targets.json`. A `targets.json` binding whose variable is not set supplies nothing, and the
+parameter is reported missing.
+
+`--param secret1=…` still works on the CLI, and warns on stderr: the value is in the process list and
+the shell history. `journey run` is the only command with `--secret-field` and `targets.json`
+resolution. `journey verify`, `journey readiness`, `journey chain`, `journey demo`,
+`journey annotate`, `load run`, `explore --from-journey` and `source run` take a secret parameter
+through `--param` only, with the same warning.
+
+Over MCP a value for a secret parameter, declared or named like a credential, is refused by name with
+`E_SECRET_PARAM_OVER_MCP` before anything runs, on `run_journey`, `verify_journey`,
+`journey_readiness`, `chain_journeys`, `demo_journey`, `annotate_journey`, `run_load_test`,
+`run_exploration` and `sources`. The value would have passed through the model, and the refusal, the
+logs and the run record do not hold it. `run_journey` with `env` or `baseUrl` runs such a Journey when
+`targets.json` binds the field; leave the parameter out of the request. A `${setup.x}` reference holds
+no value and is not refused. A secret in a `navigate` URL has no field to bind, so it runs on the CLI
+only. `run_check` and `run_campaign` read `params` from the suite or spec file, not from the request.
 
 ### Parameters in a `navigate` URL
 

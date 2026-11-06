@@ -28,6 +28,11 @@ artifact; your job is to find the right one and run it with the right params.
 - MCP: `run_journey({ id, params, storageState? })` — same param-schema
   validation, same refusal on an unknown id or params. It NEVER accepts inline
   steps or a raw recording — a published id only.
+- A secret parameter's value (a `secret: true` param, or one named like a
+  credential) never goes in an MCP request: `E_SECRET_PARAM_OVER_MCP`, by name.
+  Leave it out and pass `env` or `baseUrl` when `~/.jevitate/targets.json` binds
+  the field under `secretFields`. On the CLI use `--secret-field
+  '<label|testId|id|name>=<value>=env:<VAR>'`; `--param` works and warns.
 - Promotion differs by surface. MCP `run_journey` and `chain_journeys` refuse a
   Journey that is not promoted, or whose content changed since its approval,
   before any browser opens: `{error: "refused", code: E_JOURNEY_NOT_PROMOTED |

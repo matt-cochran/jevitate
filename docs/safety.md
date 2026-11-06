@@ -346,6 +346,11 @@ built-in verb (`Preview*`, `Recalculate*`, …).
   redacted as the page is read, so a page that displays a secret never reaches a model and never
   ends the run.
 - Code, not the model, types a bound secret into a field. The model sees `«secret:VAR»`.
+- An MCP request never carries a secret parameter's value: it is refused by name with
+  `E_SECRET_PARAM_OVER_MCP` before anything runs. On a replay the value comes from an environment
+  variable through `journey run --secret-field` or `secretFields` in `targets.json`; `--param` on the
+  CLI still works and warns on stderr
+  ([Secret parameters on a replay](./journeys.md#secret-parameters-on-a-replay)).
 - `--storage-state` files go only to the browser. Artifacts record their path, never their
   contents.
 - `jevitate login` (#427, #449) reads credentials only from the environment variables its flags

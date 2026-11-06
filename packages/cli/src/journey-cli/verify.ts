@@ -9,6 +9,7 @@ import { SiteGateRefusedError } from "@jevitate/runtime";
 import { UnknownJourneyError, JourneyRequiresAuthError } from "../journey-api.js";
 import { ExtensionMismatchError } from "../browser-run-options.js";
 import { withSiteGate } from "../site-gate-cli.js";
+import { warnSecretParamsOnArgv } from "../secret-params.js";
 import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFlags } from "../fixture-cli.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "../mission-fixtures.js";
 import { withRecordedFixtures, fixtureDriftFor, type FixtureDrift } from "../journey-fixtures.js";
@@ -74,6 +75,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
         { mutate?: boolean; plan?: boolean; status?: boolean; resume?: boolean; dir?: string; param: Record<string, string>; storageState?: string; json?: boolean } & EnvironmentFlags & EmulationFlags
       >();
       const checkpointPath = verifyCheckpointPath(layout.projectDir ?? homeDataRoot(), verifyJourneysDir, id);
+      await warnSecretParamsOnArgv(program.configureOutput().writeErr, verifyJourneysDir, [id], param);
       if (status === true) {
         // `--mutate --status` reads as well as `--status`: it names the proof being asked about, and runs none.
         if (plan === true || resume === true) {

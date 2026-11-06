@@ -1217,7 +1217,7 @@ describe("MCP (`verify_journey`) and the CLI", () => {
     };
     const runCli = makeInProcessCliRunner(build);
     return {
-      mcp: (args) => runCliTool(spec, args as never, { runCli, roots: [dir], redact: (t) => t }),
+      mcp: (args) => runCliTool(spec, args as never, { runCli, roots: [dir], journeysDir: join(dir, "journeys"), redact: (t) => t }),
       cli: (...argv) => runCli(argv),
     };
   }

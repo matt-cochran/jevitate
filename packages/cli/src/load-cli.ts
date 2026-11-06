@@ -1,3 +1,4 @@
+import { warnSecretParamsOnArgv } from "./secret-params.js";
 import { JourneyRunRefusedError } from "@jevitate/mcp-facade";
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { existsSync } from "node:fs";
@@ -62,6 +63,7 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
         storageState?: string;
         json?: boolean;
       } & EmulationFlags & EnvironmentFlags>();
+      await warnSecretParamsOnArgv(program.configureOutput().writeErr, resolveJourneysDir(deps, dir), [journeyId], param);
       if (authorizedOrigin.length === 0) {
         emitJson(
           program,

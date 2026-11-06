@@ -248,7 +248,7 @@ describe("#399 navigate ${param} — served", () => {
     for (const p of [env.data?.resultPath, env.data?.transcriptPath]) if (p !== undefined) expectNoToken(p, await readFile(p, "utf8"));
   }, 180_000);
 
-  it("MCP run_journey takes the same param (parity) — no token in its result or artifacts", async () => {
+  it("MCP run_journey refuses the same param by name: a secret never travels through a request", async () => {
     const media = join(root, "media-mcp");
     seen.length = 0;
     const tool = buildMcpTools({ journeysDir: join(root, "journeys"), pathRoots: [root] }).find((t) => t.name === "run_journey")!;
@@ -259,10 +259,10 @@ describe("#399 navigate ${param} — served", () => {
       screenshots: `steps:${join(media, "shots")}`,
     });
     const text = res.content.map((c) => c.text).join("\n");
-    expect(res.isError, text).toBeUndefined();
-    expect((JSON.parse(res.content[0]!.text) as { outcome: string }).outcome).toBe("ok");
-    expect(seen).toEqual([SECRET]);
+    expect(res.isError, text).toBe(true);
+    expect(JSON.parse(res.content[0]!.text)).toMatchObject({ code: "E_SECRET_PARAM_OVER_MCP", params: ["inviteToken"] });
+    expect(seen).toEqual([]);
     expectNoToken("MCP result", text);
-    for (const f of await filesUnder(media)) expectNoToken(f.path, f.text);
+    expect(await filesUnder(media)).toEqual([]);
   }, 120_000);
 });

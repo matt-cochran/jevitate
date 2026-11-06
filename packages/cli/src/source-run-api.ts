@@ -23,6 +23,8 @@ import {
   type SourceEntry,
 } from "@jevitate/sources";
 import type { SourceApiDeps } from "./source-api.js";
+import { inMcpInvocation } from "./approval-provenance.js";
+import { SecretParamOverMcpError, secretParamArgvWarning, secretParamsCarriedBy } from "./secret-params.js";
 import { JourneyRequiresAuthError, journeyFixtureBaseDir, redactErrorSecrets, redactSecretParams } from "./journey-api.js";
 
 /**
@@ -131,6 +133,8 @@ export interface RunSourceJourneyRequest {
   sourceName: string;
   journeyId: string;
   params: Record<string, string>;
+  /** Told when a secret parameter's value came from `--param`, on the command line. */
+  warn?: (line: string) => void;
   /** Defaults to `safeRunPolicy()` (Slice 1 fail-closed secret mode). */
   policy?: RunPolicy;
   /**
@@ -197,6 +201,15 @@ export async function runSourceJourney(
   // The full trust boundary: throws on any refusal, returns the validated,
   // ready-to-run file only when every gate passes.
   const file = await resolveForRun(gateDeps, `${req.sourceName}/${req.journeyId}`);
+
+  // A secret parameter's value never travels through an MCP request; on the CLI it is on the command line.
+  if (inMcpInvocation()) {
+    const carried = secretParamsCarriedBy(file, req.params);
+    if (carried.length > 0) throw new SecretParamOverMcpError(carried);
+  } else {
+    const warning = secretParamArgvWarning(file, req.params);
+    if (warning !== undefined) req.warn?.(warning);
+  }
 
   const run = deps.runJourney ?? realResolvedJourneyRunner;
   // #399: a secret parameter (e.g. a token in a navigate URL) never comes back — not in the

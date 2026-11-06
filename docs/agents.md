@@ -226,8 +226,9 @@ hang settings) and site policies ([journeys.md](./journeys.md#site-policies)) ex
 do; a queued request can never override them. A queued mission's declared invariants may not use
 `authFrom.secret`: a request never chooses which of the operator's environment variables is sent.
 
-**Authenticated queued missions.** An MCP request can never carry a session or a secret. The
-operator declares them per origin in `~/.jevitate/targets.json`, next to `fixtures` and
+**Authenticated queued missions.** An MCP request can never carry a session or a secret (a value
+for a secret Journey parameter is refused too:
+[Secret parameters on a replay](./journeys.md#secret-parameters-on-a-replay)). The operator declares them per origin in `~/.jevitate/targets.json`, next to `fixtures` and
 `logSources`:
 
 ```json
