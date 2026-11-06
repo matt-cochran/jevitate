@@ -1227,7 +1227,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (302 exports)
+# @jevitate/journey (305 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1443,6 +1443,8 @@
   MutationRunResult: interface
   MutationVerdict: type-alias
   mutationWait: function
+  NamedWriteNotMapped: interface
+  namedWritesNotMapped: function
   needsRelaxedReplay: function
   nextTargetedRelaxation: function
   OUTCOME_DIRECTIONS: variable
@@ -1530,6 +1532,7 @@
   validateParams: function
   validateRecords: function
   validateRequests: function
+  writeLineNamedBy: function
 
 # @jevitate/load (16 exports)
   assertAuthorizedTarget: function

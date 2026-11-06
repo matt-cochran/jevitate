@@ -785,6 +785,21 @@ const streamJourney = (assertion: ReturnType<typeof text>) => (site: string): Jo
 
 const ROWS_EXPERIMENT: readonly Row[] = [
   {
+    name: "no delta: a networkCheck names the POST that a click's timing shows, and is proven by that click's mutations",
+    serve: saving({ saveMs: 0 }),
+    journey: (site) =>
+      J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: NOCLAIM }, timing: { atMs: 0, durationMs: 0, gapBeforeMs: 0, page: { route: "/", kind: "transition", settled: true, requests: { count: 1, pending: 0, slowest: [{ endpoint: "POST /api/save", url: `${site}/api/save`, status: 200, durationMs: 5 }] } } } }], { networkChecks: POST("/api/save") }),
+    verdict: "proven",
+    reading: ["end-state:0", "sensitive"],
+  },
+  {
+    name: "no delta: a named POST the timing does not show is not guessed, and the reason says what to add",
+    serve: saving({ saveMs: 0 }),
+    journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: NOCLAIM } }], { networkChecks: POST("/api/save") }),
+    verdict: "inconclusive",
+    reason: /end-state:0 names POST \/api\/save, but no step's recorded timing shows it.*"check":"end-state:0","mustFailWhen":"skip:<step>"/,
+  },
+  {
     name: "a no-store 200 whose body the page never reads: the write was answered",
     serve: answeredUnread(200),
     journey: unreadJourney(200),

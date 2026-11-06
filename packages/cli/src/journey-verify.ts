@@ -28,6 +28,7 @@ import {
   mutationErrored,
   mutationProofVerdict,
   mutationReplay,
+  namedWritesNotMapped,
   needsRelaxedReplay,
   paceBeforeMutationMs,
   paceEndStateFloorMs,
@@ -1387,6 +1388,18 @@ async function settleDisagreements(c: PairContext): Promise<void> {
   }
 }
 
+/** A proof with no pairs, on a Journey whose status checks name a write it could not place: what to add, in the Journey's own terms. */
+function withNamedWriteHints(reason: string, journey: Journey, readRequests: readonly string[] | undefined): string {
+  const notMapped = namedWritesNotMapped(journey, readRequests === undefined ? {} : { readRequests });
+  return [
+    reason,
+    ...notMapped.map(
+      (n) =>
+        `${n.site} names ${n.line}, but ${n.why}. To prove it, add {"check":"${n.site}","mustFailWhen":"skip:<step>"} to metadata.mutationPairs for the step that sends it, or name it in that step's delta.requests, which also runs block-write. If it is a read, list it in the target's safety.readRequests`,
+    ),
+  ].join("; ");
+}
+
 /** The last replay as recorded, the verdict, the report and its receipt. */
 async function concludeProof(c: ConcludeContext): Promise<JourneyVerifyReport> {
   const { opts, runOpts, journey, journeyHash, plan, sites, checkOf, base, baseFields, pace, mutations, suggested, receiptDestination, boundedRun, checkpoint, resuming, restoreFailed } = c;
@@ -1421,7 +1434,8 @@ async function concludeProof(c: ConcludeContext): Promise<JourneyVerifyReport> {
       notIsolated = "the closing replay as recorded errored, so the proof cannot say the replays stayed isolated; retry it";
     }
   }
-  const { verdict, reason } = mutationProofVerdict({ ...verdictInput, restoreFailed: restoreFailed(), ...(notIsolated === undefined ? {} : { notIsolated }) });
+  const { verdict, reason: judgedReason } = mutationProofVerdict({ ...verdictInput, restoreFailed: restoreFailed(), ...(notIsolated === undefined ? {} : { notIsolated }) });
+  const reason = plan.pairs.length === 0 && judgedReason?.startsWith("no assertion is paired") === true ? withNamedWriteHints(judgedReason, journey, opts.readRequests) : judgedReason;
   const count = (v: AssertionVerdict): number => assertions.filter((a) => a.verdict === v).length;
   const report: JourneyVerifyReport = {
     journeyId: journey.metadata.id,
