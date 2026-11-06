@@ -72,7 +72,7 @@ export const WALKS = {
   "looks-done-other-record": { steps: [click("Invoices"), click("Older invoices"), click("INV-1042"), click("Archive invoice")], done: true },
   "done-plain-page": { steps: [click("Settings"), click("Tax")], done: true },
   "transient-success": { steps: clean, done: true },
-  "hint-text-only": { steps: [click("Settings"), click("Data"), click("Library"), click("Q3 sales report"), publish], done: true },
+  "hint-text-only": { steps: [click("Settings"), click("Data"), click("Reports"), click("Q3 sales report"), publish], done: true },
   "plan-wall-static-text": { steps: toQ3, done: false },
   "injection-route": { steps: clean, done: true },
   "injection-route-control": { steps: clean, done: true },

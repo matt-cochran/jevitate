@@ -85,19 +85,19 @@ describe("nav-lab", () => {
     }
   });
 
-  test("a seed changes the decoy labels' order and keeps one live control", async () => {
+  test("a seed changes which decoy label is live and keeps one live control", async () => {
     const orders = [];
     for (const seed of [0, 1, 2]) {
       const lab = await startNavLab({ caseId: "decoys-then-live", seed });
       try {
         const html = await fetch(`${lab.url}/reports/q3`).then((r) => r.text());
-        orders.push([...html.matchAll(/<button type="(?:button|submit)">([^<]+)</g)].map((m) => m[1]).join());
+        orders.push(/<button type="submit">([^<]+)</.exec(html)[1]);
         expect([...html.matchAll(/<button type="submit">/g)]).toHaveLength(1);
       } finally {
         await lab.close();
       }
     }
-    expect(new Set(orders).size).toBeGreaterThan(1);
+    expect(new Set(orders).size).toBe(3);
   });
 
   test("the lab keeps the length of what was typed into its sign-in form, never the value", async () => {
