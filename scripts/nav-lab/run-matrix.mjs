@@ -3,17 +3,22 @@
 //
 //   JEVITATE_BIN=packages/cli/dist/bin.js node scripts/nav-lab/run-matrix.mjs --out <dir> [--replicates 3]
 //       [--concurrency 2] [--quiet-lock <file>] [--max-load 20] [--max-usd 10] [--cases a,b]
+//       [--guards clean:J1,clean:J2,j3-deadend:J3]
+//
+// --guards adds the accuracy lab's goal-strategy cells, run by its own unchanged runCell (results in
+// <out>/accuracy/), each with one line in <out>/guards.jsonl that also holds decisions and cost.
 //
 // Cells already in <out>/results.jsonl are skipped, so a rerun finishes an interrupted matrix.
 // Shared-machine rules, checked before each cell starts:
 //  - while --quiet-lock exists no cell starts, and running cells finish;
 //  - no cell starts while the 1-minute load average is at or above --max-load;
 //  - the matrix ends with exit 3 once the recorded model cost passes --max-usd.
-import { existsSync, readFileSync, appendFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, appendFileSync, mkdirSync } from "node:fs";
 import { loadavg } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cellKey, loadGroundTruth, runCell } from "./run-cell.mjs";
+import { runCell as runAccuracyCell } from "../accuracy-lab/run-cell.mjs";
+import { cellKey, costOf, loadGroundTruth, runCell } from "./run-cell.mjs";
 
 /** Every cell of the matrix, replicate by replicate, so an early stop still covers each case. */
 export function buildCells(replicates, caseIds = Object.keys(loadGroundTruth().cases)) {
@@ -38,6 +43,38 @@ const recorded = (outDir) => {
   }
   return rows;
 };
+
+const artifactOf = (dir, suffix) => {
+  const name = readdirSync(dir).find((f) => f.endsWith(suffix));
+  return name ? JSON.parse(readFileSync(join(dir, name), "utf8")) : null;
+};
+
+/** One accuracy-lab cell, plus what its line leaves out, read back from the run's own files. */
+async function runGuard(cell, outDir, maxActions) {
+  const line = await runAccuracyCell({ variant: cell.variant, job: cell.job, strategy: "goal", replicate: cell.replicate, outDir: join(outDir, "accuracy"), maxActions, timeoutMs: 300000 });
+  const result = artifactOf(line.artifactDir, ".result.json")?.result ?? {};
+  const row = {
+    case: cell.case,
+    variant: cell.variant,
+    job: cell.job,
+    replicate: cell.replicate,
+    exitCode: line.exitCode,
+    missionOutcome: line.missionOutcome,
+    goalOutcome: line.goalOutcome,
+    goalReason: result.goalReason ?? null,
+    failureKind: line.failureKind,
+    stop: result.stop ?? null,
+    decisions: result.decisions ?? null,
+    actions: line.actions,
+    fingerprints: line.fingerprints,
+    findings: line.findings,
+    hostDegraded: result.hostHealth?.degraded ?? null,
+    durationMs: line.durationMs,
+    costUsd: costOf(artifactOf(line.artifactDir, ".usage.json")).usd,
+  };
+  appendFileSync(join(outDir, "guards.jsonl"), `${JSON.stringify(row)}\n`);
+  return row;
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -67,10 +104,14 @@ async function main() {
     process.stdout.write(line);
   };
 
-  const rows = recorded(outDir);
+  const guardRows = existsSync(join(outDir, "guards.jsonl")) ? readFileSync(join(outDir, "guards.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+  const rows = [...recorded(outDir), ...guardRows];
   const done = new Set(rows.map(cellKey));
   let spent = rows.reduce((sum, r) => sum + (r.costUsd ?? 0), 0);
-  const queue = buildCells(replicates, only ? only.split(",") : undefined).filter((c) => !done.has(cellKey(c)));
+  const guards = (arg("--guards") ?? "").split(",").filter(Boolean).map((g) => g.split(":"));
+  const guardCells = guards.flatMap(([variant, job]) => Array.from({ length: replicates }, (_, replicate) => ({ case: `accuracy:${variant}:${job}`, variant, job, replicate })));
+  const noCases = only === "none";
+  const queue = [...(noCases ? [] : buildCells(replicates, only ? only.split(",") : undefined)), ...guardCells].filter((c) => !done.has(cellKey(c)));
   log(`start: ${queue.length} cells to run, ${done.size} recorded, $${spent.toFixed(4)} spent`);
 
   let overBudget = false;
@@ -95,7 +136,7 @@ async function main() {
       if (!cell) return;
       log(`run  ${cellKey(cell)}`);
       try {
-        const line = await runCell({ caseId: cell.case, replicate: cell.replicate, outDir });
+        const line = cell.variant ? await runGuard(cell, outDir, 25) : await runCell({ caseId: cell.case, replicate: cell.replicate, outDir });
         spent += line.costUsd ?? 0;
         log(`done ${cellKey(cell)} goal=${line.goalOutcome} reason=${line.goalReason} exit=${line.exitCode} labDone=${line.done} decisions=${line.decisions} ${Math.round(line.durationMs / 1000)}s total=$${spent.toFixed(4)}`);
         if (spent > maxUsd) overBudget = true;

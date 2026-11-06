@@ -97,6 +97,17 @@ const branchA = (lastPage) => ({
   ...reports(false),
 });
 
+/**
+ * The lure's link states the goal itself and the good route's links don't, so a run really enters the
+ * bad branch. Neither page of the lure has a way out. `tail` is what ends the lure.
+ */
+const lureBranch = (tail) => ({
+  "GET /": () => page("Home", `<h1>Welcome back</h1><p><a href="/publish-q3">Publish Q3 sales report</a></p><p><a href="/library">Library</a></p>`, false),
+  "GET /publish-q3": () => page("Publish Q3 sales report", `<h1>Publish Q3 sales report</h1>${tail}`, false),
+  "GET /library": () => page("Library", `<h1>Library</h1><p><a href="/reports">Reports</a></p>`, false),
+  ...reports(false),
+});
+
 const branchToDeadControl = (control) =>
   branchA({
     "GET /publishing": () => page("Publishing center", `<h1>Publishing center</h1><p><a href="/publishing/q3">Q3 sales report</a></p>`, false),
@@ -294,6 +305,9 @@ const CASES = {
     },
     done: published,
   },
+  "lure-trap-branch": { routes: () => lureBranch(`<p>Nothing is scheduled.</p>`), done: published },
+  "lure-one-broken": { routes: () => lureBranch(DEAD_PUBLISH), done: published },
+  "lure-dead-end-disabled": { routes: () => lureBranch(`<button type="button" disabled>Publish report</button>`), done: published },
 
   // No route.
   "no-route-absent-feature": { routes: () => common(NAV.base), done: published },

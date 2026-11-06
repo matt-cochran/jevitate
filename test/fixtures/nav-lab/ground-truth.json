@@ -84,6 +84,63 @@
       "failureMode": "fm-nav-noop-streak-stop",
       "note": "Six same-meaning buttons, five dead and the last in DOM order live; labels are shuffled by --seed."
     },
+    "lure-trap-branch": {
+      "group": "lure",
+      "goal": "Publish the Q3 sales report.",
+      "entry": "/",
+      "goalKind": "change",
+      "routeExists": true,
+      "doneCheck": "POST /reports/q3/publish reached the server and set published=true.",
+      "correct": {
+        "verdict": "succeeded",
+        "accept": [
+          {
+            "goalOutcome": "succeeded",
+            "done": true
+          }
+        ]
+      },
+      "failureMode": "fm-nav-no-backtrack",
+      "note": "Added after the baseline: home's first link states the goal and leads to a page with no links out. Library > Reports is the route."
+    },
+    "lure-one-broken": {
+      "group": "lure",
+      "goal": "Publish the Q3 sales report.",
+      "entry": "/",
+      "goalKind": "change",
+      "routeExists": true,
+      "doneCheck": "POST /reports/q3/publish reached the server and set published=true.",
+      "correct": {
+        "verdict": "succeeded",
+        "accept": [
+          {
+            "goalOutcome": "succeeded",
+            "done": true
+          }
+        ]
+      },
+      "failureMode": "fm-nav-no-backtrack",
+      "note": "Added after the baseline: the lure ends on a dead control with no way out. Library > Reports is the route."
+    },
+    "lure-dead-end-disabled": {
+      "group": "lure",
+      "goal": "Publish the Q3 sales report.",
+      "entry": "/",
+      "goalKind": "change",
+      "routeExists": true,
+      "doneCheck": "POST /reports/q3/publish reached the server and set published=true.",
+      "correct": {
+        "verdict": "succeeded",
+        "accept": [
+          {
+            "goalOutcome": "succeeded",
+            "done": true
+          }
+        ]
+      },
+      "failureMode": "fm-nav-blocked-first-dead-end",
+      "note": "Added after the baseline: the lure ends on a disabled control with no way out. Library > Reports is the route."
+    },
     "no-route-absent-feature": {
       "group": "no-route",
       "goal": "Publish the Q3 sales report.",

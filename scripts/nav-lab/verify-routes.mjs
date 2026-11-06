@@ -34,6 +34,9 @@ export const WALKS = {
     done: true,
     steps: [(page) => page.locator("main form button").click()],
   },
+  "lure-trap-branch": { steps: [click("Library"), click("Reports"), click("Q3 sales report"), publish], done: true },
+  "lure-one-broken": { steps: [click("Library"), click("Reports"), click("Q3 sales report"), publish], done: true },
+  "lure-dead-end-disabled": { steps: [click("Library"), click("Reports"), click("Q3 sales report"), publish], done: true },
   "no-route-absent-feature": { steps: [click("Invoices"), click("Settings")], done: false, direct: { path: "/reports/q3", status: 404 } },
   "no-route-removed-link": { steps: [click("Invoices"), click("Settings")], done: false, direct: { path: "/reports/q3", status: 200 } },
   "route-hidden-from-model": {

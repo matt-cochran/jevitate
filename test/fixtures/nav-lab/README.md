@@ -32,6 +32,10 @@ node scripts/nav-lab/score.mjs --out <dir>
 pnpm exec vitest run scripts/nav-lab
 ```
 
+Run it from a checkout holding an empty `.jevitate/` and with `JEVITATE_RUN_INDEX=off`. `explore` prunes the
+logs of the nearest `.jevitate/` above the working directory, which is `~/.jevitate` when there is none, so
+this keeps a lab run's retention sweep and run index out of the real home.
+
 Each cell is the accuracy lab's goal invocation, with 25 actions and no `--success`: the done check is
 the lab's, not the run's.
 
