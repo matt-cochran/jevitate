@@ -763,7 +763,7 @@ const answeredUnread = (status: number) => () => {
 };
 const unreadJourney = (status: number) => (site: string): Journey => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", `Saved ${status}`) }, ...WROTE("/api/save") }]);
 
-/** A Save whose headers go at once and whose body, read by nobody, ends `bodyMs` later. Its effect lands as the body ends. */
+/** A Save whose headers go at once and whose body, read by nobody, ends `bodyMs` later. Its effect lands as the body ends. Chromium reports none of that body until it ends. */
 const streaming = (bodyMs: number, shared: boolean) => () => {
   const saved = new Set<string>();
   const s = sessions();
@@ -851,10 +851,62 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     reading: ["end-state:0", "sensitive"],
   },
   {
-    name: "a body still streaming past that moment, its effect crossing replays, does not read proven",
+    name: "a body held open past the bound, its effect crossing replays, stays open: it is a server still working",
     serve: streaming(2_500, true),
     journey: streamJourney(text("#saved", "NO")),
     verdict: "inconclusive",
+  },
+  {
+    name: "answered, then keeps working with its body unsent, and the app is busy for a while: no false proven",
+    // The independent check's attack, scaled down: 200 headers at once, the first write's body held 8 s, the app busy from 1 s to 8 s.
+    serve: () => {
+      let first = true;
+      let busyFrom = Infinity;
+      let busyTo = 0;
+      return (req: IncomingMessage, res: ServerResponse): void => {
+        if (pathOfUrl(req) === "/api/save") {
+          req.resume();
+          res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+          res.flushHeaders();
+          if (!first) return void res.end("{}");
+          first = false;
+          const now = clock.monotonicMs();
+          busyFrom = now + 1_000;
+          busyTo = now + 8_000;
+          return after(8_000, () => res.end("{}"));
+        }
+        const now = clock.monotonicMs();
+        html(res, `<button id="save">Save</button><p id="said"></p><p id="health">${now >= busyFrom && now < busyTo ? "BUSY" : "OK"}</p><script>document.getElementById('save').onclick=()=>fetch('/api/save',{method:'POST'}).then(()=>{document.getElementById('said').textContent='Saved'})</script>`);
+      };
+    },
+    journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saved") }, ...WROTE("/api/save") }], { endState: [{ kind: "reloadThen", assertion: text("#health", "OK") }] }),
+    verdict: "inconclusive",
+  },
+  {
+    name: "stated limit, today's reading: a body the page reads and the server holds open reports its first bytes, so past 2 s it reads as answered, proven",
+    limit: true,
+    serve: () => (req: IncomingMessage, res: ServerResponse): void => {
+      if (pathOfUrl(req) === "/api/save") {
+        req.resume();
+        res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+        res.write("{");
+        return after(20_000, () => res.end("}"));
+      }
+      html(res, `<button id="save">Save</button><p id="said"></p><script>document.getElementById('save').onclick=async()=>{const r=await fetch('/api/save',{method:'POST'});document.getElementById('said').textContent='Saved';await r.text()}</script>`);
+    },
+    journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saved") }, ...WROTE("/api/save") }]),
+    verdict: "proven",
+    reading: ["step:2", "sensitive"],
+  },
+  {
+    name: "an empty no-store 200: Chromium aborts it after the response, and that is an answer",
+    serve: () => (req: IncomingMessage, res: ServerResponse): void => {
+      if (pathOfUrl(req) === "/api/save") return void res.writeHead(200, { "cache-control": "no-store" }).end();
+      html(res, `<button id="save">Save</button><p id="said"></p><script>document.getElementById('save').onclick=()=>fetch('/api/save',{method:'POST'}).then(()=>{document.getElementById('said').textContent='Saved'})</script>`);
+    },
+    journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saved") }, ...WROTE("/api/save") }]),
+    verdict: "proven",
+    reading: ["step:2", "sensitive"],
   },
   {
     name: "H1: the base's job lands in the next replay and a fixture restore clears it",

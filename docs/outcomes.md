@@ -63,7 +63,8 @@ What `journey verify --mutate` runs, in order:
 A blocked write's recorded lines stay blocked for the rest of that replay, except while a later step that records the
 same line runs. If one is answered anyway (a popup, a worker), that mutation reads `not-applied`. Open writes are
 counted when they go to the Journey's own origins or a line it recorded, and a line it did not record that repeats is
-background. A write still open when any replay closes, or that replay throws or stalls, makes the proof `inconclusive`, and nothing further
+background. A write is open until it finishes, fails, or its response's body reaches the browser. A response alone does not close
+it: a server that sends its headers and keeps working has not answered yet. A write still open when any replay closes, or that replay throws or stalls, makes the proof `inconclusive`, and nothing further
 runs, as with a failed fixture restore. A stalled replay whose close never finished can't say what was open, and counts as having a write open, and a resume reads the same. A mutated replay that stopped early still stays open as long as the base did.
 
 ### What a proof assumes
@@ -90,8 +91,17 @@ holds only if all of these are true. Each one that fails can produce a false rea
   replay again, but a reused pair ran against the app as it was then.
 - **A blocked write's retry uses a recorded line.** A retry on a path the step never recorded is a new write and gets
   through. The site then reads `insensitive`, or `sensitive` for what remains, on an app the block no longer describes.
-- **An aborted write ends soon.** A write the browser gave up on keeps its replay open for 2 s. A server still working
-  after that is seen only through the independence replay.
+- **An aborted write ends soon.** A write the browser gave up on, even after its response arrived, keeps its replay open
+  for 2 s, and so does one a new document dropped. A server still working after that is seen only through the independence replay.
+- **A server that answers, then keeps doing work the Journey depends on, has not sent body bytes a page is reading.**
+  Chromium reports nothing about a `no-store` response's body the page does not read until that body ends, so a body with
+  nothing reported keeps the write open, up to the replay's bound, and then the proof reads `inconclusive`. Once a body is
+  reported, the replay stays open for 2 s more and the write reads as answered, because the end of an unread `no-store`
+  body is never reported. So a page that reads a streaming response, from a server that has sent its first bytes and goes
+  on working, reads as answered after those 2 s, and what the server does next is seen only through the independence replay.
+  That is a false reading when that work changes what a site reads. An unread `no-store` body over about 2 MB is never
+  reported at all, and neither is one on a write a popup sends as it opens, before the replay can watch it: those writes
+  read as open, and the proof `inconclusive` or `cascade`, never a verdict that body supports.
 
 Some readings are limits rather than assumptions: they are never `proven`, but they say less than the Journey deserves.
 

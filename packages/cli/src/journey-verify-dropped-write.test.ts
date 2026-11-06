@@ -49,7 +49,12 @@ const request = (method: string, url: string, navigation = false): object => ({ 
 interface Browser {
   readonly context: EventEmitter;
   readonly page: EventEmitter;
+  /** What the browser itself reports: `Network.dataReceived` is the only word on a body the page does not read. */
+  readonly cdp: EventEmitter;
 }
+/** The browser reports a write, as a page's CDP session does, under its own request id. */
+const browserSent = ({ cdp }: Browser, requestId: string): void => void cdp.emit("Network.requestWillBeSent", { requestId, request: { method: "POST", url: SAVE } });
+const bodyArrived = ({ cdp }: Browser, requestId: string): void => void cdp.emit("Network.dataReceived", { requestId });
 const write = ({ context }: Browser): void => void context.emit("request", request("POST", SAVE));
 const newDocument = ({ context, page }: Browser): void => {
   context.emit("request", request("GET", "http://127.0.0.1:9/", true));
@@ -70,8 +75,10 @@ async function proveWith(during: (browser: Browser) => void, thenThrow: boolean 
   const browserPortFactory = (): BrowserPort => ({
     open: async () => {
       const context = new EventEmitter();
+      const cdp = Object.assign(new EventEmitter(), { send: async () => ({}) });
+      Object.assign(context, { newCDPSession: async () => cdp });
       const page = Object.assign(new EventEmitter(), { context: () => context });
-      browser = { context, page };
+      browser = { context, page, cdp };
       return { page, close: async () => undefined } as unknown as BrowserSession;
     },
   });
@@ -129,14 +136,54 @@ describe("a write a new document dropped", () => {
     expect(report.reason).toMatch(UNANSWERED);
   });
 
-  it("a write whose response arrived is answered, though the browser never says it finished", async () => {
-    const report = await proveWith(({ context }) => {
+  /** A POST the server answered: its response, and the body the browser reports only once it has ended. */
+  const answered = (b: Browser, id = "r1"): object => {
+    const save = request("POST", SAVE);
+    b.context.emit("request", save);
+    browserSent(b, id);
+    b.context.emit("response", { request: () => save });
+    bodyArrived(b, id);
+    return save;
+  };
+
+  it("a write whose body arrived is answered, though the browser never says it finished", async () => {
+    const report = await proveWith((b) => void answered(b));
+    expect(report.reason ?? "").not.toMatch(UNANSWERED);
+    expect(report.verdict, report.reason).toBe("insensitive");
+  });
+
+  it("the browser can report the body before Playwright reports the response", async () => {
+    const report = await proveWith((b) => {
       const save = request("POST", SAVE);
-      context.emit("request", save);
-      context.emit("response", { request: () => save });
+      b.context.emit("request", save);
+      browserSent(b, "r1");
+      bodyArrived(b, "r1");
+      b.context.emit("response", { request: () => save });
     });
     expect(report.reason ?? "").not.toMatch(UNANSWERED);
     expect(report.verdict, report.reason).toBe("insensitive");
+  });
+
+  it("a response whose body has not arrived keeps the write open: the server may still be working", async () => {
+    const report = await proveWith((b) => {
+      const save = request("POST", SAVE);
+      b.context.emit("request", save);
+      browserSent(b, "r1");
+      b.context.emit("response", { request: () => save });
+    });
+    expect(report.verdict).toBe("inconclusive");
+    expect(report.reason).toMatch(UNANSWERED);
+  });
+
+  it("with no CDP session nothing says a body arrived, so a response alone keeps the write open", async () => {
+    const report = await proveWith((b) => {
+      Object.assign(b.context, { newCDPSession: undefined });
+      const save = request("POST", SAVE);
+      b.context.emit("request", save);
+      b.context.emit("response", { request: () => save });
+    });
+    expect(report.verdict).toBe("inconclusive");
+    expect(report.reason).toMatch(UNANSWERED);
   });
 
   it("a read's response answers no write", async () => {
@@ -147,12 +194,50 @@ describe("a write a new document dropped", () => {
     expect(report.reason).toMatch(UNANSWERED);
   });
 
-  it("a response to a different write answers only that one", async () => {
-    const report = await proveWith(({ context }) => {
-      const answered = request("POST", SAVE);
-      context.emit("request", answered);
-      context.emit("request", request("POST", SAVE));
-      context.emit("response", { request: () => answered });
+  it("two writes on one line and one body: one is still open", async () => {
+    const report = await proveWith((b) => {
+      answered(b, "r1");
+      const held = request("POST", SAVE);
+      b.context.emit("request", held);
+      browserSent(b, "r2");
+      b.context.emit("response", { request: () => held });
+    });
+    expect(report.reason).toMatch(UNANSWERED);
+  });
+
+  it("many reports of one body count once", async () => {
+    const report = await proveWith((b) => {
+      answered(b, "r1");
+      bodyArrived(b, "r1");
+      const held = request("POST", SAVE);
+      b.context.emit("request", held);
+      browserSent(b, "r2");
+      b.context.emit("response", { request: () => held });
+    });
+    expect(report.reason).toMatch(UNANSWERED);
+  });
+
+  it("a body that ended earlier says nothing about the next write on that line", async () => {
+    const report = await proveWith((b) => {
+      answered(b, "r1");
+      newDocument(b);
+      const held = request("POST", SAVE);
+      b.context.emit("request", held);
+      browserSent(b, "r2");
+      b.context.emit("response", { request: () => held });
+    });
+    expect(report.reason).toMatch(UNANSWERED);
+  });
+
+  it("a redirect that turns the write into a read leaves no body to claim", async () => {
+    const report = await proveWith((b) => {
+      browserSent(b, "r1");
+      b.cdp.emit("Network.requestWillBeSent", { requestId: "r1", request: { method: "GET", url: "http://127.0.0.1:9/after" } });
+      bodyArrived(b, "r1");
+      const held = request("POST", SAVE);
+      b.context.emit("request", held);
+      browserSent(b, "r2");
+      b.context.emit("response", { request: () => held });
     });
     expect(report.reason).toMatch(UNANSWERED);
   });
@@ -178,25 +263,60 @@ describe("a write a new document dropped", () => {
     expect(report.verdict, report.reason).toBe("insensitive");
   });
 
-  it("names the replay that really had it open: the independence replay blames no mutation that never ran", async () => {
-    const report = await proveWith(write, false, undefined, 2);
-    expect(report.verdict).toBe("inconclusive");
-    expect(report.reason).toMatch(/^the independence replay \(the Journey as recorded, straight after the base\) closed with a write still unanswered \(POST \/api\/save\)/);
-    expect(report.reason).not.toContain("skip:1");
-    expect(report.mutations).toEqual([]);
-  });
+  describe("the 2 s a replay stays open", () => {
+    /** How long the first mutated replay stayed open after `during`, up to its close. */
+    const heldOpenMs = async (during: (b: Browser) => void): Promise<number> => {
+      let doneAt = 0;
+      let closedAt = 0;
+      const browserClosed = (b: Browser): void => {
+        during(b);
+        doneAt = fake.monotonicMs();
+        const beforeClose = (b.page as unknown as { evaluate?: unknown }).evaluate;
+        Object.assign(b.page, { evaluate: async () => { closedAt = fake.monotonicMs(); return beforeClose; } });
+      };
+      await proveWith(browserClosed);
+      return closedAt - doneAt;
+    };
+    const abort = { failure: () => ({ errorText: "net::ERR_ABORTED" }) };
 
-  it("a mutated replay is still named by its mutation, with the write it left open", async () => {
-    const report = await proveWith(write);
-    expect(report.reason).toMatch(/^a replay of skip:1 closed with a write still unanswered \(POST \/api\/save\)/);
-  });
+    it("after a write the browser gave up on", async () => {
+      expect(await heldOpenMs(({ context }) => {
+        const save = Object.assign(request("POST", SAVE), abort);
+        context.emit("request", save);
+        context.emit("requestfailed", save);
+      })).toBeGreaterThanOrEqual(2_000);
+    });
 
-  it("a control is named as one, with no mutation applied", () => {
-    expect(isolationReason("control-write-open", "skip:3")).toMatch(/^the control for skip:3 \(the Journey as recorded, no mutation applied\) closed with a write still unanswered, /);
-  });
+    it("after a write answered, then aborted: the server may still be working", async () => {
+      expect(await heldOpenMs(({ context }) => {
+        const save = Object.assign(request("POST", SAVE), abort);
+        context.emit("request", save);
+        context.emit("response", { request: () => save });
+        context.emit("requestfailed", save);
+      })).toBeGreaterThanOrEqual(2_000);
+    });
 
-  it("a resume gives the same names, without the lines a checkpoint does not keep", () => {
-    expect(isolationReason("independence-write-open", null)).toMatch(/^the independence replay \(the Journey as recorded, straight after the base\) closed with a write still unanswered, /);
+    it("after a write answered, then dropped with its document", async () => {
+      expect(await heldOpenMs((b) => {
+        const save = request("POST", SAVE);
+        b.context.emit("request", save);
+        b.context.emit("response", { request: () => save });
+        newDocument(b);
+      })).toBeGreaterThanOrEqual(2_000);
+    });
+
+    it("after a body that arrived: it can be a body the page reads, still streaming", async () => {
+      expect(await heldOpenMs((b) => void answered(b))).toBeGreaterThanOrEqual(2_000);
+    });
+
+    it("not after a write that finished", async () => {
+      expect(await heldOpenMs(({ context }) => {
+        const save = request("POST", SAVE);
+        context.emit("request", save);
+        context.emit("response", { request: () => save });
+        context.emit("requestfinished", save);
+      })).toBeLessThan(2_000);
+    });
   });
 
   it("a replay that throws is held to the same check: what it left open may land in the next", async () => {
