@@ -124,7 +124,7 @@ export interface JourneyVerifyPlanReport {
 }
 
 /**
- * Static preview of `journey verify --mutate`: no browser, fixtures, hooks, target, session or
+ * Static preview of `journey verify --mutate`: CLI resolves local target policy; no browser, fixtures, hooks, target network, session or
  * credential is opened. Values of params are used only to derive the plan and are never returned.
  */
 export async function planJourneyVerification(
@@ -223,24 +223,45 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
         const startedAt = clock.monotonicMs();
         const lastStep = journey.recording.pages.reduce((n, page) => n + page.steps.length, 0) - 1;
         let horizonComplete = holdMs === undefined;
-        let horizonError = false;
+        let horizonObserved = false;
+        let horizonSleeps = 0;
+        let horizonElapsed = 0;
+        let horizonCause: "missing-observer" | "sleep-failed" | "clock-no-progress" | "clock-invalid" | "wake-limit" | "incomplete" = "missing-observer";
         const hold: StepObserver = {
           afterStep: async ({ index, outcome }) => {
             if (holdMs === undefined || index !== lastStep || outcome !== "done") return;
+            horizonObserved = true;
+            horizonCause = "incomplete";
             try {
-              const left = holdMs - (clock.monotonicMs() - startedAt);
-              if (left > 0) await clock.sleep(Math.ceil(left));
-              horizonComplete = clock.monotonicMs() - startedAt >= holdMs;
+              const deadline = startedAt + holdMs;
+              let now = clock.monotonicMs();
+              for (;;) {
+                horizonElapsed = now - startedAt;
+                if (![startedAt, holdMs, deadline, now, horizonElapsed].every(Number.isFinite) || now < startedAt) {
+                  horizonCause = "clock-invalid";
+                  return;
+                }
+                if (horizonElapsed >= holdMs) { horizonComplete = true; return; }
+                if (horizonSleeps >= 8) { horizonCause = "wake-limit"; return; }
+                const previous = now;
+                horizonSleeps++;
+                try { await clock.sleep(Math.ceil(holdMs - horizonElapsed)); }
+                catch { horizonCause = "sleep-failed"; return; }
+                now = clock.monotonicMs();
+                horizonElapsed = now - startedAt;
+                if (!Number.isFinite(now) || now < previous) { horizonCause = "clock-invalid"; return; }
+                if (now === previous) { horizonCause = "clock-no-progress"; return; }
+              }
             } catch {
-              // Observer errors are swallowed by the interpreter. Retain failure privately and
-              // never turn a missing/cancelled observation opportunity into absence evidence.
-              horizonError = true;
+              // Observer failures never become absence evidence or expose a thrown value.
+              horizonCause = "clock-invalid";
             }
           },
         };
         const held = holdMs === undefined ? runOpts : { ...runOpts, observer: hold };
         const r = await run(how.params === undefined ? held : { ...held, params: { ...how.params } }, {
           structuredFailures: true,
+          ...(readRequests === undefined ? {} : { readRequests }),
           ...(how.relaxedStepRequests === undefined ? {} : { relaxedStepRequests: how.relaxedStepRequests }),
           ...(how.journey === journey ? {} : { mutateJourney: (j) => describe(j).journey }),
           ...(how.skipIndex === undefined ? {} : { skipStep: (i: number) => i === how.skipIndex }),
@@ -253,7 +274,7 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
         // A replay that stopped at a step retains its original failure/cascade. A result at
         // the final-check boundary needs the completed hold, even when the observer was skipped.
         if (holdMs !== undefined && !horizonComplete && !(r.outcome === "quarantined" && r.at !== undefined)) {
-          return { outcome: "error", failedSites: [], reason: horizonError ? "final-network observation horizon failed" : "final-network observation horizon did not complete" };
+          return { outcome: "error", failedSites: [], reason: `final-network observation horizon failed (cause=${horizonCause}, eligible=${horizonObserved}, sleeps=${horizonSleeps}, requiredMs=${Number.isFinite(holdMs) ? holdMs : "invalid"}, elapsedMs=${Number.isFinite(horizonElapsed) ? horizonElapsed : "invalid"})` };
         }
         const blocked = r.blockedWrites ?? [];
         const blockedFields = how.blockIndex === undefined ? {} : { blockedWrites: blocked.map((b) => `${b.method} ${b.path}`) };

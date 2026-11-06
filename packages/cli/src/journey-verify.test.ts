@@ -53,6 +53,9 @@ describe("final-network observation horizon is qualifying evidence, not a best-e
     expect(report.verdict).toBe("inconclusive");
     expect(JSON.stringify(report)).not.toContain("secret must not escape");
     expect(sleep).toHaveBeenCalledTimes(mode.startsWith("missing") ? 0 : 1);
+    const reason = report.mutations.find((m) => m.id === "skip:1")?.reason;
+    expect(reason).toContain(`cause=${mode.startsWith("missing") ? "missing-observer" : mode === "shortened" ? "clock-no-progress" : "sleep-failed"}`);
+    expect(reason).toContain(`eligible=${!mode.startsWith("missing")}`);
   });
 
   it.each([{ skipIndex: false, baselineMs: 100 }, { skipIndex: true, baselineMs: 100 }, { skipIndex: false, baselineMs: 100.5 }])("holds a skipped last step before final checks (skipIndex: $skipIndex, horizon: $baselineMs)", async ({ skipIndex, baselineMs }) => {
@@ -81,6 +84,101 @@ describe("final-network observation horizon is qualifying evidence, not a best-e
     expect(skippedLast && blocker).toBe(true);
     expect(report.mutations.find((m) => m.id === "skip:1")?.outcome).toBe("failed");
     expect(report.assertions.find((a) => a.site === "end-state:0")).toMatchObject({ verdict: "sensitive", provedBy: "skip:1" });
+  });
+
+  it("continues an early wake to the same actual deadline before final checks", async () => {
+    const fake = new FakeClock();
+    installClock(fake);
+    const sleeps: number[] = [];
+    vi.spyOn(clock, "sleep").mockImplementation(async (ms) => {
+      sleeps.push(ms);
+      await fake.advanceBy(sleeps.length === 1 ? 100.25 : ms);
+    });
+    const j = fixture();
+    const dir = await store(j);
+    let first = true;
+    let finalChecks = 0;
+    const run: typeof runJourneyProgrammatically = async (opts, mutation = {}) => {
+      if (first) { first = false; await fake.advanceBy(100.75); return { outcome: "ok", output: null }; }
+      if (mutation.blockWritesAtStep !== undefined) return { ...finalFailure, blockedWrites: [] };
+      const started = clock.monotonicMs();
+      await opts.observer?.afterStep?.({ actor, index: 0, recorded: j.recording.pages[0]!.steps[0]!, outcome: "done" });
+      expect(clock.monotonicMs() - started).toBeGreaterThanOrEqual(100.75);
+      finalChecks++;
+      return finalFailure;
+    };
+    const report = await verifyJourneyMutations({ dir, id: j.metadata.id }, run);
+    expect(report.mutations.find((m) => m.id === "skip:1")?.outcome).toBe("failed");
+    expect(finalChecks).toBe(1);
+    expect(sleeps).toEqual([101, 1]);
+    expect(report.assertions.find((a) => a.site === "end-state:0")).toMatchObject({ verdict: "sensitive", provedBy: "skip:1" });
+  });
+
+  it.each(["several", "already-elapsed", "late-write"])("preserves the continuous deadline with %s", async (mode) => {
+    installClock(new FakeClock());
+    let now = 0;
+    vi.spyOn(clock, "monotonicMs").mockImplementation(() => now);
+    let sleeps = 0;
+    let lateWrite = false;
+    vi.spyOn(clock, "sleep").mockImplementation(async (ms) => {
+      sleeps++;
+      now += sleeps <= 2 ? 40 : ms;
+      if (mode === "late-write" && sleeps === 3) lateWrite = true;
+    });
+    const j = fixture();
+    const dir = await store(j);
+    let first = true;
+    const run: typeof runJourneyProgrammatically = async (opts, mutation = {}) => {
+      if (first) { first = false; now += 100.75; return { outcome: "ok", output: null }; }
+      if (mutation.blockWritesAtStep !== undefined) return { ...finalFailure, blockedWrites: [] };
+      const started = now;
+      if (mode === "already-elapsed") now += 100.75;
+      await opts.observer?.afterStep?.({ actor, index: 0, recorded: j.recording.pages[0]!.steps[0]!, outcome: "done" });
+      expect(now - started).toBeGreaterThanOrEqual(100.75);
+      return lateWrite ? { outcome: "ok", output: null } : finalFailure;
+    };
+    const report = await verifyJourneyMutations({ dir, id: j.metadata.id }, run);
+    expect(sleeps).toBe(mode === "already-elapsed" ? 0 : 3);
+    expect(report.mutations.find((m) => m.id === "skip:1")?.outcome).toBe(mode === "late-write" ? "passed" : "failed");
+    expect(report.assertions.find((a) => a.site === "end-state:0")?.verdict).toBe(mode === "late-write" ? "insensitive" : "sensitive");
+  });
+
+  it.each([
+    { mode: "zero", cause: "clock-no-progress", calls: 1 },
+    { mode: "backwards", cause: "clock-invalid", calls: 1 },
+    { mode: "nan", cause: "clock-invalid", calls: 1 },
+    { mode: "infinity", cause: "clock-invalid", calls: 1 },
+    { mode: "wake-limit", cause: "wake-limit", calls: 8 },
+    { mode: "wrong-index", cause: "missing-observer", calls: 0 },
+    { mode: "wrong-outcome", cause: "missing-observer", calls: 0 },
+  ])("fails closed with bounded safe diagnostics for $mode", async ({ mode, cause, calls }) => {
+    installClock(new FakeClock());
+    let now = 0;
+    vi.spyOn(clock, "monotonicMs").mockImplementation(() => now);
+    const sleep = vi.spyOn(clock, "sleep").mockImplementation(async () => {
+      if (mode === "backwards") now--;
+      if (mode === "nan") now = Number.NaN;
+      if (mode === "infinity") now = Number.POSITIVE_INFINITY;
+      if (mode === "wake-limit") now++;
+    });
+    const j = fixture();
+    const dir = await store(j);
+    let first = true;
+    const run: typeof runJourneyProgrammatically = async (opts, mutation = {}) => {
+      if (first) { first = false; now += 100; return { outcome: "ok", output: null }; }
+      if (mutation.blockWritesAtStep !== undefined) return { ...finalFailure, blockedWrites: [] };
+      await opts.observer?.afterStep?.({ actor, index: mode === "wrong-index" ? 1 : 0, recorded: j.recording.pages[0]!.steps[0]!, outcome: mode === "wrong-outcome" ? "failed" : "done" });
+      return finalFailure;
+    };
+    const report = await verifyJourneyMutations({ dir, id: j.metadata.id }, run);
+    const skip = report.mutations.find((m) => m.id === "skip:1");
+    expect(skip).toMatchObject({ outcome: "error", failedSites: [] });
+    expect(skip?.reason).toContain(`cause=${cause}`);
+    expect(skip?.reason).toContain(`sleeps=${calls}`);
+    expect(skip?.reason).toContain("requiredMs=100");
+    expect(skip?.reason).not.toMatch(/NaN|Infinity/);
+    expect(report.assertions.find((a) => a.site === "end-state:0")?.verdict).not.toBe("sensitive");
+    expect(sleep).toHaveBeenCalledTimes(calls);
   });
 
   it("does not require a successful skip for an otherwise sound block witness", async () => {
