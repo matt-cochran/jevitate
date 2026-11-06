@@ -9,3 +9,5 @@ Require independent data-sensitivity and action-necessity evidence when both are
 Use explicit no-claim placeholders only at authorized waived DOM checks, so actions that remove their own controls can retain independent final-state proofs.
 
 Use the same recorded-origin read policy for native proof planning, runtime write blocking and freshness review. Complete the original observation window against a continuous monotonic deadline even when a native timer wakes early; bounded incomplete waits still fail closed.
+
+Measure final network proof opportunities from the replayed browser steps through capture closure after settling. Preserve each skipped-step prefix opportunity, exclude browser admission and cleanup, and reject incomplete or inconsistent lifecycle observations. Bind these evaluator semantics to final network proofs while retaining the native identity of unaffected UI-only proofs.

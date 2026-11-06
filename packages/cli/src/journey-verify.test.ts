@@ -30,6 +30,16 @@ async function store(j: Journey): Promise<string> {
   return dir;
 }
 
+async function beforeSteps(opts: Parameters<typeof runJourneyProgrammatically>[0], j: Journey): Promise<void> {
+  let index = 0;
+  for (const page of j.recording.pages) for (const recorded of page.steps) await opts.observer?.beforeStep?.({ actor, index: index++, recorded });
+}
+async function finishBaseline(opts: Parameters<typeof runJourneyProgrammatically>[0], mutation: NonNullable<Parameters<typeof runJourneyProgrammatically>[1]>, j: Journey): Promise<void> {
+  const flat = j.recording.pages.flatMap((page) => page.steps);
+  await opts.observer?.afterStep?.({ actor, index: flat.length - 1, recorded: flat.at(-1)!, outcome: "done" });
+  await mutation.beforeFinalNetworkCaptureClose?.();
+}
+
 describe("final-network observation horizon is qualifying evidence, not a best-effort hint", () => {
   it.each(["missing-failed", "missing-passed", "thrown", "cancelled", "shortened"])("does not admit a skip whose hold is %s", async (mode) => {
     const fake = new FakeClock();
@@ -42,9 +52,11 @@ describe("final-network observation horizon is qualifying evidence, not a best-e
     const dir = await store(j);
     let first = true;
     const run: typeof runJourneyProgrammatically = async (opts, mutation = {}) => {
-      if (first) { first = false; await fake.advanceBy(100); return { outcome: "ok", output: null }; }
+      if (first) { first = false; await beforeSteps(opts, j); await fake.advanceBy(100); await finishBaseline(opts, mutation, j); return { outcome: "ok", output: null }; }
       if (mutation.blockWritesAtStep !== undefined) return { ...finalFailure, blockedWrites: [] };
+      await beforeSteps(opts, j);
       if (!mode.startsWith("missing")) await opts.observer?.afterStep?.({ actor, index: 0, recorded: j.recording.pages[0]!.steps[0]!, outcome: "done" });
+      await mutation.beforeFinalNetworkCaptureClose?.();
       return mode === "missing-passed" ? { outcome: "ok", output: null } : finalFailure;
     };
     const report = await verifyJourneyMutations({ dir, id: j.metadata.id }, run);
@@ -71,12 +83,14 @@ describe("final-network observation horizon is qualifying evidence, not a best-e
     let skippedLast = false;
     let blocker = false;
     const run: typeof runJourneyProgrammatically = async (opts, mutation = {}) => {
-      if (first) { first = false; await fake.advanceBy(baselineMs); return { outcome: "ok", output: null }; }
+      if (first) { first = false; await beforeSteps(opts, j); await fake.advanceBy(baselineMs); await finishBaseline(opts, mutation, j); return { outcome: "ok", output: null }; }
       expect(mutation.structuredFailures).toBe(true);
       if (mutation.blockWritesAtStep !== undefined) { blocker = true; expect(mutation.blockWritesAtStep).toBe(0); return { ...finalFailure, blockedWrites: [{ method: "POST", path: "/sync" }] }; }
       skippedLast = skipIndex ? mutation.skipStep?.(0) === true : mutation.mutateJourney?.(j).recording.pages[0]!.steps[0]!.step.kind === "assert";
       const started = clock.monotonicMs();
+      await beforeSteps(opts, j);
       await opts.observer?.afterStep?.({ actor, index: 0, recorded: j.recording.pages[0]!.steps[0]!, outcome: "done" });
+      await mutation.beforeFinalNetworkCaptureClose?.();
       expect(clock.monotonicMs() - started).toBeGreaterThanOrEqual(baselineMs);
       return finalFailure;
     };
@@ -99,10 +113,12 @@ describe("final-network observation horizon is qualifying evidence, not a best-e
     let first = true;
     let finalChecks = 0;
     const run: typeof runJourneyProgrammatically = async (opts, mutation = {}) => {
-      if (first) { first = false; await fake.advanceBy(100.75); return { outcome: "ok", output: null }; }
+      if (first) { first = false; await beforeSteps(opts, j); await fake.advanceBy(100.75); await finishBaseline(opts, mutation, j); return { outcome: "ok", output: null }; }
       if (mutation.blockWritesAtStep !== undefined) return { ...finalFailure, blockedWrites: [] };
       const started = clock.monotonicMs();
+      await beforeSteps(opts, j);
       await opts.observer?.afterStep?.({ actor, index: 0, recorded: j.recording.pages[0]!.steps[0]!, outcome: "done" });
+      await mutation.beforeFinalNetworkCaptureClose?.();
       expect(clock.monotonicMs() - started).toBeGreaterThanOrEqual(100.75);
       finalChecks++;
       return finalFailure;
@@ -129,11 +145,13 @@ describe("final-network observation horizon is qualifying evidence, not a best-e
     const dir = await store(j);
     let first = true;
     const run: typeof runJourneyProgrammatically = async (opts, mutation = {}) => {
-      if (first) { first = false; now += 100.75; return { outcome: "ok", output: null }; }
+      if (first) { first = false; await beforeSteps(opts, j); now += 100.75; await finishBaseline(opts, mutation, j); return { outcome: "ok", output: null }; }
       if (mutation.blockWritesAtStep !== undefined) return { ...finalFailure, blockedWrites: [] };
+      await beforeSteps(opts, j);
       const started = now;
       if (mode === "already-elapsed") now += 100.75;
       await opts.observer?.afterStep?.({ actor, index: 0, recorded: j.recording.pages[0]!.steps[0]!, outcome: "done" });
+      await mutation.beforeFinalNetworkCaptureClose?.();
       expect(now - started).toBeGreaterThanOrEqual(100.75);
       return lateWrite ? { outcome: "ok", output: null } : finalFailure;
     };
@@ -165,9 +183,11 @@ describe("final-network observation horizon is qualifying evidence, not a best-e
     const dir = await store(j);
     let first = true;
     const run: typeof runJourneyProgrammatically = async (opts, mutation = {}) => {
-      if (first) { first = false; now += 100; return { outcome: "ok", output: null }; }
+      if (first) { first = false; await beforeSteps(opts, j); now += 100; await finishBaseline(opts, mutation, j); return { outcome: "ok", output: null }; }
       if (mutation.blockWritesAtStep !== undefined) return { ...finalFailure, blockedWrites: [] };
+      await beforeSteps(opts, j);
       await opts.observer?.afterStep?.({ actor, index: mode === "wrong-index" ? 1 : 0, recorded: j.recording.pages[0]!.steps[0]!, outcome: mode === "wrong-outcome" ? "failed" : "done" });
+      await mutation.beforeFinalNetworkCaptureClose?.();
       return finalFailure;
     };
     const report = await verifyJourneyMutations({ dir, id: j.metadata.id }, run);
@@ -181,14 +201,150 @@ describe("final-network observation horizon is qualifying evidence, not a best-e
     expect(sleep).toHaveBeenCalledTimes(calls);
   });
 
+  it("excludes pre-page admission and preserves each corresponding prefix opportunity through capture close", async () => {
+    const fake = new FakeClock(); installClock(fake);
+    vi.spyOn(clock, "sleep").mockImplementation((ms) => fake.advanceBy(ms));
+    const j = fixture();
+    const a = j.recording.pages[0]!.steps[0]!;
+    j.recording.pages[0]!.steps.unshift({ step: { kind: "navigate", url: "/", expect: noClaim } });
+    const dir = await store(j);
+    let baseline = true;
+    let sent = false;
+    const run: typeof runJourneyProgrammatically = async (opts, mutation = {}) => {
+      const close = (mutation as typeof mutation & { beforeFinalNetworkCaptureClose?: () => Promise<void> }).beforeFinalNetworkCaptureClose;
+      if (mutation.blockWritesAtStep !== undefined) return { ...finalFailure, blockedWrites: [] };
+      if (!baseline) await fake.advanceBy(7_000);
+      await opts.observer?.beforeStep?.({ actor, index: 0, recorded: j.recording.pages[0]!.steps[0]! });
+      await opts.observer?.beforeStep?.({ actor, index: 1, recorded: a });
+      const began = clock.monotonicMs();
+      if (baseline) await fake.advanceBy(6_500);
+      await opts.observer?.afterStep?.({ actor, index: 1, recorded: a, outcome: "done" });
+      if (!baseline) await fake.advanceBy(500); // native-sized quiet control, not served evidence
+      await close?.();
+      if (baseline) { baseline = false; return { outcome: "ok", output: null }; }
+      sent = clock.monotonicMs() - began >= 6_000;
+      return sent ? { outcome: "ok", output: null } : finalFailure;
+    };
+    const report = await verifyJourneyMutations({ dir, id: j.metadata.id }, run);
+    expect(report.mutations.find((m) => m.id === "skip:2")?.outcome).toBe("passed");
+    expect(sent).toBe(true);
+    expect(report.assertions.find((a) => a.site === "end-state:0")?.verdict).toBe("insensitive");
+  });
+
+  it.each(["mutation-admission", "baseline-setup-cleanup", "slow-navigation", "accelerated-prefix", "multi-page"])("aligns each ordered prefix through actual capture close: %s", async (mode) => {
+    const fake = new FakeClock(); installClock(fake);
+    vi.spyOn(clock, "sleep").mockImplementation((ms) => fake.advanceBy(ms));
+    const j = fixture();
+    const write = j.recording.pages[0]!.steps[0]!;
+    const nav = { step: { kind: "navigate", url: "/", expect: noClaim } } as const;
+    const a = { step: { kind: "click", target: { testId: "a" }, expect: noClaim } } as const;
+    j.recording.pages = mode === "multi-page" ? [{ url: "/", steps: [nav] }, { url: "/next", steps: [a, write] }] : [{ url: "/", steps: [nav, a, write] }];
+    const flat = j.recording.pages.flatMap((page) => page.steps);
+    const dir = await store(j);
+    let first = true;
+    const baselineAnchors: number[] = [];
+    let baselineClose = 0;
+    const run: typeof runJourneyProgrammatically = async (opts, mutation = {}) => {
+      if (mutation.blockWritesAtStep !== undefined) return { ...finalFailure, blockedWrites: [] };
+      const isBase = first; first = false;
+      if (isBase && mode === "baseline-setup-cleanup") await fake.advanceBy(10_000);
+      if (!isBase && mode === "mutation-admission") await fake.advanceBy(7_000);
+      const anchors: number[] = [];
+      for (const [index, recorded] of flat.entries()) {
+        if (index === 1) await fake.advanceBy(isBase ? 40 : mode === "slow-navigation" ? 200 : 0);
+        if (index === 2 && isBase) await fake.advanceBy(40);
+        anchors.push(clock.monotonicMs());
+        await opts.observer?.beforeStep?.({ actor, index, recorded });
+      }
+      await opts.observer?.afterStep?.({ actor, index: 2, recorded: write, outcome: "done" });
+      await fake.advanceBy(isBase ? 60 : 10); // baseline settle/judgment opportunity precedes close
+      await mutation.beforeFinalNetworkCaptureClose?.();
+      if (isBase) {
+        baselineAnchors.push(...anchors); baselineClose = clock.monotonicMs();
+        if (mode === "baseline-setup-cleanup") await fake.advanceBy(10_000);
+        return { outcome: "ok", output: null };
+      }
+      for (let index = 0; index <= 2; index++) expect(clock.monotonicMs() - anchors[index]!).toBeGreaterThanOrEqual(baselineClose - baselineAnchors[index]!);
+      return clock.monotonicMs() - anchors[1]! >= 100 ? { outcome: "ok", output: null } : finalFailure;
+    };
+    const report = await verifyJourneyMutations({ dir, id: j.metadata.id }, run);
+    expect(report.mutations.find((m) => m.id === "skip:3")?.outcome).toBe("passed");
+    expect(report.assertions.find((a) => a.site === "end-state:0")?.verdict).toBe("insensitive");
+  });
+
+  it.each(["missing-baseline-close", "missing-baseline-prefix", "missing-close", "missing-prefix", "duplicate", "reordered", "failed-final", "duplicate-close", "duplicate-baseline-close", "late-prefix", "late-failed-final", "negative-baseline"])("refuses unmatched phase evidence: %s", async (mode) => {
+    const fake = new FakeClock(); installClock(fake);
+    if (mode === "negative-baseline") vi.spyOn(clock, "monotonicMs").mockImplementation(() => fake.monotonicMs() - 1_000);
+    vi.spyOn(clock, "sleep").mockImplementation((ms) => fake.advanceBy(ms));
+    const j = fixture(); j.recording.pages[0]!.steps.unshift({ step: { kind: "navigate", url: "/", expect: noClaim } });
+    const flat = j.recording.pages[0]!.steps;
+    const dir = await store(j);
+    let first = true;
+    const run: typeof runJourneyProgrammatically = async (opts, mutation = {}) => {
+      if (mutation.blockWritesAtStep !== undefined) return { ...finalFailure, blockedWrites: [] };
+      const isBase = first; first = false;
+      const indices = isBase ? (mode === "missing-baseline-prefix" ? [0] : [0, 1]) : mode === "missing-prefix" ? [0] : mode === "duplicate" ? [0, 0, 1] : mode === "reordered" ? [1, 0] : [0, 1];
+      for (const index of indices) await opts.observer?.beforeStep?.({ actor, index, recorded: flat[index]! });
+      await fake.advanceBy(isBase ? 100 : 10);
+      await opts.observer?.afterStep?.({ actor, index: 1, recorded: flat[1]!, outcome: !isBase && mode === "failed-final" ? "failed" : "done" });
+      if (!(isBase && mode === "missing-baseline-close") && !(!isBase && mode === "missing-close")) await mutation.beforeFinalNetworkCaptureClose?.();
+      if ((isBase && mode === "duplicate-baseline-close") || (!isBase && mode === "duplicate-close")) await mutation.beforeFinalNetworkCaptureClose?.();
+      if (!isBase && mode === "late-prefix") await opts.observer?.beforeStep?.({ actor, index: 0, recorded: flat[0]! });
+      if (!isBase && mode === "late-failed-final") await opts.observer?.afterStep?.({ actor, index: 1, recorded: flat[1]!, outcome: "failed" });
+      return isBase ? { outcome: "ok", output: null } : finalFailure;
+    };
+    const report = await verifyJourneyMutations({ dir, id: j.metadata.id }, run);
+    expect(report.mutations.find((m) => m.id === "skip:2")).toMatchObject({ outcome: "error", failedSites: [] });
+    expect(report.assertions.find((a) => a.site === "end-state:0")?.verdict).not.toBe("sensitive");
+  });
+
+  it.each([{ sample: 350, invalid: true }, { sample: 400, invalid: false }, { sample: 401, invalid: false }])("qualifies the first hold sample against its close entry: $sample", async ({ sample, invalid }) => {
+    installClock(new FakeClock());
+    let now = 0;
+    const samples: number[] = [];
+    vi.spyOn(clock, "monotonicMs").mockImplementation(() => samples.shift() ?? now);
+    const sleep = vi.spyOn(clock, "sleep").mockResolvedValue(undefined);
+    const j = fixture();
+    const dir = await store(j);
+    let first = true;
+    const run: typeof runJourneyProgrammatically = async (opts, mutation = {}) => {
+      if (first) {
+        first = false;
+        await beforeSteps(opts, j);
+        now = 100;
+        await finishBaseline(opts, mutation, j);
+        return { outcome: "ok", output: null };
+      }
+      if (mutation.blockWritesAtStep !== undefined) return { ...finalFailure, blockedWrites: [] };
+      now = 200;
+      await beforeSteps(opts, j);
+      await opts.observer?.afterStep?.({ actor, index: 0, recorded: j.recording.pages[0]!.steps[0]!, outcome: "done" });
+      now = 400;
+      samples.push(400, sample);
+      await mutation.beforeFinalNetworkCaptureClose?.();
+      return finalFailure;
+    };
+    const report = await verifyJourneyMutations({ dir, id: j.metadata.id }, run);
+    const skip = report.mutations.find((m) => m.id === "skip:1");
+    expect(skip).toMatchObject({ outcome: invalid ? "error" : "failed", failedSites: invalid ? [] : [{ where: "end-state", index: 0 }] });
+    expect(samples).toEqual([]);
+    expect(sleep).not.toHaveBeenCalled();
+    if (invalid) {
+      expect(skip?.reason).toContain("cause=clock-invalid");
+      expect(report.assertions.find((a) => a.site === "end-state:0")?.verdict).not.toBe("sensitive");
+    } else {
+      expect(report.assertions.find((a) => a.site === "end-state:0")).toMatchObject({ verdict: "sensitive", provedBy: "skip:1" });
+    }
+  });
+
   it("does not require a successful skip for an otherwise sound block witness", async () => {
     const fake = new FakeClock();
     installClock(fake);
     const j = fixture();
     const dir = await store(j);
     let first = true;
-    const run: typeof runJourneyProgrammatically = async (_opts, mutation = {}) => {
-      if (first) { first = false; await fake.advanceBy(100); return { outcome: "ok", output: null }; }
+    const run: typeof runJourneyProgrammatically = async (opts, mutation = {}) => {
+      if (first) { first = false; await beforeSteps(opts, j); await fake.advanceBy(100); await finishBaseline(opts, mutation, j); return { outcome: "ok", output: null }; }
       return { ...finalFailure, ...(mutation.blockWritesAtStep === undefined ? {} : { blockedWrites: [{ method: "POST", path: "/sync" }] }) };
     };
     const report = await verifyJourneyMutations({ dir, id: j.metadata.id }, run);
@@ -204,8 +360,8 @@ describe("final-network observation horizon is qualifying evidence, not a best-e
     const j = fixture();
     const dir = await store(j);
     let first = true;
-    const run: typeof runJourneyProgrammatically = async (_opts, mutation = {}) => {
-      if (first) { first = false; await fake.advanceBy(100); return { outcome: "ok", output: null }; }
+    const run: typeof runJourneyProgrammatically = async (opts, mutation = {}) => {
+      if (first) { first = false; await beforeSteps(opts, j); await fake.advanceBy(100); await finishBaseline(opts, mutation, j); return { outcome: "ok", output: null }; }
       if (reason === "heal-exhausted") return { outcome: "heal-exhausted", reason, at: 0 };
       return { outcome: "quarantined", reason, at: 0, failurePhase: "action", ...(mutation.blockWritesAtStep === undefined ? {} : { blockedWrites: [] }) };
     };
@@ -229,7 +385,7 @@ describe("final-network observation horizon is qualifying evidence, not a best-e
     let skipRuns = 0;
     const held: number[] = [];
     const run: typeof runJourneyProgrammatically = async (opts, mutation = {}) => {
-      if (first) { first = false; await fake.advanceBy(100); return { outcome: "ok", output: null }; }
+      if (first) { first = false; await beforeSteps(opts, j); await fake.advanceBy(100); await finishBaseline(opts, mutation, j); return { outcome: "ok", output: null }; }
       if (mutation.blockWritesAtStep !== undefined) return { ...finalFailure, blockedWrites: [] };
       skipRuns++;
       if (skipRuns <= 2) return { outcome: "quarantined", reason: "postcondition", at: skipRuns - 1, failurePhase: "postcondition" };
@@ -238,7 +394,9 @@ describe("final-network observation horizon is qualifying evidence, not a best-e
       expect(mutation.skipStep?.(0)).toBe(skipRuns === 3 ? true : undefined);
       const started = clock.monotonicMs();
       if (!(missingControl && skipRuns === 4)) {
+        await beforeSteps(opts, j);
         await opts.observer?.afterStep?.({ actor, index: 1, recorded: j.recording.pages[0]!.steps[1]!, outcome: "done" });
+        await mutation.beforeFinalNetworkCaptureClose?.();
         held.push(clock.monotonicMs() - started);
       }
       return skipRuns === 3 ? finalFailure : { outcome: "ok", output: null };

@@ -1,3 +1,4 @@
+import { contentHash } from "@jevitate/domain";
 import { describe, expect, it } from "vitest";
 import type { Journey } from "@jevitate/journey";
 import { journeyProofContext, journeyProofHashForContext } from "./journey-proof-context.js";
@@ -58,4 +59,41 @@ it("empty-policy proof remains fresh only for empty policy", () => {
   const record: JourneyVerifyRecord = { journeyId: journey.metadata.id, contentHash: journeyReviewHash(journey), proofHash: journeyProofHashForContext(journey, undefined), verdict: "proven", summary: {}, at: "2026-11-06T00:00:00Z" };
   expect(buildJourneyReview(journey, { lastVerify: record }).proof.verify).toMatchObject({ stale: false });
   expect(buildJourneyReview(journey, { lastVerify: record, safety: { readRequests: ["/api/query"] } }).proof.verify).toMatchObject({ stale: true });
+});
+
+it("native observation version stales159 final-network receipts while preserving UI/step-only receipts", () => {
+  const cases = [
+    { kind: "page", old: "b1326cb75b488dab9be16e4acc5ad71efe7ba76425655c6dee971f9e7d9d6775", affected: false },
+    { kind: "step", old: "d8f59ea4a154b4246b308e072a8ca950d529cb32aea54421c6bda487ed42e739", affected: false },
+    { kind: "requestMade", old: "d15ef54d65fe02fba7ba6377b1b33733ec2c589b3bd842e27c160bdb99905e42", affected: true },
+    { kind: "responseStatus", old: "27409d8e9d32f43a5711fece56762c12a1d590cbb5b561065d490ad7dc754c93", affected: true },
+    { kind: "legacy", old: "f23b06a16762046c53f6e599f02e07a96c3feeebbe7ca838e41a76bd10dface0", affected: true },
+  ] as const;
+  for (const item of cases) {
+    const journey = fixtureJourney();
+    if (item.kind === "step") journey.recording.pages[0]!.steps[0]!.expectRequests = [{ kind: "requestMade", method: "POST", pathGlob: "/sync" }];
+    if (item.kind === "requestMade") journey.metadata.endState = [{ kind: "requestMade", method: "POST", pathGlob: "/sync" }];
+    if (item.kind === "responseStatus") journey.metadata.endState = [{ kind: "responseStatus", method: "POST", pathGlob: "/sync", status: { class: 2 } }];
+    if (item.kind === "legacy") journey.metadata.networkChecks = [{ kind: "requestMade", method: "POST", pathGlob: "/sync" }];
+    const record: JourneyVerifyRecord = { journeyId: journey.metadata.id, contentHash: journeyReviewHash(journey), proofHash: item.old, verdict: "proven", summary: {}, at: "2026-11-06T00:00:00Z" };
+    expect(buildJourneyReview(journey, { lastVerify: record }).proof.verify).toMatchObject({ stale: item.affected });
+    expect(evaluateMutationProofPolicy({ journey, contentHash: record.contentHash, record, mode: "require-proven" }).freshness).toBe(item.affected ? "stale" : "fresh");
+    const current = { ...record, proofHash: journeyProofHashForContext(journey, undefined) };
+    expect(buildJourneyReview(journey, { lastVerify: current }).proof.verify).toMatchObject({ stale: false });
+    for (const readRequests of [[], ["/api/query"]]) {
+      const proofContext = journeyProofContext(undefined, undefined, readRequests);
+      const previous = { ...record, proofContext, proofHash: proofContext === undefined ? item.old : contentHash({ v: 1, executableHash: item.old, context: proofContext }) };
+      expect(buildJourneyReview(journey, { lastVerify: previous, safety: { readRequests } }).proof.verify).toMatchObject({ stale: item.affected });
+      expect(evaluateMutationProofPolicy({ journey, contentHash: record.contentHash, record: previous, mode: "require-proven", readRequests }).freshness).toBe(item.affected ? "stale" : "fresh");
+      const fresh = { ...record, proofContext, proofHash: journeyProofHashForContext(journey, proofContext) };
+      expect(buildJourneyReview(journey, { lastVerify: fresh, safety: { readRequests } }).proof.verify).toMatchObject({ stale: false });
+      expect(evaluateMutationProofPolicy({ journey, contentHash: record.contentHash, record: fresh, mode: "require-proven", readRequests }).freshness).toBe("fresh");
+      journey.metadata.endState = [{ kind: "requestMade", method: "POST", pathGlob: "/changed" }];
+      expect(buildJourneyReview(journey, { lastVerify: fresh, safety: { readRequests } }).proof.verify).toMatchObject({ stale: true });
+      if (item.kind === "legacy") delete journey.metadata.endState;
+      else if (item.kind === "requestMade") journey.metadata.endState = [{ kind: "requestMade", method: "POST", pathGlob: "/sync" }];
+      else if (item.kind === "responseStatus") journey.metadata.endState = [{ kind: "responseStatus", method: "POST", pathGlob: "/sync", status: { class: 2 } }];
+      else delete journey.metadata.endState;
+    }
+  }
 });

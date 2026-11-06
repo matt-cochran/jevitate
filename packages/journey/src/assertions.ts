@@ -50,6 +50,11 @@ export function journeyEndState(journey: Journey): OutcomeCheck[] {
   return [...(journey.metadata.endState ?? []), ...(journey.metadata.networkChecks ?? [])];
 }
 
+/** Conservative shared scope for native final-network observation and its proof identity. */
+export function needsFinalNetworkObservation(journey: Journey): boolean {
+  return journeyEndState(journey).some((check) => check.kind === "requestMade" || check.kind === "responseStatus");
+}
+
 function ownAssertion(s: Step): { field: "expect" | "check" | "resume"; assertion: Assertion } | null {
   if (s.kind === "assert") return { field: "check", assertion: s.check };
   if (s.kind === "handback") return { field: "resume", assertion: s.resume };

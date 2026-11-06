@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FsJourneyStore, type Journey } from "@jevitate/journey";
+import { clock } from "@jevitate/domain";
+import { runJourneyProgrammatically } from "./journey-api.js";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { verifyJourneyMutations, type JourneyVerifyReport } from "./journey-verify.js";
 
@@ -91,6 +93,8 @@ let direct: JourneyVerifyReport;
 let readDelta: JourneyVerifyReport;
 let readGlob: JourneyVerifyReport;
 let constant: JourneyVerifyReport;
+let admissionTimerReport: JourneyVerifyReport;
+let admissionTimerSawSync = false;
 
 beforeAll(async () => {
   server = createServer(serve);
@@ -122,6 +126,7 @@ beforeAll(async () => {
   );
   fixed.metadata.params = ["reply"];
   constant = await prove(fixed, "/constant", { reply: "Fixed reply" });
+  await proveAdmissionTimer();
 }, 600_000);
 
 afterAll(async () => {
@@ -173,5 +178,51 @@ describe("[realtime] a final network check is not proven by a step that did not 
     expect(constant.mutations.find((m) => m.id === "swap-param:reply")?.relaxed?.outcome, diagnostics(constant)).toBe("passed");
     expect(reading(constant, "end-state:0"), diagnostics(constant)).toBe("insensitive");
     expect(constant.verdict, diagnostics(constant)).toBe("insensitive");
+  });
+});
+
+async function proveAdmissionTimer(): Promise<void> {
+    const j = journey("admission-timer", origin, [nav("#a"), click("#a"), click("#b", WROTE("/api/sync")), click("#c", WROTE("/api/last"))], CHECK("/api/sync"));
+    j.recording.pages[0]!.url = "/timer-long";
+    j.recording.pages[0]!.steps[0]!.step = { kind: "navigate", url: "/timer-long", expect: { kind: "visible", target: { css: "#a" } } };
+    const at = join(dir, j.metadata.id); await new FsJourneyStore(at).put(j);
+    const phases: { admission: number; page?: number; a?: number; sync?: number; close?: number; captureEntry?: number; finalClose?: number }[] = [];
+    const report = await verifyJourneyMutations({ dir: at, id: j.metadata.id, params: {} }, async (opts, mutation = {}) => {
+      const skipB = mutation.mutateJourney?.(j).recording.pages[0]!.steps[2]!.step.kind === "assert";
+      return runJourneyProgrammatically({ ...opts, browserPortFactory: () => {
+        const delegate = new PlaywrightBrowserPort();
+        return { open: async (openOpts) => {
+          const phase: (typeof phases)[number] = { admission: clock.monotonicMs() };
+          if (skipB) { phases.push(phase); await clock.sleep(7_000); }
+          const session = await delegate.open(openOpts);
+          phase.page = clock.monotonicMs();
+          if (skipB) {
+            await session.page.exposeFunction("phaseAStarted", () => { phase.a = clock.monotonicMs(); });
+            await session.page.addInitScript(() => {
+              document.addEventListener("click", (event) => {
+                if ((event.target as HTMLElement).id === "a") void (window as unknown as { phaseAStarted: () => Promise<void> }).phaseAStarted();
+              }, true);
+            });
+            session.page.on("request", (request) => { if (new URL(request.url()).pathname === "/api/sync") phase.sync = clock.monotonicMs(); });
+          }
+          return { ...session, close: async () => { phase.close = clock.monotonicMs(); await session.close(); } };
+        } };
+      } }, { ...mutation, beforeFinalNetworkCaptureClose: async () => {
+        const phase = phases.at(-1);
+        if (skipB && phase !== undefined) phase.captureEntry = clock.monotonicMs();
+        await (mutation as typeof mutation & { beforeFinalNetworkCaptureClose?: () => Promise<void> }).beforeFinalNetworkCaptureClose?.();
+        if (skipB && phase !== undefined) phase.finalClose = clock.monotonicMs();
+      } });
+    });
+    await writeFile("/tmp/jevitate-observation-native-served-phases.json", JSON.stringify({ phases, report: { verdict: report.verdict, mutations: report.mutations.map(({ id, outcome, reason }) => ({ id, outcome, reason })) } }, null, 2));
+    admissionTimerReport = report;
+    admissionTimerSawSync = phases.some((phase) => phase.sync !== undefined);
+}
+
+describe("[realtime] pre-page admission is not final-network observation", () => {
+  it("preserves A's six-second timer opportunity when mutation admission exceeds the baseline", () => {
+    expect(outcome(admissionTimerReport, "skip:3"), diagnostics(admissionTimerReport)).toBe("passed");
+    expect(reading(admissionTimerReport, "end-state:0"), diagnostics(admissionTimerReport)).toBe("insensitive");
+    expect(admissionTimerSawSync).toBe(true);
   });
 });
