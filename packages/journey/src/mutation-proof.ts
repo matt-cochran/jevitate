@@ -641,13 +641,9 @@ function paramReplay(journey: Journey, m: JourneyMutation, params: Readonly<Reco
   return { journey: pinAssertionRefs(journey, name, supplied), params: { ...params, [name]: altered } };
 }
 
-/** #567: the schema-valid weak postcondition a relaxed mutated step keeps in place of its own
- * `expect` — the Recording schema REQUIRES `expect` for fill/click/etc, so it cannot be dropped. A
- * step with a `target` gets `visible` on its OWN target (the per-step vacuous claim #400 names: it
- * holds before AND after the action, so it cannot prove the mutated value); a target-less step kind
- * (e.g. `navigate`) gets the explicit no-claim `urlIncludes ""` used elsewhere. */
-function relaxedExpect(step: Step): Assertion {
-  if ("target" in step && step.target !== undefined) return { kind: "visible", target: step.target };
+/** #567: the Recording schema requires `expect` on action steps. An already-authorized
+ * waived check makes no replacement claim: the action may remove its own target. */
+function relaxedExpect(): Assertion {
   return { kind: "urlIncludes", text: "" };
 }
 
@@ -668,7 +664,7 @@ export function relaxedMutationReplay(journey: Journey, m: JourneyMutation, opts
     const copy = how.journey === journey ? structuredClone(journey) : how.journey;
     const target = flat(copy)[index];
     if (target !== undefined && "expect" in target.step) {
-      const step: Record<string, unknown> = { ...target.step, expect: relaxedExpect(target.step) };
+      const step: Record<string, unknown> = { ...target.step, expect: relaxedExpect() };
       delete step.waitFor;
       target.step = step as Step;
     }
@@ -679,7 +675,7 @@ export function relaxedMutationReplay(journey: Journey, m: JourneyMutation, opts
     const blockMatchers = journeyMutationSteps(journey, opts).find((w) => w.step === m.step)?.requests ?? [];
     const copy = structuredClone(journey);
     const target = flat(copy)[index]!;
-    const step: Record<string, unknown> = { ...target.step, expect: relaxedExpect(target.step) };
+    const step: Record<string, unknown> = { ...target.step, expect: relaxedExpect() };
     delete step.waitFor;
     target.step = step as Step;
     return { journey: copy, blockIndex: index, blockRequests: [...requests], blockMatchers };
@@ -690,7 +686,7 @@ export function relaxedMutationReplay(journey: Journey, m: JourneyMutation, opts
     const step: Record<string, unknown> = {
       ...target.step,
       value: { redacted: false, value: staleValue(journey, target.step, opts.params ?? {}) },
-      expect: relaxedExpect(target.step),
+      expect: relaxedExpect(),
     };
     delete step.waitFor;
     target.step = step as Step;
@@ -772,7 +768,7 @@ function relaxStepSites(journey: Journey, from: Journey, keys: readonly string[]
     if (recorded === undefined) throw new Error(`journey '${journey.metadata.id}' has no step ${match[1]} to relax`);
     const step: Record<string, unknown> = { ...recorded.step };
     if (recorded.step.kind === "assert") step.check = { kind: "urlIncludes", text: "" };
-    else if ("expect" in recorded.step) step.expect = relaxedExpect(recorded.step);
+    else if ("expect" in recorded.step) step.expect = relaxedExpect();
     else throw new Error(`${key} has no page postcondition to relax`);
     delete step.waitFor;
     recorded.step = step as Step;

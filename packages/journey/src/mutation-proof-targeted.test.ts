@@ -105,6 +105,10 @@ describe("#609 nextTargetedRelaxation", () => {
     expect(nextTargetedRelaxation(threadJourney(), plan(), swapMutation(), "end-state:0", actionFailed, [])).toEqual({ refuse: "step:2 action failed (not a postcondition)" });
   });
 
+  it("still refuses a failing site that is already relaxed", () => {
+    expect(nextTargetedRelaxation(threadJourney(), plan(), swapMutation(), "end-state:0", relaxedRun, ["step:2"])).toEqual({ refuse: "step:2 is already relaxed" });
+  });
+
   it("refuses once the relaxation bound is reached", () => {
     expect(nextTargetedRelaxation(threadJourney(), plan(), swapMutation(), "end-state:0", relaxedRun, ["step:9", "step:8", "step:7", "step:6"])).toEqual({
       refuse: `relaxation bound ${MAX_TARGETED_RELAXATIONS} reached`,
@@ -133,14 +137,16 @@ describe("#609 targetedMutationReplay", () => {
     expect(journey).toEqual(before);
   });
 
-  it("weakens a relaxed earlier step's expect to a claim on its own target", () => {
+  it("replaces an authorized earlier expect with no claim while preserving the original action", () => {
     const journey = threadJourney();
     journey.recording.pages[0]!.steps[1]!.step = { ...journey.recording.pages[0]!.steps[1]!.step, waitFor: { maxMs: 30_000 } } as Step;
+    const before = structuredClone(journey);
     const how = targetedMutationReplay(journey, swapMutation(), "end-state:0", ["step:2"], { params: PARAMS });
+    expect(journey).toEqual(before);
     expect(how.journey.recording.pages[0]!.steps[1]!.step).toEqual({
       kind: "click",
       target: { role: "button", name: "Open" },
-      expect: { kind: "visible", target: { role: "button", name: "Open" } },
+      expect: { kind: "urlIncludes", text: "" },
     });
   });
 
@@ -228,7 +234,7 @@ describe("#609 targetedControlReplay", () => {
   it("weakens the mutated step's own claim as the targeted replay does", () => {
     const how = targetedControlReplay(threadJourney(), swapMutation(), ["step:2"]);
     const own = how.journey.recording.pages[0]!.steps[0]!.step;
-    expect("expect" in own ? own.expect.kind : own.kind).toBe("visible");
+    expect("expect" in own ? own.expect : own.kind).toEqual({ kind: "urlIncludes", text: "" });
   });
 
   it("leaves the input Journey deep-equal to before", () => {
