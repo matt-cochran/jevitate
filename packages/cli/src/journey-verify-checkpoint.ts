@@ -86,7 +86,7 @@ export const REPLAY_RECORD_KINDS: readonly string[] = ["first", "relaxed", "targ
 const NOT_THIN_CHECKED: ReadonlySet<string> = new Set(["targeted", "control", "targeted-control", "at-base-time"]);
 
 /** Why a replay may have decided another, by class: no site, request or page text. */
-const ISOLATION_NOTES = ["write-open", "base-write-open", "state-crossed", "state-stuck", "independence-errored", "siblings-undecided"] as const;
+const ISOLATION_NOTES = ["write-open", "independence-write-open", "control-write-open", "base-write-open", "state-crossed", "state-stuck", "independence-errored", "siblings-undecided"] as const;
 export type IsolationNote = (typeof ISOLATION_NOTES)[number];
 
 /** One replay a pair ran, whatever its kind: how it ended, where, when it got there, and what it left open. */

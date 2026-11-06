@@ -953,9 +953,12 @@ function paramsAccepted(journey: Journey, params: Record<string, string>): boole
 const CROSSED = "so state from one replay may cross into the next (a job it started, by any route, still running); isolate the replays or let the job end, and run the proof again";
 
 /** Why a replay may have decided another, from names alone, so an interrupted proof can give the same reason. */
-function isolationReason(note: IsolationNote, by: string | null): string {
-  if (note === "write-open") return `a replay of ${by ?? "a mutation"} closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided`;
-  if (note === "base-write-open") return "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided";
+export function isolationReason(note: IsolationNote, by: string | null, openLines: readonly string[] = []): string {
+  const open = `closed with a write still unanswered${openLines.length === 0 ? "" : ` (${openLines.join(", ")})`}, which may land inside a later replay; the proof cannot say which replay it decided`;
+  if (note === "write-open") return `a replay of ${by ?? "a mutation"} ${open}`;
+  if (note === "independence-write-open") return `the independence replay (the Journey as recorded, straight after the base) ${open}`;
+  if (note === "control-write-open") return `the control for ${by ?? "a mutation"} (the Journey as recorded, no mutation applied) ${open}`;
+  if (note === "base-write-open") return `the base replay ${open}`;
   if (note === "state-crossed") return `the Journey as recorded failed straight after the base replay and passed after a quiet gap, ${CROSSED}`;
   if (note === "state-stuck") return `the Journey as recorded no longer passes after the base replay, ${CROSSED}`;
   if (note === "independence-errored") return "the replay as recorded after the base errored, so the proof cannot say the replays are independent; retry it (--resume keeps what finished and runs this replay again)";
@@ -1000,6 +1003,10 @@ const labelOf = (m: JourneyMutation, kind: ReplayKind): string => {
   if (kind === "at-base-time") return `${m.id} (at the base's time)`;
   return m.id;
 };
+
+/** Which replay left a write open, as the taint records it: an unmutated replay applied no mutation, so none is blamed. */
+const openWriteOwner = (m: JourneyMutation, kind: ReplayKind): [IsolationNote, string | null] =>
+  kind === "independence" ? ["independence-write-open", null] : kind === "control" || kind === "targeted-control" ? ["control-write-open", m.id] : ["write-open", m.id];
 
 type BoundedRun = (options: Parameters<Run>[0], mutation: NonNullable<Parameters<Run>[1]>, m?: Pick<JourneyMutation, "id">, retry?: boolean, probe?: ReplayProbe) => ReturnType<Run>;
 type ReplayOptions = Omit<VerifyJourneyOptions, "readRequests" | "onProgress" | "slotGovernor" | "checkpoint">;
@@ -1101,7 +1108,10 @@ async function attemptReplay(c: ReplayContext, m: JourneyMutation, describe: (j:
     c.noteWritesInFlight(p.writesInFlightAtClose);
     if (kind === "independence") c.noteIndependenceOpen(p.openLinesAtClose);
     const excused = kind === "independence" && p.openLinesAtClose.every((line) => baseOpenLines.includes(line));
-    if (p.writesInFlightAtClose > 0 && !excused) taint("write-open", m.id);
+    if (p.writesInFlightAtClose > 0 && !excused) {
+      const [note, by] = openWriteOwner(m, kind);
+      taint(note, by, isolationReason(note, by, p.openLinesAtClose));
+    }
   };
   try {
     const paced = (j: Journey): MutationReplay => pacedReplay(j, describe(j), m, pace);
@@ -1223,7 +1233,7 @@ async function attemptReplay(c: ReplayContext, m: JourneyMutation, describe: (j:
       // A stall leaves a resumable checkpoint, so what the replay left open has to be on it. A replay whose close
       // never finished (a frozen renderer, a hold) can't say what was open: that counts as open.
       if (opened !== undefined && err.sessionsClosed) checkWritesLeftOpen(opened);
-      else if (opened !== undefined && opened.opened) taint("write-open", m.id);
+      else if (opened !== undefined && opened.opened) taint(...openWriteOwner(m, kind));
       throw err;
     }
     if (opened !== undefined) checkWritesLeftOpen(opened);
@@ -1611,7 +1621,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
       const floored = await runReplay(first, asRecorded, "independence");
       // A write still open at the bound in the base and the next replay is a long-lived connection. Open only in the base, it was a real one.
       if (baseOpenLines.some((line) => !independenceOpen.includes(line))) {
-        taint("base-write-open");
+        taint("base-write-open", null, isolationReason("base-write-open", null, baseOpenLines));
         return;
       }
       writeScope.addBackground(baseOpenLines);
@@ -1656,7 +1666,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
     if (firstMutation !== undefined && pace.stepEndMs.length > 0 && !tainted()) {
       checkpoint?.phase("independence");
       if (baseOpenLines.some((line) => writeScope.isRecorded(line))) {
-        taint("base-write-open");
+        taint("base-write-open", null, isolationReason("base-write-open", null, baseOpenLines));
       } else {
         await proveIndependence(firstMutation);
       }

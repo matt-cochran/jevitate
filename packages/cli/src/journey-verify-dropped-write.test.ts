@@ -8,7 +8,7 @@ import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import type { BrowserPort, BrowserSession } from "@jevitate/playwright";
 import type { JourneyVerifySeams } from "./journey-cli/verify.js";
 import { verifyCheckpointPath } from "./journey-verify-checkpoint.js";
-import { JourneyVerifyStalledError, verifyJourneyMutations, type JourneyVerifyReport } from "./journey-verify.js";
+import { JourneyVerifyStalledError, isolationReason, verifyJourneyMutations, type JourneyVerifyReport } from "./journey-verify.js";
 
 /**
  * A write open when a new document loads is gone with the old one, and the browser may report nothing
@@ -64,7 +64,7 @@ const stalled = (sessionsClosed: boolean): JourneyVerifyStalledError => new Jour
 const realTimer = setTimeout;
 
 /** A proof whose first mutated replay does `during` on its browser, then closes it. */
-async function proveWith(during: (browser: Browser) => void, thenThrow: boolean | Error = false, resume?: boolean): Promise<JourneyVerifyReport> {
+async function proveWith(during: (browser: Browser) => void, thenThrow: boolean | Error = false, resume?: boolean, atReplay = 3): Promise<JourneyVerifyReport> {
   let replay = 0;
   let browser: Browser;
   const browserPortFactory = (): BrowserPort => ({
@@ -81,7 +81,7 @@ async function proveWith(during: (browser: Browser) => void, thenThrow: boolean 
     const actor = { ability: () => ({ session: { page: {} } }) };
     await options.observer?.beforeStep?.({ index: 0, actor } as never);
     // The base replay, then the independence replay, then the first mutated one.
-    if (replay === 3) during(browser);
+    if (replay === atReplay) during(browser);
     await options.observer?.afterStep?.({ index: 0, actor, outcome: "done" } as never);
     const stalledOpen = thenThrow instanceof JourneyVerifyStalledError && !thenThrow.sessionsClosed && replay === 3;
     if (!stalledOpen) await session.close();
@@ -176,6 +176,27 @@ describe("a write a new document dropped", () => {
       context.emit("requestfinished", save);
     });
     expect(report.verdict, report.reason).toBe("insensitive");
+  });
+
+  it("names the replay that really had it open: the independence replay blames no mutation that never ran", async () => {
+    const report = await proveWith(write, false, undefined, 2);
+    expect(report.verdict).toBe("inconclusive");
+    expect(report.reason).toMatch(/^the independence replay \(the Journey as recorded, straight after the base\) closed with a write still unanswered \(POST \/api\/save\)/);
+    expect(report.reason).not.toContain("skip:1");
+    expect(report.mutations).toEqual([]);
+  });
+
+  it("a mutated replay is still named by its mutation, with the write it left open", async () => {
+    const report = await proveWith(write);
+    expect(report.reason).toMatch(/^a replay of skip:1 closed with a write still unanswered \(POST \/api\/save\)/);
+  });
+
+  it("a control is named as one, with no mutation applied", () => {
+    expect(isolationReason("control-write-open", "skip:3")).toMatch(/^the control for skip:3 \(the Journey as recorded, no mutation applied\) closed with a write still unanswered, /);
+  });
+
+  it("a resume gives the same names, without the lines a checkpoint does not keep", () => {
+    expect(isolationReason("independence-write-open", null)).toMatch(/^the independence replay \(the Journey as recorded, straight after the base\) closed with a write still unanswered, /);
   });
 
   it("a replay that throws is held to the same check: what it left open may land in the next", async () => {
