@@ -63,8 +63,9 @@ What `journey verify --mutate` runs, in order:
 A blocked write's recorded lines stay blocked for the rest of that replay, except while a later step that records the
 same line runs. If one is answered anyway (a popup, a worker), that mutation reads `not-applied`. Open writes are
 counted when they go to the Journey's own origins or a line it recorded, and a line it did not record that repeats is
-background. A write is open until it finishes or fails, or, on a `no-store` response only, until bytes of its body are reported (see
-"What a proof assumes"). A response alone does not close it: a server that sends its headers and keeps working has not answered yet. A write still open when any replay closes, or that replay throws or stalls, makes the proof `inconclusive`, and nothing further
+background. A write is open until it finishes or fails, until a new document in the opened page's top frame drops it, or, on a `no-store`
+response only, until bytes of its body are reported (see "What a proof assumes"). A response alone does not close it: a server that
+sends its headers and keeps working has not answered yet. A frame or a popup starting to load drops nothing. A write still open when any replay closes, or that replay throws or stalls, makes the proof `inconclusive`, and nothing further
 runs, as with a failed fixture restore. A stalled replay whose close never finished can't say what was open, and counts as having a write open, and a resume reads the same. A mutated replay that stopped early still stays open as long as the base did.
 
 ### What a proof assumes
@@ -92,7 +93,7 @@ holds only if all of these are true. Each one that fails can produce a false rea
 - **A blocked write's retry uses a recorded line.** A retry on a path the step never recorded is a new write and gets
   through. The site then reads `insensitive`, or `sensitive` for what remains, on an app the block no longer describes.
 - **An aborted write ends soon.** A write the browser gave up on, even after its response arrived, keeps its replay open
-  for 2 s, and so does one a new document dropped. A server still working after that is seen only through the independence replay.
+  for 2 s, and so does one a new document in the opened page's top frame dropped. A server still working after that is seen only through the independence replay.
 - **A write belongs to the step that was running when it started.** A recording places a write by time, so a write a
   timer sends after a later step started is credited to the later step. `block-write:<n>` goes further: it aborts every
   write sent during step n's window, recorded there or not. So a timer's write that lands in the last write step's window
@@ -113,7 +114,8 @@ holds only if all of these are true. Each one that fails can produce a false rea
   up to 2 s, and nothing if it was open that long anyway, and the write reads as answered. A `no-store` body with nothing reported stays open.
 
   This can be a false reading. The bytes are reported as they arrive, not at the end, when the page reads the body, holds
-  an unread `r.clone()` of it (a fetch wrapper that clones does this), or sent it with `sendBeacon`. So a `no-store` response
+  an unread `r.clone()` of it (a fetch wrapper that clones does this), sent it with `sendBeacon`, or the browser reads it as a
+  document (a form POST whose `no-store` page streams). So a `no-store` response
   whose server has sent its first bytes and goes on working reads as answered after those 2 s for those pages, and what the
   server does next is seen only through the independence replay. If that work changes what a site reads, that site can read
   `sensitive` and the proof `proven`. This can't be limited to pages that don't read: the browser sends the same kinds of event
@@ -124,7 +126,7 @@ holds only if all of these are true. Each one that fails can produce a false rea
   Reads as open, so `inconclusive` or `cascade`, though the server did answer: an unread `no-store` body over about 2 MB, which
   is never reported; a write a dedicated worker sends unread with `no-store`, since the page's events don't show it; one a
   popup sends as it opens, before the replay can watch it; a body a frame or a popup had reported, once the opened page loads
-  a new document; and any unread `no-store` write if the browser doesn't let the replay watch the page within 2 s.
+  a new document; a write open in a popup that navigates or closes, which nothing reports; and any unread `no-store` write if the browser doesn't let the replay watch the page within 2 s.
 
 Some readings are limits rather than assumptions: they are never `proven`, but they say less than the Journey deserves.
 

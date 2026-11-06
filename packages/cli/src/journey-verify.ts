@@ -446,7 +446,7 @@ class WriteScope {
 }
 
 /** A request as the context reports it; a test double may have less. */
-type WatchedRequest = { method(): string; url(): string; failure?(): { errorText: string } | null; isNavigationRequest?(): boolean };
+type WatchedRequest = { method(): string; url(): string; failure?(): { errorText: string } | null; isNavigationRequest?(): boolean; frame?(): unknown };
 
 /**
  * #785: watches one replay for the counts a failed control's diagnostics compare with the base
@@ -602,9 +602,19 @@ class ReplayProbe {
     const source = (typeof context?.on === "function" ? context : page) as { on?(event: string, listener: (r: WatchedRequest) => void): unknown } | undefined;
     if (typeof source?.on !== "function") return;
     const isWrite = (r: WatchedRequest): boolean => !READ_METHODS.has(r.method().toUpperCase());
+    // Only the opened page's top frame replaces the document that sent a write. A frame or a popup starting to load does not,
+    // and Playwright throws for a popup's first request. Anything it can't say keeps the write open.
+    const startsNewDocument = (r: WatchedRequest): boolean => {
+      try {
+        const top = page?.mainFrame?.();
+        return top !== undefined && r.isNavigationRequest?.() === true && r.frame?.() === top;
+      } catch {
+        return false;
+      }
+    };
     source.on("request", (r) => {
       this.#requestSeq += 1;
-      if (r.isNavigationRequest?.() === true) this.#navigationSeq = this.#requestSeq;
+      if (startsNewDocument(r)) this.#navigationSeq = this.#requestSeq;
       if (!isWrite(r)) return;
       this.#writesSent += 1;
       const line = lineOfRequest(r.method(), r.url());

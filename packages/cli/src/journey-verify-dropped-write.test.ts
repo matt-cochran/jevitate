@@ -44,7 +44,8 @@ const JOURNEY: Journey = {
   },
 };
 
-const request = (method: string, url: string, navigation = false): object => ({ method: () => method, url: () => url, isNavigationRequest: () => navigation });
+const TOP_FRAME = { name: "top" };
+const request = (method: string, url: string, navigation = false, frame: () => unknown = () => TOP_FRAME): object => ({ method: () => method, url: () => url, isNavigationRequest: () => navigation, frame });
 
 interface Browser {
   readonly context: EventEmitter;
@@ -81,7 +82,7 @@ async function proveWith(during: (browser: Browser) => void, thenThrow: boolean 
       const never = new Promise<never>(() => undefined);
       const cdp = Object.assign(new EventEmitter(), { send: async () => (hanging === "enable" ? never : {}) });
       Object.assign(context, { newCDPSession: async () => (hanging === "newCDPSession" ? never : cdp) });
-      const page = Object.assign(new EventEmitter(), { context: () => context });
+      const page = Object.assign(new EventEmitter(), { context: () => context, mainFrame: () => TOP_FRAME });
       browser = { context, page, cdp };
       return { page, close: async () => undefined } as unknown as BrowserSession;
     },
@@ -133,6 +134,36 @@ describe("a write a new document dropped", () => {
     });
     expect(report.reason ?? "").not.toMatch(UNANSWERED);
     expect(report.verdict, report.reason).toBe("insensitive");
+  });
+
+  describe("a navigation that replaces no document of the opened page", () => {
+    const loadedBy = (navigation: object) => (b: Browser): void => {
+      write(b);
+      b.context.emit("request", navigation);
+      b.page.emit("domcontentloaded");
+    };
+    const page = "http://127.0.0.1:9/frame";
+
+    it("a frame starting to load leaves the write open", async () => {
+      const report = await proveWith(loadedBy(request("GET", page, true, () => ({ name: "frame" }))));
+      expect(report.reason).toMatch(UNANSWERED);
+    });
+
+    it("a popup's first request, whose frame Playwright can't name, leaves the write open", async () => {
+      const report = await proveWith(
+        loadedBy(
+          request("GET", page, true, () => {
+            throw new Error("Frame for this navigation request is not available");
+          }),
+        ),
+      );
+      expect(report.reason).toMatch(UNANSWERED);
+    });
+
+    it("a request that names no frame leaves the write open", async () => {
+      const report = await proveWith(loadedBy({ method: () => "GET", url: () => page, isNavigationRequest: () => true }));
+      expect(report.reason).toMatch(UNANSWERED);
+    });
   });
 
   it("a write still open with no new document taints the proof", async () => {

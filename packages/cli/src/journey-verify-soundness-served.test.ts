@@ -832,7 +832,75 @@ const GZIP_FIRST_BLOCK = (res: ServerResponse): void => {
 /** Only `no-store` bodies report bytes only at their end. These read as open until they finish, whatever they sent. */
 const heldRow = (name: string, opts: Parameters<typeof heldSave>[0]): Row => ({ name, serve: heldSave(opts), journey: heldJourney, verdict: "inconclusive", reason: STILL_OPEN });
 
+/**
+ * A click loads /next, whose own script POSTs Save during load, then a frame or a popup starts loading before DOMContentLoaded.
+ * That document has gone nowhere, so its write is still its write. The site does not depend on Save: BUSY shows only in a mutated
+ * replay while the write is held.
+ */
+const LOAD_WRITE = "<script>fetch('/api/save',{method:'POST'}).catch(()=>{})</script>";
+const LOAD_IFRAME = '<iframe src="/frame"></iframe>';
+const LOAD_POPUP = "<script>window.open('/frame')</script>";
+const LOAD_SLOW = '<script src="/slow.js"></script>';
+const HEALTH_POLL = "<p id=\"health\">?</p><script>setInterval(async()=>{try{document.getElementById('health').textContent=(await (await fetch('/api/health')).json()).s}catch{}},250)</script>";
+const atLoad = (next: string, opts: { readonly headers: Record<string, string>; readonly noResponse?: true }) => (ctx: RowContext) => {
+  let held = false;
+  let sent = 0;
+  return (req: IncomingMessage, res: ServerResponse): void => {
+    const url = new URL(req.url ?? "/", "http://x");
+    if (url.pathname === "/api/health") return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ s: held && /^(?:skip|block)/.test(ctx.label) ? "BUSY" : "OK" }));
+    if (url.pathname === "/slow.js") return after(400, () => void res.writeHead(200, { "content-type": "text/javascript" }).end(""));
+    if (url.pathname === "/frame") return html(res, "frame");
+    if (url.pathname === "/next") return html(res, next);
+    if (url.pathname === "/api/save") {
+      req.resume();
+      if (url.searchParams.get("k") === "load") return void res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end("{}");
+      sent += 1;
+      if (sent > 1) return void res.writeHead(200, { "content-type": "application/json", ...opts.headers }).end("{}");
+      held = true;
+      after(60_000, () => {
+        held = false;
+        if (!res.headersSent) res.writeHead(200, opts.headers);
+        res.end("{}");
+      });
+      if (opts.noResponse === true) return;
+      res.writeHead(200, { "content-type": "application/json", ...opts.headers });
+      return void res.flushHeaders();
+    }
+    html(res, `<button id="save">Go</button>${HEALTH_POLL}<script>document.getElementById('save').onclick=()=>{location.href='/next'}</script>`);
+  };
+};
+const atLoadJourney = (site: string): Journey => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: NOCLAIM }, ...WROTE("/api/save") }], { endState: [{ kind: "page", assertion: text("#health", "OK") }] });
+const atLoadRow = (name: string, page: string, opts: Parameters<typeof atLoad>[1]): Row => ({ name, serve: atLoad(`${HEALTH_POLL}${LOAD_WRITE}${page}${LOAD_SLOW}`, opts), journey: atLoadJourney, verdict: "inconclusive", reason: STILL_OPEN });
+/** The load-time write is complete and unread, then a frame starts loading, then a click sends a held write on the same line. */
+const staleBodyRow = (name: string, headers: Record<string, string>): Row => ({
+  name,
+  serve: atLoad(`<button id="save2" onclick="fetch('/api/save',{method:'POST'}).catch(()=>{})">Save</button>${HEALTH_POLL}<script>fetch('/api/save?k=load',{method:'POST'}).catch(()=>{})</script>${LOAD_IFRAME}${LOAD_SLOW}`, { headers }),
+  journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: vis("#save2") } }, { step: { kind: "click", target: { css: "#save2" }, expect: NOCLAIM }, ...WROTE("/api/save") }], { endState: [{ kind: "page", assertion: text("#health", "OK") }] }),
+  verdict: "inconclusive",
+  reason: STILL_OPEN,
+});
+
 const ROWS_EXPERIMENT: readonly Row[] = [
+  atLoadRow("a load-time no-store write held, a frame starts loading before DOMContentLoaded: the write stays open", LOAD_IFRAME, { headers: { "cache-control": "no-store" } }),
+  atLoadRow("a load-time write held with no Cache-Control, a frame starts loading before DOMContentLoaded: the write stays open", LOAD_IFRAME, { headers: {} }),
+  atLoadRow("a load-time write with no response at all, a frame starts loading before DOMContentLoaded: the write stays open", LOAD_IFRAME, { headers: {}, noResponse: true }),
+  atLoadRow("a load-time no-store write held, a popup opens before DOMContentLoaded: the write stays open", LOAD_POPUP, { headers: { "cache-control": "no-store" } }),
+  staleBodyRow("a load-time write's body, a frame starting to load, then a held no-store write on that line: the body does not answer it", { "cache-control": "no-store" }),
+  staleBodyRow("a load-time write's body, a frame starting to load, then a held plain write on that line: the body does not answer it", {}),
+  {
+    name: "a new page's own complete unread no-store write, a frame starting to load before DOMContentLoaded: still answered",
+    serve: () => (req: IncomingMessage, res: ServerResponse): void => {
+      const path = pathOfUrl(req);
+      if (path === "/api/save") return void res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end("{}");
+      if (path === "/slow.js") return after(400, () => void res.writeHead(200, { "content-type": "text/javascript" }).end(""));
+      if (path === "/frame") return html(res, "frame");
+      if (path === "/next") return html(res, `<p id="said"></p><script>fetch('/api/save',{method:'POST'}).then(()=>{document.getElementById('said').textContent='Saved'})</script>${LOAD_IFRAME}${LOAD_SLOW}`);
+      html(res, `<button id="save">Save</button><script>document.getElementById('save').onclick=()=>{location.href='/next'}</script>`);
+    },
+    journey: unreadSaved,
+    verdict: "proven",
+    reading: ["step:2", "sensitive"],
+  },
   heldRow("answered with no-store, then keeps working with nothing sent: the write stays open", { headers: { "cache-control": "no-store" } }),
   heldRow("no Cache-Control, first bytes sent and unread: reported bytes do not answer it", { first: (res) => void res.write('{"a"') }),
   heldRow("Cache-Control: no-cache, first bytes sent and unread: reported bytes do not answer it", { headers: { "cache-control": "no-cache" }, first: (res) => void res.write('{"a"') }),
