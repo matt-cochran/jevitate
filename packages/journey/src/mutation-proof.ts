@@ -115,7 +115,7 @@ export type AssertionVerdict = MutationVerdict | "unpaired";
 
 export interface AssertionProof {
   readonly site: string;
-  /** An unpaired network/persistence end-state is an unresolved proof obligation. */
+  /** An unpaired own request or network/persistence end-state is a required unresolved obligation. */
   readonly required?: true;
   readonly verdict: AssertionVerdict;
   /** The mutation that proved it sensitive. */
@@ -1038,21 +1038,33 @@ function classifyMutationPlain(site: JourneyAssertionSite, m: JourneyMutation, r
   return fs.some((f) => f.where === "end-state" && f.index === site.index) ? "sensitive" : "cascade";
 }
 
+/** A passing same-owner skip contradicts its block's alleged final-request ownership, declared or inferred. */
+function effectiveVerdict(plan: MutationPlan, site: JourneyAssertionSite, m: JourneyMutation, results: ReadonlyMap<string, MutationRunResult>): MutationVerdict {
+  const verdict = classifyMutation(site, m, results.get(m.id) ?? { outcome: "error", failedSites: [] });
+  if (verdict !== "sensitive" || m.kind !== "block-write" || site.where !== "end-state" ||
+    (site.check.kind !== "requestMade" && site.check.kind !== "responseStatus")) return verdict;
+  const key = assertionSiteKey(site);
+  const contradicted = plan.mutations.some((other) => other.kind === "skip" && other.step === m.step &&
+    plan.pairs.some((p) => p.site === key && p.mutation === other.id) &&
+    classifyMutation(site, other, results.get(other.id) ?? { outcome: "error", failedSites: [] }) === "insensitive");
+  return contradicted ? "cascade" : verdict;
+}
+
 const PRECEDENCE: readonly MutationVerdict[] = ["sensitive", "insensitive", "cascade", "not-applied", "error"];
 
 /**
  * #616: is `key` proven sensitive to `m` — directly, or through a targeted proof whose own relaxed
  * sites are (recursively) proven sensitive to `m`? `visiting` breaks a relaxation cycle (unsound).
  */
-function provenSensitive(journey: Journey, m: JourneyMutation, results: ReadonlyMap<string, MutationRunResult>, key: string, visiting: ReadonlySet<string>): boolean {
+function provenSensitive(journey: Journey, plan: MutationPlan, m: JourneyMutation, results: ReadonlyMap<string, MutationRunResult>, key: string, visiting: ReadonlySet<string>): boolean {
   if (visiting.has(key)) return false;
   const site = journeyAssertions(journey).find((s) => assertionSiteKey(s) === key);
   const result = results.get(m.id) ?? { outcome: "error", failedSites: [] };
-  if (site === undefined || classifyMutation(site, m, result) !== "sensitive") return false;
+  if (site === undefined || effectiveVerdict(plan, site, m, results) !== "sensitive") return false;
   const proof = result.targeted?.find((t) => t.site === key);
   if (proof === undefined || proof.refused !== undefined) return true;
   const next = new Set([...visiting, key]);
-  return proof.relaxedSites.every((relaxed) => provenSensitive(journey, m, results, relaxed, next));
+  return proof.relaxedSites.every((relaxed) => provenSensitive(journey, plan, m, results, relaxed, next));
 }
 
 /**
@@ -1062,10 +1074,10 @@ function provenSensitive(journey: Journey, m: JourneyMutation, results: Readonly
  * verdict reached by a targeted proof records its relaxed sites; a cascade that a targeted attempt
  * refused records why (#609).
  */
-function judgePairedAssertion(journey: Journey, key: string, paired: readonly JourneyMutation[], results: ReadonlyMap<string, MutationRunResult>): AssertionProof & { readonly verdict: MutationVerdict } {
+function judgePairedAssertion(journey: Journey, plan: MutationPlan, key: string, paired: readonly JourneyMutation[], results: ReadonlyMap<string, MutationRunResult>): AssertionProof & { readonly verdict: MutationVerdict } {
   const site = journeyAssertions(journey).find((s) => assertionSiteKey(s) === key)!;
   const proofFor = (m: JourneyMutation, siteKey: string): TargetedProof | undefined => results.get(m.id)?.targeted?.find((t) => t.site === siteKey);
-  const verdicts = paired.map((m) => ({ m, v: classifyMutation(site, m, results.get(m.id) ?? { outcome: "error", failedSites: [] }) }));
+  const verdicts = paired.map((m) => ({ m, v: effectiveVerdict(plan, site, m, results) }));
   // #616: set when every sensitive verdict rested on an unproven relaxed site — those count as cascades.
   let unsound: string | undefined;
   for (const v of PRECEDENCE) {
@@ -1079,7 +1091,7 @@ function judgePairedAssertion(journey: Journey, key: string, paired: readonly Jo
       for (const { m } of verdicts.filter((x) => x.v === "sensitive")) {
         const proof = proofFor(m, key);
         if (proof === undefined || proof.refused !== undefined) return { site: key, verdict: v, provedBy: m.id };
-        const bad = proof.relaxedSites.find((relaxed) => !provenSensitive(journey, m, results, relaxed, new Set([key])));
+        const bad = proof.relaxedSites.find((relaxed) => !provenSensitive(journey, plan, m, results, relaxed, new Set([key])));
         if (bad === undefined) return { site: key, verdict: v, provedBy: m.id, relaxedSites: proof.relaxedSites };
         unsound ??= `relaxed site ${bad} is not itself proven sensitive to ${m.id}`;
       }
@@ -1099,19 +1111,20 @@ function judgePairedAssertion(journey: Journey, key: string, paired: readonly Jo
 export function judgeAssertions(journey: Journey, plan: MutationPlan, results: ReadonlyMap<string, MutationRunResult>): AssertionProof[] {
   return journeyAssertions(journey).map((site) => {
     const key = assertionSiteKey(site);
-    const paired = plan.mutations.filter((m) => plan.pairs.some((p) => p.site === key && p.mutation === m.id));
-    if (paired.length === 0) return { site: key, verdict: "unpaired", ...(site.where === "end-state" && site.check.kind !== "page" ? { required: true as const } : {}) };
+    const sitePairs = plan.pairs.filter((p) => p.site === key);
+    const paired = plan.mutations.filter((m) => sitePairs.some((p) => p.mutation === m.id));
+    if (paired.length === 0) return { site: key, verdict: "unpaired", ...((site.where === "step-request" || (site.where === "end-state" && site.check.kind !== "page")) ? { required: true as const } : {}) };
     const data = paired.filter((m) => m.kind !== "skip" && m.kind !== "block-write");
     const action = paired.filter((m) => m.kind === "skip" || m.kind === "block-write");
-    if (data.length === 0 || action.length === 0) return judgePairedAssertion(journey, key, paired, results);
+    if (data.length === 0 || action.length === 0) return judgePairedAssertion(journey, plan, key, paired, results);
     const obligations = [
-      { kind: "data" as const, ...judgePairedAssertion(journey, key, data, results) },
-      { kind: "action" as const, ...judgePairedAssertion(journey, key, action, results) },
+      { kind: "data" as const, ...judgePairedAssertion(journey, plan, key, data, results) },
+      { kind: "action" as const, ...judgePairedAssertion(journey, plan, key, action, results) },
     ];
     // Once both propositions are proven, retain the first sound witness in original plan order
     // for compatibility. Its relaxations belong to that witness; grouped evidence stays intact.
     if (obligations.every((o) => o.verdict === "sensitive")) {
-      return { ...judgePairedAssertion(journey, key, paired, results), obligations: obligations.map(({ site: _site, ...o }) => o) };
+      return { ...judgePairedAssertion(journey, plan, key, paired, results), obligations: obligations.map(({ site: _site, ...o }) => o) };
     }
     // Alternative witnesses still use the established rules WITHIN one proposition. Across
     // propositions, any vacuity or unresolved evidence remains visible; both must be sensitive.
@@ -1144,7 +1157,7 @@ export function mutationProofVerdict(input: {
   const paired = input.assertions.filter((a) => a.verdict !== "unpaired");
   if (paired.length === 0) return { verdict: "inconclusive", reason: "no assertion is paired with a mutation (no write step, no checked fill, no checked parameter, no mutationPairs)" };
   if (paired.some((a) => a.verdict === "insensitive")) return { verdict: "insensitive" };
-  if (input.assertions.some((a) => a.required === true && a.verdict === "unpaired")) return { verdict: "inconclusive", reason: "a network or persistence end-state has no established causal mutation pair" };
+  if (input.assertions.some((a) => a.required === true && a.verdict === "unpaired")) return { verdict: "inconclusive", reason: "a network or persistence assertion has no established causal mutation pair" };
   if (paired.every((a) => a.verdict === "sensitive")) return { verdict: "proven" };
   const refusals = input.assertions.map((a) => a.targetedRefusal).filter((r): r is string => r !== undefined);
   if (refusals.length > 0) {

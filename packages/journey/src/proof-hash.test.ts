@@ -100,3 +100,13 @@ it("an unknown (future) field is included by default", () => {
 it("a success criterion added in words only (annotate, no check) does not change the proof hash", () => {
   expect(edited((j) => { j.metadata.successCriteria!.push({ description: "A receipt is emailed" }); })).toBe(BASE);
 });
+
+// Captured from the built v6 planner before the reconciliation; the same executable Journey
+// must invalidate that receipt when ownership/horizon/unresolved-request semantics advance.
+it("does not reuse a v6 receipt under the reconciled planner", () => {
+  const legacy: Journey = {
+    metadata: { id: "legacy-v6", name: "Legacy v6", promoted: false, params: [], createdAtIso: "2026-11-06T00:00:00Z" },
+    recording: { version: "1", site: "http://fixture.test", pages: [{ url: "/", steps: [{ step: { kind: "navigate", url: "/", expect: { kind: "urlIncludes", text: "/" } } }] }] },
+  };
+  expect(journeyProofHash(legacy)).not.toBe("f81b21658e36a8765169ba6737bcaf16eceb3300eee8f356a458cfdb679e2b85");
+});

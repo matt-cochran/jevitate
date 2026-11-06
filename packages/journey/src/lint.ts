@@ -2,7 +2,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { canonicalJson } from "@jevitate/domain";
 import type { Assertion, RecordedStep, Step, TargetDescriptor } from "@jevitate/recording";
-import { assertionRefs, fixtureEscapesRoot, fixtureRootRefusal, fixtureSensitiveReason, targetDescriptorSelectorProblem, writeClassifier, type WriteClassifier } from "@jevitate/recording";
+import { assertionRefs, fixtureEscapesRoot, fixtureRootRefusal, fixtureSensitiveReason, targetDescriptorSelectorProblem, writeClassifier, WRITE_METHODS, type WriteClassifier } from "@jevitate/recording";
 import type { Journey } from "./journey.js";
 import { isNoClaimExpect, isOwnTargetVisible, journeyAssertions, type JourneyAssertionSite } from "./assertions.js";
 import { anchorLintIssues, type AnchorRuleCode } from "./anchor-rules.js";
@@ -166,12 +166,23 @@ function writeRequestsOf(recorded: RecordedStep, classify: WriteClassifier): Wri
   return out;
 }
 
+/** A declared RPC glob is not a concrete request: never classify its language from one sample. */
+function declaredRequestEvidence(check: { readonly method: string; readonly pathGlob: string }, classify: WriteClassifier): "read" | "write" | "unresolved" {
+  if (!WRITE_METHODS.has(check.method.toUpperCase())) return "read";
+  const path = check.pathGlob.replace(/^[a-z][a-z\d+.-]*:\/\/[^/]*/i, "").split(/[?#]/)[0]!;
+  if (/[*{}]/.test(path) && /\/[^/]*\.[^/]*\//.test(path)) return "unresolved";
+  return classify({ method: check.method, path: check.pathGlob }) ? "write" : "read";
+}
+
+function checkNamesWrite(check: { readonly method: string; readonly pathGlob: string }, classify: WriteClassifier): boolean {
+  return declaredRequestEvidence(check, classify) === "write";
+}
+
 function isWriteStep(recorded: RecordedStep, classify: WriteClassifier, requests: readonly WriteRequest[]): boolean {
   if (requests.length > 0) return true;
   // (b) a step's own request expectation names a write method for its path.
-  if ((recorded.expectRequests ?? []).some((check) => classify({ method: check.method, path: check.pathGlob }))) return true;
-  // Capture is a partial window, not a certificate of absent writes. GETs, configured
-  // read RPCs and unrelated expectations cannot erase uncertainty about a changed UI.
+  if ((recorded.expectRequests ?? []).some((check) => checkNamesWrite(check, classify))) return true;
+  // An action-window sample or a read expectation cannot certify absence of other writes.
   // (c) a state-changing step whose delta changed the page, even if the request was not recorded.
   return recorded.delta?.verdict === "relevant-change" && STATE_CHANGING.has(recorded.step.kind);
 }
@@ -275,7 +286,7 @@ export function journeyMutationSteps(journey: Journey, opts: JourneyLintOptions 
   const classify = writeClassifier({ readRequests: opts.readRequests });
   return flattenSteps(journey).flatMap((recorded, i) => {
     const observed = writeRequestsOf(recorded, classify).map(({ method, path }) => ({ method, pathGlob: path, literal: true as const }));
-    const declared = (recorded.expectRequests ?? []).filter((check) => classify({ method: check.method, path: check.pathGlob }));
+    const declared = (recorded.expectRequests ?? []).filter((check) => checkNamesWrite(check, classify));
     const requests = [...observed, ...declared.map(({ method, pathGlob }) => ({ method, pathGlob }))];
     const knownHttpWrite = requests.length > 0;
     const action = recorded.step;
@@ -312,7 +323,7 @@ export function lintJourney(journey: Journey, opts: JourneyLintOptions = {}): Jo
   const refsBound = (a: Assertion): boolean => assertionRefsBound(journey, a);
   const writeRequests = recorded.map((r) => writeRequestsOf(r, classify));
   const knownHttpWrites = recorded.map((r, i) => writeRequests[i]!.length > 0 ||
-    (r.expectRequests ?? []).some((check) => classify({ method: check.method, path: check.pathGlob })));
+    (r.expectRequests ?? []).some((check) => checkNamesWrite(check, classify)));
   const effects = sites.filter((site) => isEffectSite(site, site.where === "step" ? stepOf(site.step) : undefined, refsBound,
     site.where === "step" && knownHttpWrites[site.step - 1] === true));
   const endEffects = effects.filter((site) => site.where === "end-state");
@@ -368,7 +379,7 @@ export function lintJourney(journey: Journey, opts: JourneyLintOptions = {}): Jo
       rule: "write-without-effect",
       level: "error",
       step: n,
-      message: `step ${n}: write step has no effect assertion${request === undefined ? "" : ` (write request: ${request})`}`,
+      message: `step ${n}: ${knownHttpWrites[i] === true ? "write step" : "UI effect"} has no effect assertion${request === undefined ? "" : ` (write request: ${request})`}`,
     });
   }
 
@@ -393,7 +404,9 @@ export function lintJourney(journey: Journey, opts: JourneyLintOptions = {}): Jo
     findings.push({
       rule: "no-persistence-check",
       level: "warning",
-      message: `write step (step ${lastWrite}) has no reloadThen or http end-state check — persistence is unverified`,
+      message: knownHttpWrites[lastWrite - 1] === true
+        ? `write step (step ${lastWrite}) has no reloadThen or http end-state check — persistence is unverified`
+        : `UI effect at step ${lastWrite} has incomplete write coverage; persistence requirements are unresolved.`,
     });
   }
 

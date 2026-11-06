@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RecordedStep } from "@jevitate/recording";
+import { writeClassifier } from "@jevitate/recording";
 import { judgeAssertions, lintJourney, mutationProofVerdict, mutationReplay, mutationWriteMatches, planJourneyMutations, type Journey, type MutationRunResult } from "./index.js";
 
 function journey(steps: RecordedStep[], endState: Journey["metadata"]["endState"] = []): Journey {
@@ -35,7 +36,8 @@ describe("UI effects and known HTTP writes are distinct mutation candidates", ()
     expect(planJourneyMutations(journey([click("apply", ["GET /telemetry → 200"])] )).mutations.map((m) => m.id)).toEqual(["skip:1"]);
   });
 
-  it.each([[], ["GET /telemetry → 200"], ["malformed"], ["unrecognized method"], Array.from({ length: 10 }, (_, i) => `GET /poll/${i} → 200`)])(
+  // Each row is wrapped: it.each spreads a row, which would pass one string instead of the request list.
+  it.each([[[]], [["GET /telemetry → 200"]], [["malformed"]], [["unrecognized method"]], [Array.from({ length: 10 }, (_, i) => `GET /poll/${i} → 200`)]])(
     "retains persistence uncertainty with incomplete request evidence %j",
     (requests) => {
       expect(lintJourney(journey([click("apply", requests)])).some((f) => f.rule === "no-persistence-check")).toBe(true);
@@ -140,6 +142,109 @@ describe("UI effects and known HTTP writes are distinct mutation candidates", ()
     const results = new Map(plan.mutations.map((m) => [m.id, { outcome: "failed", failedSites: [{ where: "step", step: m.step, postcondition: true }] } as MutationRunResult]));
     expect(mutationProofVerdict({ basePassed: true, mutations: [...results.values()], assertions: judgeAssertions(j, plan, results) }).verdict).toBe("inconclusive");
   });
+
+  describe("a final network check the block broke and the skip did not", () => {
+    const j = journey([click("b", ["POST /api/sync → 200"])], [{ kind: "responseStatus", method: "POST", pathGlob: "/api/sync", status: { class: 2 } }]);
+    const failedAtEnd: MutationRunResult = { outcome: "failed", failedSites: [{ where: "end-state", index: 0 }] };
+    const passed: MutationRunResult = { outcome: "passed", failedSites: [] };
+    const reading = (journeyUnderTest: Journey, skip: MutationRunResult): string | undefined =>
+      judgeAssertions(journeyUnderTest, planJourneyMutations(journeyUnderTest), new Map([["skip:1", skip], ["block-write:1", failedAtEnd]])).find((a) => a.site === "end-state:0")?.verdict;
+
+    it("is insensitive: the block aborted a request this step did not send", () => {
+      expect(reading(j, passed)).toBe("insensitive");
+    });
+
+    it("stays sensitive when skip and block agree", () => {
+      expect(reading(j, failedAtEnd)).toBe("sensitive");
+    });
+
+    it.each([
+      { outcome: "error" as const, failedSites: [] },
+      { outcome: "not-applied" as const, failedSites: [] },
+      { outcome: "failed" as const, failedSites: [{ where: "step" as const, step: 1, postcondition: false }] },
+    ])("does not require a successful skip when its outcome is $outcome", (skip) => {
+      expect(reading(j, skip)).toBe("sensitive");
+    });
+
+    it("keeps a clean declared block usable without a contradictory paired skip", () => {
+      const plan = planJourneyMutations(j);
+      const paired = { ...plan, pairs: plan.pairs.filter((p) => !(p.site === "end-state:0" && p.mutation === "skip:1")).map((p) => p.site === "end-state:0" ? { ...p, declared: true as const } : p) };
+      const results = new Map<string, MutationRunResult>([["skip:1", passed], ["block-write:1", failedAtEnd]]);
+      expect(judgeAssertions(j, paired, results).find((a) => a.site === "end-state:0")).toEqual({ site: "end-state:0", verdict: "sensitive", provedBy: "block-write:1" });
+    });
+
+    it("a declared block cannot erase the passing same-owner skip", () => {
+      const declared = structuredClone(j);
+      declared.metadata.mutationPairs = [{ check: "end-state:0", mustFailWhen: "block-write:1" }];
+      expect(reading(declared, passed)).toBe("insensitive");
+    });
+  });
+
+  it.each(["/board.v1.Items/Get*", "/board.v1.Items/GetItem*", "/board.v1.Items/*", "/board.v1.*/GetItem"])("keeps ambiguous RPC glob %s unresolved and its own guard required", (pathGlob) => {
+    const action: RecordedStep = { step: { kind: "click", target: { testId: "open" }, expect: { kind: "urlIncludes", text: "" } }, expectRequests: [{ kind: "requestMade", method: "POST", pathGlob }] };
+    const j = journey([action, click("unrelated")]);
+    const plan = planJourneyMutations(j);
+    expect(plan.mutations.map((m) => m.id)).toEqual(["skip:2"]);
+    const results = new Map<string, MutationRunResult>([["skip:2", { outcome: "failed", failedSites: [{ where: "step", step: 2, postcondition: true }] }]]);
+    const assertions = judgeAssertions(j, plan, results);
+    expect(assertions.find((a) => a.site === "step-request:1:0")).toEqual({ site: "step-request:1:0", verdict: "unpaired", required: true });
+    expect(mutationProofVerdict({ basePassed: true, mutations: [...results.values()], assertions }).verdict).toBe("inconclusive");
+  });
+
+  it("preserves both actual classifier counterexamples to one-sample RPC glob inference", () => {
+    const classify = writeClassifier();
+    expect(classify({ method: "POST", path: "/board.v1.Items/GetX" })).toBe(false);
+    expect(classify({ method: "POST", path: "/board.v1.Items/Getaway" })).toBe(true);
+    expect(classify({ method: "POST", path: "/board.v1.Items/GetItemX" })).toBe(false);
+    expect(classify({ method: "POST", path: "/board.v1.Items/GetItem/evil.Service/DeleteAll" })).toBe(true);
+  });
+
+  it("retains concrete read classification and concrete observed write applicability", () => {
+    const action: RecordedStep = { step: { kind: "click", target: { testId: "open" }, expect: { kind: "urlIncludes", text: "" } }, expectRequests: [{ kind: "requestMade", method: "POST", pathGlob: "/board.v1.Items/GetItem" }] };
+    expect(planJourneyMutations(journey([action])).mutations).toEqual([]);
+    action.expectRequests = [{ kind: "requestMade", method: "POST", pathGlob: "/board.v1.Items/GetItem?view=*" }];
+    expect(planJourneyMutations(journey([action])).mutations).toEqual([]);
+    action.expectRequests = [{ kind: "requestMade", method: "POST", pathGlob: "/board.v1.Items/*" }];
+    action.delta = { verdict: "no-change", why: "captured", changes: [], requests: ["POST /board.v1.Items/DeleteItem → 200"], overheadMs: 0 };
+    expect(planJourneyMutations(journey([action])).mutations.map((m) => m.id)).toEqual(["skip:1", "block-write:1"]);
+  });
+
+  it("does not let a contradicted owner discard an independently sound alternative", () => {
+    const j = journey([click("timer-window", ["POST /sync → 200"]), click("real-owner", ["POST /sync → 200"])], [{ kind: "responseStatus", method: "POST", pathGlob: "/sync", status: { class: 2 } }]);
+    j.metadata.mutationPairs = ["skip:1", "block-write:1", "skip:2", "block-write:2"].map((mustFailWhen) => ({ check: "end-state:0", mustFailWhen }));
+    const failed: MutationRunResult = { outcome: "failed", failedSites: [{ where: "end-state", index: 0 }] };
+    const results = new Map<string, MutationRunResult>([["skip:1", { outcome: "passed", failedSites: [] }], ["block-write:1", failed], ["skip:2", failed], ["block-write:2", failed]]);
+    expect(judgeAssertions(j, planJourneyMutations(j), results).find((a) => a.site === "end-state:0")).toEqual({ site: "end-state:0", verdict: "sensitive", provedBy: "skip:2" });
+  });
+
+  it("retains independent data/action group evidence beside a contradicted block", () => {
+    const j = journey([click("b", ["POST /sync → 200"])], [{ kind: "responseStatus", method: "POST", pathGlob: "/sync", status: { class: 2 } }]);
+    const plan = planJourneyMutations(j);
+    const data = { kind: "swap-param" as const, id: "swap-param:reply", step: 1, param: "reply" };
+    const paired = { mutations: [...plan.mutations, data], pairs: [...plan.pairs, { site: "end-state:0", mutation: data.id }] };
+    const failed: MutationRunResult = { outcome: "failed", failedSites: [{ where: "end-state", index: 0 }] };
+    const results = new Map<string, MutationRunResult>([["skip:1", { outcome: "passed", failedSites: [] }], ["block-write:1", failed], [data.id, failed]]);
+    expect(judgeAssertions(j, paired, results).find((a) => a.site === "end-state:0")).toEqual({ site: "end-state:0", verdict: "insensitive", obligations: [
+      { kind: "data", verdict: "sensitive", provedBy: data.id }, { kind: "action", verdict: "insensitive" },
+    ] });
+  });
+
+  it("cannot use a disqualified network witness to authorize a downstream targeted relaxation", () => {
+    const j = journey([click("b", ["POST /sync → 200"])], [
+      { kind: "responseStatus", method: "POST", pathGlob: "/sync", status: { class: 2 } },
+      { kind: "page", assertion: { kind: "valueEquals", target: { testId: "objective" }, value: "Improved" } },
+    ]);
+    j.metadata.mutationPairs = [{ check: "end-state:1", mustFailWhen: "block-write:1" }];
+    const plan = planJourneyMutations(j);
+    // Isolate the downstream witness; the network site's same-owner skip still contradicts the block.
+    const paired = { ...plan, pairs: plan.pairs.filter((p) => !(p.site === "end-state:1" && p.mutation === "skip:1")) };
+    const results = new Map<string, MutationRunResult>([
+      ["skip:1", { outcome: "passed", failedSites: [] }],
+      ["block-write:1", { outcome: "failed", failedSites: [{ where: "end-state", index: 0 }], targeted: [{ site: "end-state:1", relaxedSites: ["end-state:0"], outcome: "failed", failedSites: [{ where: "end-state", index: 1 }], control: "passed" }] }],
+    ]);
+    expect(judgeAssertions(j, paired, results).find((a) => a.site === "end-state:1")).toEqual({ site: "end-state:1", verdict: "cascade", targetedRefusal: "relaxed site end-state:0 is not itself proven sensitive to block-write:1" });
+  });
+
 });
 
 describe("conservative inferred UI ownership", () => {

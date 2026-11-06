@@ -42,6 +42,7 @@ import { clock } from "@jevitate/domain";
 import { journeyContentHash } from "./journey-annotate-api.js";
 import { journeyReviewHash } from "./journey-review.js";
 import { preflightVerifyRecord, writePreflightedVerifyRecord } from "./journey-review-store.js";
+import type { StepObserver } from "@jevitate/interpreter";
 import { UnknownJourneyError, redactSecretParams, runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import type { OutcomeCheckFailure } from "./journey-network-checks.js";
 import { journeyProofContext, journeyProofHashForContext } from "./journey-proof-context.js";
@@ -197,7 +198,9 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
   const lintOpts = readRequests === undefined ? {} : { readRequests };
   const journeyHash = journeyContentHash(journey);
 
+  const baseStartedAt = clock.monotonicMs();
   const base = await run(runOpts, { structuredFailures: true });
+  const baseMs = clock.monotonicMs() - baseStartedAt;
   const baseFields = { outcome: base.outcome, ...(base.outcome === "quarantined" ? { reason: base.reason } : {}) };
   const sites = journeyAssertions(journey);
   const checkOf = new Map(sites.map((s) => [assertionSiteKey(s), describeCheck(s.check)]));
@@ -214,10 +217,29 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
     const replayOpts = { ...lintOpts, params: opts.params };
     // The replay is DESCRIBED, not fixed: `mutateJourney` re-describes it on the Journey the run moved
     // onto the environment (#247), so a mutated copy never drops `--env`/`--base-url`.
-    const runReplay = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay): Promise<Replayed> => {
+    const runReplay = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay, holdMs: number | undefined): Promise<Replayed> => {
       try {
         const how = describe(journey);
-        const r = await run(how.params === undefined ? runOpts : { ...runOpts, params: { ...how.params } }, {
+        const startedAt = clock.monotonicMs();
+        const lastStep = journey.recording.pages.reduce((n, page) => n + page.steps.length, 0) - 1;
+        let horizonComplete = holdMs === undefined;
+        let horizonError = false;
+        const hold: StepObserver = {
+          afterStep: async ({ index, outcome }) => {
+            if (holdMs === undefined || index !== lastStep || outcome !== "done") return;
+            try {
+              const left = holdMs - (clock.monotonicMs() - startedAt);
+              if (left > 0) await clock.sleep(Math.ceil(left));
+              horizonComplete = clock.monotonicMs() - startedAt >= holdMs;
+            } catch {
+              // Observer errors are swallowed by the interpreter. Retain failure privately and
+              // never turn a missing/cancelled observation opportunity into absence evidence.
+              horizonError = true;
+            }
+          },
+        };
+        const held = holdMs === undefined ? runOpts : { ...runOpts, observer: hold };
+        const r = await run(how.params === undefined ? held : { ...held, params: { ...how.params } }, {
           structuredFailures: true,
           ...(how.relaxedStepRequests === undefined ? {} : { relaxedStepRequests: how.relaxedStepRequests }),
           ...(how.journey === journey ? {} : { mutateJourney: (j) => describe(j).journey }),
@@ -225,6 +247,14 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
           ...(how.swapSelectAtStep === undefined ? {} : { selectAlternativeAtStep: how.swapSelectAtStep }),
           ...(how.blockIndex === undefined ? {} : { blockWritesAtStep: how.blockIndex }),
         });
+        if (holdMs !== undefined && r.outcome === "heal-exhausted") {
+          return { outcome: "failed", failedSites: [{ where: "step", step: r.at + 1, postcondition: false }], reason: r.reason };
+        }
+        // A replay that stopped at a step retains its original failure/cascade. A result at
+        // the final-check boundary needs the completed hold, even when the observer was skipped.
+        if (holdMs !== undefined && !horizonComplete && !(r.outcome === "quarantined" && r.at !== undefined)) {
+          return { outcome: "error", failedSites: [], reason: horizonError ? "final-network observation horizon failed" : "final-network observation horizon did not complete" };
+        }
         const blocked = r.blockedWrites ?? [];
         const blockedFields = how.blockIndex === undefined ? {} : { blockedWrites: blocked.map((b) => `${b.method} ${b.path}`) };
         // #579: a select mutation found no other enabled live option — not applied, never proof.
@@ -250,7 +280,14 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
       }
     };
     // #402: a named mutation lowers to its `MutationReplay`; #609's targeted proof passes one directly.
-    const replay = (m: JourneyMutation, describe: typeof mutationReplay): Promise<Replayed> => runReplay(m, (j) => describe(j, m, replayOpts));
+    // A skipped step may be all that gave an earlier step's timer time to send the final check's request.
+    // Its replay gets the base's time before that check is judged, so a late request is not read as a missing one.
+    const judgesRequest = (m: JourneyMutation): boolean => m.kind === "skip" && plan.pairs.some((p) => {
+      const site = p.mutation === m.id ? siteByKey.get(p.site) : undefined;
+      return site?.where === "end-state" && (site.check.kind === "requestMade" || site.check.kind === "responseStatus");
+    });
+    const holdFor = (m: JourneyMutation): number | undefined => (judgesRequest(m) ? baseMs : undefined);
+    const replay = (m: JourneyMutation, describe: typeof mutationReplay): Promise<Replayed> => runReplay(m, (j) => describe(j, m, replayOpts), holdFor(m));
     const siteByKey = new Map(sites.map((s) => [assertionSiteKey(s), s]));
     for (const m of plan.mutations) {
       const first = await replay(m, mutationReplay);
@@ -269,8 +306,8 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
         const declared = declaredTargetedProofFor(journey, m, pair.site);
         targeted.push(
           declared === undefined
-            ? await runTargetedProof(journey, plan, m, site, initial, (describe) => runReplay(m, describe), replayOpts)
-            : await runDeclaredTargetedProof(journey, plan, m, site, declared, (describe) => runReplay(m, describe), replayOpts),
+            ? await runTargetedProof(journey, plan, m, site, initial, (describe) => runReplay(m, describe, holdFor(m)), replayOpts)
+            : await runDeclaredTargetedProof(journey, plan, m, site, declared, (describe) => runReplay(m, describe, holdFor(m)), replayOpts),
         );
         // #616: a proof the automatic bound stopped names the plan a human could declare instead.
         const suggestion = suggestTargetedProofPlan(targeted[targeted.length - 1]!, m);
