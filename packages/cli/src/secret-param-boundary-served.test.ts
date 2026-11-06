@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ProfileManager } from "@jevitate/daemon";
 import { ALLOWED_TOOLS } from "@jevitate/mcp-facade";
-import type { Journey } from "@jevitate/journey";
+import { FsJourneyStore, isSecretName, type Journey } from "@jevitate/journey";
 import { buildMcpTools, type McpTool } from "./mcp-api.js";
 import { CLI_TOOL_SPECS, type CliCommandSpec } from "./mcp-cli-tools.js";
 import { makeInProcessCliRunner } from "./mcp-cli-runner.js";
@@ -396,6 +396,50 @@ describe("which names count (H3, R5, M3)", { timeout: 120_000 }, () => {
     const r = await call("run_journey", { id: `named-${name}`, params: { [name]: "3" } });
     expect(r.body["outcome"], r.text).toBe("ok");
     expect(r.body["output"]).toMatchObject({ [name]: "3" }); // and it is not redacted
+  });
+});
+
+describe("the broad name list doesn't decide whether a Journey loads", { timeout: 120_000 }, () => {
+  useSkippingTime();
+  const loadsFrom = (j: Journey): Journey => {
+    approved(j);
+    writeFileSync(join(journeysDir, `${j.metadata.id}.json`), JSON.stringify(j));
+    return j;
+  };
+
+  it("an assertion on ${key} loads and runs on the CLI, the value redacted; over MCP the value is refused", async () => {
+    const j = journey("asserts-key", "key");
+    j.metadata.parameters = [{ name: "key" }];
+    j.recording.pages[0]!.steps = [
+      { step: { kind: "navigate", url: "/", expect: { kind: "visible", target: { testId: "who" } } } },
+      { step: { kind: "fill", target: { testId: "who" }, value: { var: "key" }, expect: { kind: "valueEquals", target: { testId: "who" }, value: { var: "key" } } } },
+    ] as never;
+    loadsFrom(j);
+    const r = await cli(["journey", "run", "asserts-key", "--param", "key=kEy-VaLuE-77", "--json"]);
+    expect(JSON.parse(r.out), r.out).toMatchObject({ ok: true, data: { outcome: "ok" } });
+    expect(r.out).not.toContain("kEy-VaLuE-77");
+    const over = await call("run_journey", { id: "asserts-key", params: { key: "kEy-VaLuE-77" } });
+    expect(over.body).toMatchObject({ code: SECRET_PARAM_OVER_MCP, params: ["key"] });
+    expect(over.text).not.toContain("kEy-VaLuE-77");
+  });
+
+  it.each(["key", "signature", "nonce"])("a body-shape field named %s loads", async (field) => {
+    const j = journey(`shape-${field}`, "who");
+    j.metadata.parameters = [{ name: "who" }];
+    j.recording.pages[0]!.steps = [{ step: { kind: "navigate", url: "/", expect: { kind: "visible", target: { testId: "who" } } } }, { step: { kind: "fill", target: { testId: "who" }, value: { var: "who" }, expect: { kind: "visible", target: { testId: "who" } } }, }] as never;
+    j.metadata.endState = [{ kind: "requestMade", method: "POST", pathGlob: "/x", bodyShape: { fields: [{ name: field, predicate: "string" }] } }] as never;
+    loadsFrom(j);
+    const stored = await new FsJourneyStore(journeysDir).get(j.metadata.id);
+    expect(stored?.metadata.id).toBe(j.metadata.id);
+    expect(isSecretName(field)).toBe(true); // ...and the broad list still reads it as a credential
+  });
+
+  it("a word from the old rule still refuses to load, as it did", async () => {
+    const j = journey("shape-password", "who");
+    j.metadata.endState = [{ kind: "requestMade", method: "POST", pathGlob: "/x", bodyShape: { fields: [{ name: "password", predicate: "string" }] } }] as never;
+    loadsFrom(j);
+    await expect(new FsJourneyStore(journeysDir).get("shape-password")).rejects.toThrow(/names a credential/);
+    rmSync(join(journeysDir, "shape-password.json"));
   });
 });
 

@@ -1,7 +1,7 @@
 import type { BoundSecretParams } from "./secret-params.js";
 import type { JourneyRunRecorder } from "./journey-run-record.js";
 import { allowedOriginSet, offAllowlistWriteOrigin, prepareMcpRunGuard } from "./mcp-run-guard.js";
-import { FsJourneyStore, JourneyRegistry, ParamValidationError, declaredNonSecretParams, describeStep, isSecretName, flatJourneySteps, journeyEndState, journeyParamSchema, journeyPrefix, lintJourney, lintUploadFixtures, secretNamedValues, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError, declaredNonSecretParams, describeStep, isSecretName, loadRefusedParamNames, flatJourneySteps, journeyEndState, journeyParamSchema, journeyPrefix, lintJourney, lintUploadFixtures, secretNamedValues, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
 import { assertHttpChecksAllowed, createHttpProbe, httpCheckRefs } from "./http-probe.js";
 import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
 import { journeyEntry } from "./forge-verify.js";
@@ -688,7 +688,7 @@ export async function runJourneyProgrammatically(
       // and each step's request expectations.
       // #543: `${name}` from the run's params (a secret param refused) and `${setup.x}` from the
       // fixture bindings — for the end state's checks and (#565) every step expectation's references.
-      const refs = httpCheckRefs({ params, secretParams: secretParamNames(journey, params), ...(fx === undefined ? {} : { bindings: fx.bindings() }) });
+      const refs = httpCheckRefs({ params, secretParams: loadRefusedParamNames(journey, params), ...(fx === undefined ? {} : { bindings: fx.bindings() }) });
       const outcomeChecks = new JourneyOutcomeChecks(session.page, journey === full ? replayed : undefined, {
         ...(mutation.relaxedStepRequests === undefined ? {} : { relaxedStepRequests: mutation.relaxedStepRequests }),
         secrets,

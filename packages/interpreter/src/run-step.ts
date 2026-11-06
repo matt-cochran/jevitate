@@ -2,7 +2,7 @@ import { isAbsolute } from "node:path";
 import type { ElementHandle, Locator, Page } from "playwright";
 import type { Assertion, OutcomeWait, RecordedStep, Step, TargetDescriptor, ValueOrVar } from "@jevitate/recording";
 import type { AssertionRefLookup } from "@jevitate/recording";
-import { FixturePathError, isSecretName, confineFixture, describeNavigateUrl, encodeUrlParamValue, literalOperand, navigateUrlParams, resolveAssertionRefs, resolveNavigateUrl } from "@jevitate/recording";
+import { FixturePathError, isLoadRefusedName, confineFixture, describeNavigateUrl, encodeUrlParamValue, literalOperand, navigateUrlParams, resolveAssertionRefs, resolveNavigateUrl } from "@jevitate/recording";
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, Click, Enter, Navigate, Target } from "@jevitate/screenplay";
 import { anchorLocator, resolveTarget, type ResolveTargetOptions } from "./resolve-target.js";
@@ -191,7 +191,7 @@ function stepRefs(vars: Map<string, string>, lookup: AssertionRefLookup | undefi
     const other = lookup?.(name);
     const v = vars.get(name);
     // #564: a binding whose name reads as a credential (`extract as: "apiKey"`) is a secret too.
-    if (v !== undefined) return { value: v, secret: other?.secret === true || isSecretName(name) };
+    if (v !== undefined) return { value: v, secret: other?.secret === true || isLoadRefusedName(name) };
     return other;
   };
 }

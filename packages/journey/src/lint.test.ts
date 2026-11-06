@@ -457,3 +457,14 @@ describe("#565 lintJourney: parameter-relative checks", () => {
     expect(lintJourney(publishWith("Published ${nobody}")).map((f) => f.rule)).toContain("write-without-effect");
   });
 });
+
+it("secret: false on a credential-like name is a warning a reviewer sees; on any other name, or without it, nothing", () => {
+  const withParameters = (parameters: Journey["metadata"]["parameters"]): Journey => ({
+    metadata: { id: "j", name: "j", promoted: false, params: [], parameters, createdAtIso: "2026-11-05T00:00:00.000Z" },
+    recording: { version: "1", site: "https://a.test", pages: [{ url: "/", steps: [{ step: { kind: "navigate", url: "/", expect: { kind: "visible", target: { testId: "x" } } } }] }] },
+  }) as unknown as Journey;
+  const rule = (j: Journey) => lintJourney(j).filter((f) => f.rule === "secret-false-credential-name");
+  expect(rule(withParameters([{ name: "password", secret: false }]))).toEqual([expect.objectContaining({ level: "warning" })]);
+  expect(rule(withParameters([{ name: "password" }]))).toEqual([]);
+  expect(rule(withParameters([{ name: "sku", secret: false }]))).toEqual([]);
+});

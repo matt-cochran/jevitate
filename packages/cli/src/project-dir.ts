@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { homedir as osHomedir } from "node:os";
+import { homedir as osHomedir, userInfo } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { clock } from "@jevitate/domain";
 
@@ -47,15 +47,43 @@ function realHomeUnderTest(cwd: string): string | null {
   return home === cwd || findGitRoot(cwd) === home ? null : home;
 }
 
+/** The account's home in the passwd database, whatever `HOME` says; null when it has no entry (a container's arbitrary uid). */
+function passwdHome(): string | null {
+  try {
+    return resolve(userInfo().homedir);
+  } catch {
+    return null;
+  }
+}
+
+/** What only a per-user data dir holds: a project's `.jevitate/` never does. */
+const PER_USER_MARKERS = ["credentials.json", "targets.json", "profiles", "db.sqlite", "verify-checkpoint.key"];
+
+/**
+ * With `HOME` moved, the account's own `~/.jevitate` is still its per-user dir, not a project of
+ * whatever sits below it. But the account's home can be a real project (a container with
+ * `useradd -d /workspace`), whose `environments.json` and `production: true` flag must not be lost,
+ * so it is passed over only when it doesn't look like one: an `environments.json` always counts,
+ * then the working directory's git root decides, then what the directory holds.
+ */
+function isAccountHomeProject(dir: string, cwd: string): boolean {
+  const candidate = join(dir, ".jevitate");
+  if (existsSync(join(candidate, "environments.json"))) return true;
+  const root = findGitRoot(cwd);
+  if (root !== null) return root === dir;
+  return !PER_USER_MARKERS.some((m) => existsSync(join(candidate, m)));
+}
+
 /** The nearest `.jevitate/` walking up from the working directory — never the per-user one. */
 export function findProjectDir(deps: LayoutDeps = {}): string | null {
   const home = homeDataRoot(deps);
   const cwd = resolve((deps.cwd ?? (() => process.cwd()))());
   const realHome = realHomeUnderTest(cwd);
+  const account = passwdHome();
   let dir = cwd;
   for (;;) {
     const candidate = join(dir, ".jevitate");
-    if (candidate !== home && dir !== realHome && isDir(candidate)) return candidate;
+    if (candidate !== home && dir !== realHome && isDir(candidate) && (dir !== account || isAccountHomeProject(dir, cwd))) return candidate;
     const parent = dirname(dir);
     if (parent === dir) return null;
     dir = parent;

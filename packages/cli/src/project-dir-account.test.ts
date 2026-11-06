@@ -23,6 +23,44 @@ describe("a project at the account's home, with HOME pointing elsewhere", () => 
     expect(logsRoot(elsewhere)).toBe(join(account, ".jevitate", "logs"));
   });
 
+  describe("HOME moved, and the account's own per-user dir above the working directory", () => {
+    const marker = join(account, ".jevitate", "credentials.json");
+    const gitRepo = join(account, "work", "gitrepo");
+    afterEach(() => rmSync(marker, { force: true }));
+
+    it("is no project of a checkout below it, so logs stay under HOME", () => {
+      mkdirSync(join(gitRepo, ".git"), { recursive: true });
+      writeFileSync(join(gitRepo, ".git", "HEAD"), "ref: refs/heads/main\n");
+      const deps = { cwd: () => gitRepo, homedir: () => join(account, "elsewhere") };
+      expect(findProjectDir(deps)).toBeNull();
+      expect(logsRoot(deps)).toBe(join(account, "elsewhere", ".jevitate", "logs"));
+    });
+
+    it("is no project of a directory with no repo either, when it holds per-user files", () => {
+      writeFileSync(marker, "{}");
+      expect(findProjectDir(elsewhere)).toBeNull();
+      expect(findProjectDir({ cwd: () => account, homedir: () => join(account, "elsewhere") })).toBeNull();
+    });
+
+    it("an environments.json there keeps it a project, and its production flag, whatever else it holds", () => {
+      const envs = join(account, ".jevitate", "environments.json");
+      writeFileSync(marker, "{}");
+      writeFileSync(envs, "{}");
+      expect(findProjectDir({ cwd: () => gitRepo, homedir: () => join(account, "elsewhere") })).toBe(join(account, ".jevitate"));
+      rmSync(envs);
+    });
+
+    it("the home that is the working directory's own git root stays the project (finding 13)", () => {
+      const home = join(account, ".git");
+      mkdirSync(home, { recursive: true });
+      writeFileSync(join(home, "HEAD"), "ref: refs/heads/main\n");
+      writeFileSync(marker, "{}");
+      mkdirSync(join(account, "src"), { recursive: true });
+      expect(findProjectDir({ cwd: () => join(account, "src"), homedir: () => join(account, "elsewhere") })).toBe(join(account, ".jevitate"));
+      rmSync(home, { recursive: true, force: true });
+    });
+  });
+
   it("is still not the project when HOME is there: the per-user one never is", () => {
     expect(findProjectDir({ cwd: () => repo, homedir: () => account })).toBeNull();
   });

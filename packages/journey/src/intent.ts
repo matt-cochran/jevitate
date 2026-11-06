@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { RecordedStep, Step, TargetDescriptor } from "@jevitate/recording";
-import { describeNavigateUrl, isSecretName } from "@jevitate/recording";
+import { describeNavigateUrl, isLoadRefusedName, isSecretName } from "@jevitate/recording";
 import type { Journey } from "./journey.js";
 
 /**
@@ -46,7 +46,7 @@ export function intentCoverage(journey: Journey): IntentCoverage {
   };
 }
 
-export { isSecretName };
+export { isLoadRefusedName, isSecretName };
 
 /** The approval channels a person made. `mcp` is an agent's; `non-interactive` and `ci` are scripts'. Absent: not known to be a person's. */
 const PERSON_APPROVAL_CHANNELS: ReadonlySet<string> = new Set(["tty", "pr-review"]);
@@ -76,6 +76,14 @@ export function secretParamNames(journey: Journey, params: Readonly<Record<strin
   for (const n of [...journey.metadata.params, ...Object.keys(params)]) {
     if (isSecretName(n) && !nonSecret.has(n)) names.add(n);
   }
+  return [...names].sort();
+}
+
+/** The parameters an assertion or a handoff binding may not name: what decides whether a Journey loads (`isLoadRefusedName`). */
+export function loadRefusedParamNames(journey: Journey, params: Readonly<Record<string, string>> = {}): string[] {
+  const names = new Set<string>();
+  for (const p of journey.metadata.parameters ?? []) if (p.secret === true || isLoadRefusedName(p.name)) names.add(p.name);
+  for (const n of [...journey.metadata.params, ...Object.keys(params)]) if (isLoadRefusedName(n)) names.add(n);
   return [...names].sort();
 }
 

@@ -5,7 +5,7 @@ import { assertionRefs, fixtureEscapesRoot, fixtureRootRefusal, fixtureSensitive
 import type { Journey } from "./journey.js";
 import { isNoClaimExpect, isOwnTargetVisible, journeyAssertions, type JourneyAssertionSite } from "./assertions.js";
 import { anchorLintIssues, type AnchorRuleCode } from "./anchor-rules.js";
-import { secretParamNames } from "./intent.js";
+import { isSecretName, loadRefusedParamNames } from "./intent.js";
 
 /**
  * #401: the assertion-strength rules this lint reports; #466: the 0.10 anchor rules (`AnchorRuleCode`,
@@ -13,6 +13,7 @@ import { secretParamNames } from "./intent.js";
  * `serves-outcome`, from catalog-refs.ts).
  */
 export type JourneyLintRule =
+  | "secret-false-credential-name"
   | "own-target-visible"
   | "write-without-effect"
   | "visibility-only"
@@ -206,7 +207,7 @@ function isEffectSite(site: JourneyAssertionSite, step: Step | undefined, refsBo
 export function assertionRefsBound(journey: Journey, a: Assertion): boolean {
   const refs = assertionRefs(a);
   if (refs.length === 0) return true;
-  const secret = new Set(secretParamNames(journey));
+  const secret = new Set(loadRefusedParamNames(journey));
   const bound = new Set([...journey.metadata.params, ...(journey.metadata.parameters ?? []).map((p) => p.name)].filter((n) => !secret.has(n)));
   for (const page of journey.recording.pages) {
     for (const r of page.steps) {
@@ -289,6 +290,17 @@ export function lintJourney(journey: Journey, opts: JourneyLintOptions = {}): Jo
   const lastWrite = isWrite.lastIndexOf(true) + 1; // 0 when there is no write step
 
   const findings: JourneyLintFinding[] = [];
+
+  // Where a person approves it: this declaration is what lets the value through MCP, unredacted.
+  for (const p of journey.metadata.parameters ?? []) {
+    if (p.secret !== false || !isSecretName(p.name)) continue;
+    findings.push({
+      rule: "secret-false-credential-name",
+      level: "warning",
+      message: `parameter ${p.name} reads as a credential and declares secret: false: once a person approves this Journey, its value goes through MCP and is not redacted`,
+      fix: "approve only if the value is not a credential; otherwise remove secret: false",
+    });
+  }
 
   const lintTarget = (target: TargetDescriptor, where: string, step?: number): void => {
     const problem = targetDescriptorSelectorProblem(target);

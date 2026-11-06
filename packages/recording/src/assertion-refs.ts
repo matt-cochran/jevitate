@@ -40,6 +40,18 @@ export function isSecretName(name: string): boolean {
   return SECRET_BOUNDED_RE.test(name.replace(/(\p{Ll}|\p{N})(\p{Lu})/gu, "$1_$2").replace(/(\p{Lu}+)(\p{Lu}\p{Ll})/gu, "$1_$2").toLowerCase());
 }
 
+/**
+ * What decides whether a stored Journey loads and whether an assertion may name a value: the older,
+ * narrower rule. `isSecretName` is for refusing a value and for redaction. Widening it must not turn
+ * a Journey that loaded into one that doesn't: a body-shape field or an assertion on `key` stays valid,
+ * and its value is still refused over MCP and redacted.
+ */
+const LOAD_REFUSED_NAME_RE = /pass(word|code|phrase)?|secret|token|api[_-]?key|otp|pin\b|credential|session|cookie/i;
+
+export function isLoadRefusedName(name: string): boolean {
+  return LOAD_REFUSED_NAME_RE.test(name);
+}
+
 /** A `${name}` placeholder (the grammar the `http` check's URL and assertions use, #543). */
 export const PLACEHOLDER_RE = /\$\{([^}]*)\}/g;
 

@@ -10,7 +10,7 @@
  * replay whose steps all passed but whose outcome is absent is a failed run, never `ok`.
  */
 import type { Page } from "playwright";
-import { isSecretName, journeyEndState, type Journey } from "@jevitate/journey";
+import { isLoadRefusedName, journeyEndState, type Journey } from "@jevitate/journey";
 import type { NetworkCheck } from "@jevitate/recording";
 import type { JourneyRunResult } from "@jevitate/runtime";
 import type { Actor } from "@jevitate/screenplay";
@@ -215,7 +215,7 @@ export class JourneyOutcomeChecks {
       const value = output[name];
       if (typeof value !== "string") return undefined;
       // #564: an `extract` output named like a credential (`apiKey`) is a secret whatever its value.
-      return { value, secret: this.#secrets.includes(value) || isSecretName(name) };
+      return { value, secret: this.#secrets.includes(value) || isLoadRefusedName(name) };
     };
   }
 

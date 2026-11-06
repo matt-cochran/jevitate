@@ -952,8 +952,14 @@ For those, declare `"secret": false` on the parameter and have a person approve 
 redacted. An approval over MCP, a scripted one (`non-interactive`, `ci`), one with no recorded channel
 or one the Journey has changed since lifts nothing. The rule is per Journey, so in `journey chain` and a
 `journey readiness` pair every Journey the params can reach has to lift it. A source's Journey never
-lifts it over MCP: its file is someone else's, so the name alone refuses. An assertion may not
-reference a credential-like name, whatever it declares.
+lifts it over MCP: its file is someone else's, so the name alone refuses. The review sheet warns
+about a `secret: false` on such a name (`secret-false-credential-name`).
+
+This list decides what happens to a value. It doesn't decide whether a Journey loads: an assertion
+reference or a request-body field keeps an older, narrower rule (`password`, `pass`, `secret`, `token`,
+`apiKey`, `otp`, `pin`, `credential`, `session`, `cookie`), whatever the Journey declares. So an
+assertion on `${key}` loads and runs on the CLI, with the value redacted from the result, and over MCP
+the value is still refused.
 
 Provenance is detection, not proof: whoever can edit the Journey file can also write the channel. What
 enforces it is git review of `.jevitate/` (see [catalog.md](./catalog.md)).

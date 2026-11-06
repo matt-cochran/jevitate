@@ -9,7 +9,7 @@
  * The body goes back to the judge only; it is never logged or persisted here.
  */
 import { clock } from "@jevitate/domain";
-import { isSecretName } from "@jevitate/journey";
+import { isLoadRefusedName } from "@jevitate/journey";
 import { isAuthorizedExploreTarget, type HttpCheckRefResolver, type HttpProbe, type SuccessCheck } from "@jevitate/explore";
 import { substituteSetupRefs, type FixtureBindings } from "./mission-fixtures.js";
 import { parseSuccessSpec } from "./explore-specs.js";
@@ -130,7 +130,7 @@ export function httpCheckRefs(input: {
     }
     const value = input.params?.[name];
     // #564: a credential-like name is a secret whether or not it was declared one.
-    return value === undefined ? undefined : { value, secret: secretParams.has(name) || isSecretName(name) };
+    return value === undefined ? undefined : { value, secret: secretParams.has(name) || isLoadRefusedName(name) };
   };
 }
 
