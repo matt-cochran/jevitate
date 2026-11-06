@@ -129,40 +129,49 @@ afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
+/** Only this fixture's adjudication fields are exposed when an assertion fails. */
+function diagnostics(report: JourneyVerifyReport): string {
+  return JSON.stringify({
+    verdict: report.verdict,
+    mutations: report.mutations.map(({ id, outcome, reason, failedSites }) => ({ id, outcome, reason, failedSites })),
+    assertions: report.assertions.map(({ site, verdict }) => ({ site, verdict })),
+  });
+}
+
 describe("[realtime] a final network check is not proven by a step that did not send its request", () => {
   it("A's timer recorded under B, later step waits: B's block aborts it and B's skip does not matter", () => {
-    expect(outcome(timerThenWait, "skip:3")).toBe("passed");
-    expect(reading(timerThenWait, "end-state:0")).toBe("insensitive");
-    expect(timerThenWait.verdict).toBe("insensitive");
+    expect(outcome(timerThenWait, "skip:3"), diagnostics(timerThenWait)).toBe("passed");
+    expect(reading(timerThenWait, "end-state:0"), diagnostics(timerThenWait)).toBe("insensitive");
+    expect(timerThenWait.verdict, diagnostics(timerThenWait)).toBe("insensitive");
   });
 
   it("A's timer recorded under B, B's own wait held the time: skipping B still gives the timer that time", () => {
-    expect(outcome(timerHeldByB, "skip:3")).toBe("passed");
-    expect(reading(timerHeldByB, "end-state:0")).toBe("insensitive");
-    expect(timerHeldByB.verdict).toBe("insensitive");
+    expect(outcome(timerHeldByB, "skip:3"), diagnostics(timerHeldByB)).toBe("passed");
+    expect(reading(timerHeldByB, "end-state:0"), diagnostics(timerHeldByB)).toBe("insensitive");
+    expect(timerHeldByB.verdict, diagnostics(timerHeldByB)).toBe("insensitive");
   });
 
   it("a request the step really sends stays proven, by both its skip and its block", () => {
-    expect(outcome(direct, "skip:2")).toBe("failed");
-    expect(outcome(direct, "block-write:2")).toBe("failed");
-    expect(reading(direct, "end-state:0")).toBe("sensitive");
-    expect(direct.verdict).toBe("proven");
+    expect(outcome(direct, "skip:2"), diagnostics(direct)).toBe("failed");
+    expect(outcome(direct, "block-write:2"), diagnostics(direct)).toBe("failed");
+    expect(reading(direct, "end-state:0"), diagnostics(direct)).toBe("sensitive");
+    expect(direct.verdict, diagnostics(direct)).toBe("proven");
   });
 
   it("a read RPC a check names by glob gets no write step and stays inconclusive", () => {
-    expect(readDelta.mutations.map((m) => m.id)).toEqual([]);
-    expect(reading(readDelta, "end-state:0")).toBe("unpaired");
-    expect(readDelta.verdict).toBe("inconclusive");
+    expect(readDelta.mutations.map((m) => m.id), diagnostics(readDelta)).toEqual([]);
+    expect(reading(readDelta, "end-state:0"), diagnostics(readDelta)).toBe("unpaired");
+    expect(readDelta.verdict, diagnostics(readDelta)).toBe("inconclusive");
   });
 
   it("a read RPC a step's own check names by glob is no write either", () => {
-    expect(readGlob.mutations.filter((m) => m.kind === "block-write")).toEqual([]);
-    expect(readGlob.verdict).not.toBe("proven");
+    expect(readGlob.mutations.filter((m) => m.kind === "block-write"), diagnostics(readGlob)).toEqual([]);
+    expect(readGlob.verdict, diagnostics(readGlob)).not.toBe("proven");
   });
 
   it("a page ignoring the parameter is not proven because skipping a read-only click also breaks the check", () => {
-    expect(constant.mutations.find((m) => m.id === "swap-param:reply")?.relaxed?.outcome).toBe("passed");
-    expect(reading(constant, "end-state:0")).toBe("insensitive");
-    expect(constant.verdict).toBe("insensitive");
+    expect(constant.mutations.find((m) => m.id === "swap-param:reply")?.relaxed?.outcome, diagnostics(constant)).toBe("passed");
+    expect(reading(constant, "end-state:0"), diagnostics(constant)).toBe("insensitive");
+    expect(constant.verdict, diagnostics(constant)).toBe("insensitive");
   });
 });

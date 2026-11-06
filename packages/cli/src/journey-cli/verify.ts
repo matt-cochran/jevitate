@@ -37,7 +37,8 @@ import {
   environmentSeams,
 } from "../cli-shared.js";
 import { withProjectFlags } from "../project-layout.js";
-import { journeyReadRequests, TargetConfigError } from "../target-config.js";
+import { TargetConfigError } from "../target-config.js";
+import { journeyTargetSafety } from "../journey-target-policy.js";
 import { DEPRECATED_DIR_HELP, journeyLayout, targetsOpts } from "./shared.js";
 
 /** Test seams: the replay `verifyJourneyMutations` runs, and the terminal layer's process. */
@@ -97,9 +98,9 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
       }
       if (plan === true) {
         try {
-          // #763: the same read-request policy as `journey lint` and `journey review`.
+          // #763: the recorded-origin read-request policy `journey review` and the planner share.
           const planned = await loadJourneyToVerify(verifyJourneysDir, id);
-          const readRequests = journeyReadRequests(planned, targetsOpts(deps));
+          const readRequests = journeyTargetSafety(planned, targetsOpts(deps).targetsFile)?.readRequests;
           const report = await planJourneyVerification({ dir: verifyJourneysDir, id, params: param, ...(readRequests === undefined ? {} : { readRequests }) });
           const planEnvironment = environmentFromFlags({ ...(envName === undefined ? {} : { env: envName }), ...(baseUrl === undefined ? {} : { baseUrl }) }, environmentSeams(deps));
           const noReset = resetDeclared(planned, this.opts<FixtureFlags>(), planEnvironment) ? undefined : verifyNoResetLine(report.summary);
@@ -158,7 +159,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
       try {
         // Before any browser opens: from here on, every way of not finishing still ends with a result.
         const proved = await loadJourneyToVerify(verifyJourneysDir, id);
-        const readRequests = journeyReadRequests(proved, targetsOpts(deps));
+        const readRequests = journeyTargetSafety(proved, targetsOpts(deps).targetsFile)?.readRequests;
         terminal = registerTerminalResult(
           {
             command: "journey verify",

@@ -219,6 +219,8 @@ export interface RunJourneyProgrammaticallyOptions {
  * separate argument, never a surface option: no other caller passes it.
  */
 export interface MutationReplayOptions {
+  /** Internal mutation classifier policy; never a CLI/MCP authority override. */
+  readRequests?: readonly string[];
   /** #708: declared proof only; original check indices/capture are preserved. Never a CLI/MCP flag. */
   relaxedStepRequests?: readonly string[];
   /**
@@ -834,7 +836,7 @@ async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutatio
         resolveRef: refs,
         ...(opts.stepResponseTimeoutMs === undefined ? {} : { stepResponseTimeoutMs: opts.stepResponseTimeoutMs }),
       });
-      const blocker = mutation.blockWritesAtStep === undefined ? undefined : await stepWriteBlocker(session.page, mutation.blockWritesAtStep, allowedOrigins, mutation.blockAfterWindow);
+      const blocker = mutation.blockWritesAtStep === undefined ? undefined : await stepWriteBlocker(session.page, mutation.blockWritesAtStep, allowedOrigins, mutation.blockAfterWindow, mutation.readRequests);
       // #453 (Q2): a guarded click/fill heal probe runs under a per-step write blocker.
       // Context-level (popups, WebSockets), no write exemptions; see heal-probe-guard.ts.
       const healGuard = opts.heal === undefined || policy.selfHeal.mode === "fail-closed" ? undefined : await installHealProbeGuard(session.page, runGuard === undefined ? undefined : (ws) => runGuard.claimSocket(ws));
@@ -1158,8 +1160,9 @@ async function stepWriteBlocker(
   index: number,
   allowedOrigins: readonly string[],
   after: MutationReplayOptions["blockAfterWindow"],
+  readRequests?: readonly string[],
 ): Promise<{ guard: ReadOnlyGuard; observer: StepObserver; escaped: () => string[] }> {
-  const guard = new ReadOnlyGuard(writeClassifier({}), { allowlist: [...allowedOrigins], navigationWrites: "abort" });
+  const guard = new ReadOnlyGuard(writeClassifier(readRequests === undefined ? {} : { readRequests }), { allowlist: [...allowedOrigins], navigationWrites: "abort" });
   await guard.arm(page);
   const monitor = monitorFor(page);
   await monitor.instrument();

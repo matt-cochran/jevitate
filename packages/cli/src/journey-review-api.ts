@@ -13,7 +13,7 @@ import { journeyAnchorIssues } from "./journey-anchor-gate.js";
 import { journeyLocatorHealth, testIdAttributesOrDefault } from "./locator-health-api.js";
 import { isStepIdOnlyStale } from "./journey-stale-api.js";
 import { findProjectDir } from "./project-dir.js";
-import { loadTargetsFile, resolveTargetConfig } from "./target-config.js";
+import { journeyTargetSafety } from "./journey-target-policy.js";
 import { loadProjectConfig } from "./project-config.js";
 
 /**
@@ -49,13 +49,7 @@ export async function reviewJourneyById(
   if (journey === null) throw new UnknownJourneyError(`unknown journey '${id}'`);
   // #765: the pending annotation draft (if any) — its status is part of the review output.
   const annotationDraft = await loadAnnotationDraft(journeysDir, id, journey);
-  let origin: string | null = null;
-  try {
-    origin = new URL(journey.recording.site).origin;
-  } catch {
-    origin = null;
-  }
-  const safety = origin === null ? undefined : resolveTargetConfig(loadTargetsFile(opts.targetsFile), origin).safety;
+  const safety = journeyTargetSafety(journey, opts.targetsFile);
   // #433: the catalog links and the shared pre-approval findings, as `journey promote` gates on them.
   const catalog = await loadCatalog(opts.catalogDir === undefined ? resolveCatalogDir(undefined) : opts.catalogDir, journeysDir);
   const links = journeyLinks(catalog, catalogJourney(journey));

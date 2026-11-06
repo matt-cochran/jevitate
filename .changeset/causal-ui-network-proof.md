@@ -7,3 +7,5 @@ Separate UI skip proofs from positively evidenced HTTP-write blocks, pair final 
 Require independent data-sensitivity and action-necessity evidence when both are paired with an assertion. Infer final UI ownership only from a matching symbolic own outcome; keep structural counts and default selections from creating unsupported UI skip obligations.
 
 Use explicit no-claim placeholders only at authorized waived DOM checks, so actions that remove their own controls can retain independent final-state proofs.
+
+Use the same recorded-origin read policy for native proof planning, runtime write blocking and freshness review. Complete the original observation window against a continuous monotonic deadline even when a native timer wakes early; bounded incomplete waits still fail closed.

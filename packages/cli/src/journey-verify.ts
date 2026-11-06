@@ -942,7 +942,7 @@ export function verifyNoResetLine(summary: JourneyVerifyPlanReport["summary"]): 
 }
 
 /**
- * Static preview of `journey verify --mutate`: no browser, fixtures, hooks, target, session or
+ * Static preview of `journey verify --mutate`: CLI resolves local target policy; no browser, fixtures, hooks, target network, session or
  * credential is opened. Values of params are used only to derive the plan and are never returned.
  */
 export async function planJourneyVerification(
@@ -1237,6 +1237,8 @@ async function attemptReplay(c: ReplayContext, m: JourneyMutation, describe: (j:
       { ...runOpts, ...(how.params === undefined ? {} : { params: { ...how.params } }), observer },
       {
         structuredFailures: true,
+        // The write blocker classifies with the same recorded-origin read policy as the planner.
+        ...(opts.readRequests === undefined ? {} : { readRequests: opts.readRequests }),
         beforeEndState: async () => {
           await pacer.hold(atLeast(paceEndStateFloorMs(pace, m, withMargin), matchTo?.endStateReachedMs));
           // A claim is judged with what the app was already doing finished, as far as the Journey allows.

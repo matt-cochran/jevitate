@@ -40,3 +40,22 @@ describe("mutation proof read-policy identity", () => {
     expect(evaluateMutationProofPolicy({ journey, contentHash: journeyReviewHash(journey), record, mode: "require-proven" })).toMatchObject({ freshness: "stale", passed: false });
   });
 });
+
+it("canonical policy order/duplicates stay fresh while added and removed patterns fail enforcement", () => {
+  const journey = fixtureJourney();
+  const proofContext = journeyProofContext(undefined, undefined, ["/b", "/a", "/b"]);
+  const record: JourneyVerifyRecord = { journeyId: journey.metadata.id, contentHash: journeyReviewHash(journey), proofHash: journeyProofHashForContext(journey, proofContext), proofContext, verdict: "proven", summary: {}, at: "2026-11-06T00:00:00Z" };
+  expect(buildJourneyReview(journey, { lastVerify: record, safety: { readRequests: ["/b", "/a"] } }).proof.verify).toMatchObject({ stale: false });
+  for (const readRequests of [["/a"], ["/a", "/b", "/c"], ["/x", "/b"]]) {
+    expect(buildJourneyReview(journey, { lastVerify: record, safety: { readRequests } }).proof.verify).toMatchObject({ stale: true });
+    expect(evaluateMutationProofPolicy({ journey, contentHash: journeyReviewHash(journey), record, mode: "require-proven", readRequests })).toMatchObject({ passed: false, freshness: "stale" });
+  }
+});
+
+it("empty-policy proof remains fresh only for empty policy", () => {
+  const journey = fixtureJourney();
+  expect(journeyProofContext(undefined, undefined, [])).toBeUndefined();
+  const record: JourneyVerifyRecord = { journeyId: journey.metadata.id, contentHash: journeyReviewHash(journey), proofHash: journeyProofHashForContext(journey, undefined), verdict: "proven", summary: {}, at: "2026-11-06T00:00:00Z" };
+  expect(buildJourneyReview(journey, { lastVerify: record }).proof.verify).toMatchObject({ stale: false });
+  expect(buildJourneyReview(journey, { lastVerify: record, safety: { readRequests: ["/api/query"] } }).proof.verify).toMatchObject({ stale: true });
+});
