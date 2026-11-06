@@ -57,6 +57,7 @@ export async function handleHangOrDeparture(ctx: FrontierState, item: FrontierIt
       liveness: { pageUrl: ctx.sessions.page.url(), authorized: (u) => isAuthorizedExploreTarget(u, params.allowlist) },
       // Re-detected with the SAME perception bounds the mission used.
       perceive: {
+        ...(params.secrets === undefined ? {} : { secrets: params.secrets }),
         ...(params.renderWaitMs === undefined ? {} : { renderWaitMs: params.renderWaitMs }),
         ...(params.settle === undefined ? {} : { settleConfig: params.settle }),
       },

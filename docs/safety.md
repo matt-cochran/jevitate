@@ -360,16 +360,23 @@ built-in verb (`Preview*`, `Recalculate*`, …).
   before anything runs. `editText` types real keys and checks before each one that the element's
   document is there, holds the focus and is on that origin. Limit: a page that navigates in the instant
   after that check can receive the key in flight, about one character, and nothing after it.
-- Nothing secret-bound goes to a model. A run holding a secret parameter, a fixture secret or a
-  credential-named output, or an extracted credential, doesn't self-heal: the step fails as it would
-  without a heal, and says so. `journey annotate`, `annotate_journey` and `create_demo` refuse a Journey
-  needing one (`E_MODEL_REFUSED_SECRET`). **The cost: a secret-bound Journey can't self-heal or be
-  annotated in 0.29.0.** `explore --strategy coverage|exploratory` refuse `--secret`
+- Nothing secret-bound goes to a model. A Journey with a secret parameter, a fixture secret or a
+  credential-named output, or a step that can extract a credential, doesn't self-heal. That is decided
+  before it runs, so it holds at step 1, before the extract and when the extract itself is what broke:
+  the step fails as it would without a heal, and says so. `journey annotate`, `annotate_journey` and
+  `create_demo` refuse such a Journey (`E_MODEL_REFUSED_SECRET`). **The cost: a secret-bound Journey
+  can't self-heal or be annotated in 0.29.0.**
+- That includes a working Journey whose only secret is a name, because the name list is broad on
+  purpose: a parameter `passengers` or `key`, or an `extract as: "token_count"`, loses self-heal and
+  annotate. Both refusals name the way out: declare a parameter of that name `"secret": false` and have
+  a person approve the Journey (a typed `journey promote` or a verified PR review). For an `extract`
+  name that means declaring a parameter it doesn't otherwise take. An approval over MCP lifts nothing.
+- `explore --strategy coverage|exploratory` refuse `--secret`
   (`E_EXPLORE_SECRET_UNSUPPORTED`), since they can't keep it out. `--feature` makes no model call and
   masks it in its transcript, Recordings and result.
 - Goal, adversarial and usability runs keep their `--secret` masking, applied before any cut, so a
-  secret across a bound on a control's name, heading, option, announcement or page text leaves none of
-  its characters. A secret the page transforms (lower-cased, say) is not recognised.
+  secret across a bound on a control's name, heading, option, announcement, page text or busy
+  indicator leaves none of its characters. That covers a replay of a hang, on its fresh page, too. A secret the page transforms (lower-cased, say) is not recognised.
 - The gateways (`OpenRouterGenerationGateway`, `JevJudgmentGateway`) hold a backstop for those three
   while they run: values of 8 characters or more, masked in every string and key, then checked, so a
   value still there stops the call, and gone when the run ends. Past 2000 live values a model call

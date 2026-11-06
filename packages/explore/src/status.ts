@@ -1,5 +1,5 @@
 import type { Locator, Page } from "playwright";
-import { visibleBusyIndicator } from "./hang.js";
+import { visibleBusyIndicator, visibleBusyIndicatorContainer, visibleBusyIndicatorText } from "./hang.js";
 import { redactText } from "./redact.js";
 
 /**
@@ -45,9 +45,13 @@ export function maskPageReads(page: Page, secrets: readonly string[]): void {
   pageSecrets.set(page, secrets);
 }
 
+function maskFor(page: Page, text: string): string {
+  return redactText(text, pageSecrets.get(page) ?? []);
+}
+
 /** Masked, then cut. A quoted description keeps its label and closing quote out of the count. */
 function bounded(page: Page, text: string, chars: number): string {
-  const masked = redactText(text, pageSecrets.get(page) ?? []);
+  const masked = maskFor(page, text);
   const quoted = /^([^"]*")(.*)"$/s.exec(masked);
   const inner = quoted?.[2] ?? masked;
   const cut = inner.length > chars ? `${inner.slice(0, chars)}…` : inner;
@@ -266,20 +270,45 @@ export async function readInProgressStatus(page: Page): Promise<string | null> {
   return status === null ? null : bounded(page, status, 80);
 }
 
+/** A busy indicator's `role=x "name"`, masked and then its name cut, unmarked: the description is the element's identity (#87). */
+function boundedBusyName(page: Page, description: string): string {
+  const text = maskFor(page, description);
+  const quoted = /^(role=[^"]*")(.*)"$/s.exec(text);
+  return quoted === null ? text : `${quoted[1]}${(quoted[2] ?? "").slice(0, 60)}"`;
+}
+
+/** `visibleBusyIndicator`'s description, masked then cut; null when none shows or the page can't be read. */
+export async function readBusyIndicator(page: Page): Promise<string | null> {
+  const busy = await page.evaluate(visibleBusyIndicator).catch(() => null);
+  return busy === null ? null : boundedBusyName(page, busy);
+}
+
+/** `visibleBusyIndicatorContainer`'s description, masked then cut. */
+export async function readBusyContainer(page: Page): Promise<string | null> {
+  const box = await page.evaluate(visibleBusyIndicatorContainer).catch(() => null);
+  return box === null ? null : boundedBusyName(page, box);
+}
+
+/** `visibleBusyIndicatorText`'s words, masked then cut. */
+export async function readBusyText(page: Page): Promise<string | null> {
+  const words = await page.evaluate(visibleBusyIndicatorText).catch(() => null);
+  return words === null ? null : maskFor(page, words).slice(0, 200);
+}
+
 /**
  * #379: the busy/progress overlay the page shows — a busy indicator (`aria-busy`, an indeterminate
  * `role=progressbar`, a spinner) or an in-progress status ("Preparing…") — described, or null.
  */
 export async function busyOverlay(page: Page): Promise<string | null> {
-  const busy = await page.evaluate(visibleBusyIndicator).catch(() => null);
-  return busy ?? (await readInProgressStatus(page));
+  return (await readBusyIndicator(page)) ?? (await readInProgressStatus(page));
 }
 
 /**
  * BROWSER CODE — does the page ACKNOWLEDGE work it is doing (#153)? A visible, enabled Cancel /
  * Stop / Abort control (the app offers to cancel the job), a disabled control whose label is a
  * progress phrase ("Analyzing...", the button the user pressed, now busy), or a determinate
- * progress bar. Returns what it saw. Serialized by `page.evaluate`: self-contained.
+ * progress bar. Returns what it saw, the labels read past their cut, which `readWorkingStatus` makes
+ * once it has masked. Serialized by `page.evaluate`: self-contained.
  */
 function workAcknowledgedInPage(words: string): { busyControl: string | null; cancel: string | null; bar: string | null } {
   const norm = (s: string | null | undefined): string => (s ?? "").replace(/\s+/g, " ").trim();
@@ -299,8 +328,8 @@ function workAcknowledgedInPage(words: string): { busyControl: string | null; ca
   let busyControl: string | null = null;
   for (const el of controls) {
     const n = label(el);
-    if (cancel === null && !disabled(el) && /^\W*(?:cancel|stop|abort)\b/i.test(n)) cancel = `an enabled "${n.slice(0, 40)}" control`;
-    if (busyControl === null && disabled(el) && n !== "" && progress.test(n)) busyControl = `a disabled "${n.slice(0, 40)}" control`;
+    if (cancel === null && !disabled(el) && /^\W*(?:cancel|stop|abort)\b/i.test(n)) cancel = n.slice(0, 1064);
+    if (busyControl === null && disabled(el) && n !== "" && progress.test(n)) busyControl = n.slice(0, 1064);
   }
   let bar: string | null = null;
   for (const el of Array.from(document.querySelectorAll("[role=progressbar][aria-valuenow],progress[value]"))) {
@@ -326,8 +355,12 @@ function workAcknowledgedInPage(words: string): { busyControl: string | null; ca
 export async function readWorkingStatus(page: Page): Promise<string | null> {
   const ack = await page.evaluate(workAcknowledgedInPage, IN_PROGRESS_WORDS).catch(() => null);
   if (ack === null) return null;
-  if (ack.busyControl !== null) return ack.cancel === null ? ack.busyControl : `${ack.busyControl} and ${ack.cancel}`;
-  const extra = ack.cancel ?? ack.bar;
+  const cancel = ack.cancel === null ? null : `an enabled "${maskFor(page, ack.cancel).slice(0, 40)}" control`;
+  if (ack.busyControl !== null) {
+    const busyControl = `a disabled "${maskFor(page, ack.busyControl).slice(0, 40)}" control`;
+    return cancel === null ? busyControl : `${busyControl} and ${cancel}`;
+  }
+  const extra = cancel ?? ack.bar;
   if (extra === null) return null;
   const status = await readInProgressStatus(page);
   return status === null ? null : `${status} with ${extra}`;

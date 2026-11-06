@@ -572,6 +572,10 @@ async function replayFinding(opts: RunVerifyFixOptions, known: ReadonlySet<strin
   if (videoDir !== undefined || opts.screenshots !== undefined) mkdirSync(dirnameOf(vfArtifact), { recursive: true });
   const shown = sessionLaunchOptions(opts.browser, videoDir);
   const perceiveOpts = {
+    // Read at each perception: a fixture or a prefix can add to what the run knows after this.
+    get secrets(): readonly string[] {
+      return [...known];
+    },
     ...(opts.settleCeilingMs === undefined ? {} : { renderWaitMs: opts.settleCeilingMs }),
     ...(target.settle === undefined ? {} : { settleConfig: target.settle }),
     ...(target.hangs === undefined ? {} : { hangConfig: target.hangs }),

@@ -10,15 +10,13 @@ import {
   pendingEvidence,
   probeResponsive,
   visibleBusyIndicator,
-  visibleBusyIndicatorContainer,
-  visibleBusyIndicatorText,
   type HangSignal,
 } from "./hang.js";
 import { contentHash, clock } from "@jevitate/domain";
 import { clockBounded } from "./clock-bound.js";
 import { textMatcher, type HangConfig, type SettleConfig, type TimingConfig } from "./settle-config.js";
 import { redactUrl } from "@jevitate/ai-core";
-import { busyOverlay, maskPageReads } from "./status.js";
+import { busyOverlay, maskPageReads, readBusyContainer, readBusyIndicator, readBusyText } from "./status.js";
 import { resourceSettleFactor } from "@jevitate/playwright";
 
 /**
@@ -282,7 +280,7 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
   let stuckBusyContainer: string | null = null;
   let busyWait: { requestsCompleted: number; indicatorChanged: boolean } | undefined;
   if (settle.settled) {
-    const busy = await page.evaluate(visibleBusyIndicator).catch(() => null);
+    const busy = await readBusyIndicator(page);
     if (busy !== null) {
       const busySince = clock.now();
       const remaining = Math.max(1, ceiling - (clock.now() - started));
@@ -298,11 +296,11 @@ export async function perceive(page: Page, opts: PerceiveOptions = {}): Promise<
       );
       // A target can declare an indicator (or a route) where a lasting busy state is expected.
       // #687: a pattern may name the indicator's visible words too ("Approving*"), not only its description.
-      const busyText = gone ? null : await page.evaluate(visibleBusyIndicatorText).catch(() => null);
+      const busyText = gone ? null : await readBusyText(page);
       if (!gone && !ignoreNoProgress(busy) && !(busyText !== null && ignoreDeclared(busyText)) && !ignoreNoProgress(hangRoute(page.url()))) {
         stuckBusy = busy;
-        stuckBusyContainer = await page.evaluate(visibleBusyIndicatorContainer).catch(() => null);
-        const now = await page.evaluate(visibleBusyIndicator).catch(() => null);
+        stuckBusyContainer = await readBusyContainer(page);
+        const now = await readBusyIndicator(page);
         busyWait = {
           // A `--settle-ignore`d beacon is no sign of the app working on the job (#284).
           requestsCompleted: monitor.completedSince(busySince).filter((r) => r.resourceType !== "document" && r.ignored !== true).length,

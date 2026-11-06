@@ -2,6 +2,7 @@
 import type { ExploreRun } from "../../explore.js";
 import { NOT_REPLAYED, hangFinding, reproduceHang, withheldReason, type HangReproduction } from "../../hang-repro.js";
 import type { GoalBasedMissionConfig, GoalBasedResult } from "../goal-based.js";
+import { secretFieldSecrets } from "../../secret-fields.js";
 
 /** Reproduce a hang the loop stopped on, in fresh contexts (owner ruling 7). */
 export async function reproduceSeedHang(
@@ -18,6 +19,8 @@ export async function reproduceSeedHang(
         openSession: cfg.openFreshSession,
         ...(cfg.hangReplays === undefined ? {} : { attempts: cfg.hangReplays }),
         perceive: {
+          // A replay reads the same page: its hang goes in the same result, so it is masked the same.
+          secrets: [...(cfg.secrets ?? []), ...secretFieldSecrets(cfg.secretFields)],
           ...(cfg.renderWaitMs === undefined ? {} : { renderWaitMs: cfg.renderWaitMs }),
           ...(cfg.hangProbeMs === undefined ? {} : { hangProbeMs: cfg.hangProbeMs }),
           ...(cfg.requestBoundMs === undefined ? {} : { requestBoundMs: cfg.requestBoundMs }),

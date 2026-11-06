@@ -1,8 +1,8 @@
-import { FsJourneyStore, JourneyRegistry, flatJourneySteps, isSecretName, journeyParamSchema, secretParamNames, type Journey } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, declaredNonSecretParams, flatJourneySteps, isSecretName, journeyParamSchema, secretParamNames, type Journey } from "@jevitate/journey";
 import { navigateUrlParams } from "@jevitate/recording";
 import { SecretFieldSpecError, fieldMatches, parseSecretField, type Control, type SecretField } from "@jevitate/explore";
 import type { TargetDescriptor } from "@jevitate/recording";
-import { SETUP_REF } from "./mission-fixtures.js";
+import { SETUP_REF, type MissionFixtures } from "./mission-fixtures.js";
 
 /**
  * A secret parameter's value (declared `secret: true`, or a credential-like name) and the two
@@ -24,6 +24,30 @@ function refusalMessage(names: readonly string[]): string {
     `If the name only looks like a credential, declare the parameter "secret": false and have a person approve the Journey at a terminal (jevitate journey promote <id>): an approval over MCP lifts nothing, and a source's Journey can't lift it`
   );
 }
+
+/**
+ * What makes a Journey secret-bound, by name and from the Journey alone, so before it runs: its secret
+ * parameters and any step, `forEach` children included, that can extract a credential. Nothing
+ * secret-bound goes to a model, so self-heal and annotate both decide with this.
+ */
+export function secretBoundNeeds(journey: Journey, params: Readonly<Record<string, string>>): string[] {
+  const nonSecret = declaredNonSecretParams(journey);
+  const extracted = flatJourneySteps(journey)
+    .flatMap(({ recorded: { step } }) => (step.kind === "forEach" ? step.steps : [step]))
+    .flatMap((step) => (step.kind === "extract" && isSecretName(step.as) && !nonSecret.has(step.as) ? [`extracted credential ${step.as}`] : []));
+  return [...secretParamNames(journey, params).map((n) => `secret parameter ${n}`), ...new Set(extracted)];
+}
+
+/** A fixture's outputs that are secret, known once it is built: declared so, or named like a credential. */
+export function fixtureSecretNeeds(fx: MissionFixtures | undefined): string[] {
+  if (fx === undefined) return [];
+  const named = [...(fx.declaredOutputs() ?? [])].filter((n) => isSecretName(n));
+  return [...new Set([...fx.declaredSecretOutputs(), ...named])].map((n) => `fixture secret ${n}`);
+}
+
+/** The way out of a refusal for a name like `passengers`, which reads as a credential and isn't one. */
+export const NOT_A_CREDENTIAL_WAY_OUT =
+  'If a name here only looks like a credential (passengers, token_count), declare a parameter of that name "secret": false and have a person approve the Journey at a terminal (jevitate journey promote <id>): an approval over MCP lifts nothing';
 
 /** The refusal `sources run` throws from inside the run gate, where the Journey is first known. */
 export class SecretParamOverMcpError extends Error {

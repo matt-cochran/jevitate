@@ -1,4 +1,4 @@
-import type { BoundSecretParams } from "./secret-params.js";
+import { NOT_A_CREDENTIAL_WAY_OUT, fixtureSecretNeeds, secretBoundNeeds, type BoundSecretParams } from "./secret-params.js";
 import type { JourneyRunRecorder } from "./journey-run-record.js";
 import { allowedOriginSet, offAllowlistWriteOrigin, prepareMcpRunGuard } from "./mcp-run-guard.js";
 import { FsJourneyStore, JourneyRegistry, ParamValidationError, declaredNonSecretParams, describeStep, isSecretName, loadRefusedParamNames, flatJourneySteps, journeyEndState, journeyParamSchema, journeyPrefix, lintJourney, lintUploadFixtures, secretNamedValues, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
@@ -284,7 +284,8 @@ export function redactSecretParams<T>(result: T, journey: Journey, params: Recor
  * #564: a run's full secret set — its secret-param values plus every value the run bound under a
  * credential-like name (an `extract as: "apiKey"` output, read from the result's `output`).
  */
-const SECRET_BOUND_NO_HEAL = "this run holds a secret (a secret parameter, a fixture secret or an extracted credential), and nothing secret-bound goes to a model. Fix the step by hand, or heal a run that needs no secret";
+const secretBoundNoHeal = (needs: readonly string[]): string =>
+  `${needs.length === 0 ? "this run holds a secret (a secret parameter, a fixture secret or an extracted credential)" : `this Journey needs ${needs.join(", ")}`}, and nothing secret-bound goes to a model. Fix the step by hand, or heal a Journey that needs no secret. ${NOT_A_CREDENTIAL_WAY_OUT}`;
 
 export function runSecretValues(secrets: readonly string[], result: unknown, nonSecret: ReadonlySet<string> = new Set()): string[] {
   const output = result !== null && typeof result === "object" && "output" in result ? (result as { output: unknown }).output : undefined;
@@ -740,10 +741,12 @@ export async function runJourneyProgrammatically(
               ...(skipStep === undefined ? {} : { skipStep: (i: number) => skipStep(i) }),
               ...(selectAlternative === undefined ? {} : { selectAlternative: (i: number) => (i === selectAlternative.index ? { avoid: selectAlternative.avoid } : undefined) }),
             }));
+      // Decided from the Journey, before it runs: a break can come before the extract, with the value already on the page.
+      const secretBound = [...secretBoundNeeds(stored, params), ...fixtureSecretNeeds(fx)];
       const heal: JourneyHealOptions | undefined =
         opts.heal === undefined || healGuard === undefined
           ? undefined
-          : { scope: opts.heal.scope, riskOf: journeyStepRisk(), writeGuard: healGuard.guard, allowedOrigins, noHealBecause: () => (secrets.length > 0 || extractedCredentials.size > 0 ? SECRET_BOUND_NO_HEAL : undefined), observe: healObserver(healDir, mask) };
+          : { scope: opts.heal.scope, riskOf: journeyStepRisk(), writeGuard: healGuard.guard, allowedOrigins, noHealBecause: () => (secretBound.length > 0 || secrets.length > 0 || extractedCredentials.size > 0 ? secretBoundNoHeal(secretBound) : undefined), observe: healObserver(healDir, mask) };
       const runner = new JourneyRunner(actor, interpreter, undefined, undefined, opts.selfHealer, heal);
       let result: JourneyRunResult;
       // #564: the run's secrets also cover every value it bound under a credential-like name (an

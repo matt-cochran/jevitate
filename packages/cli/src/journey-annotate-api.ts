@@ -11,9 +11,6 @@ import {
   flatJourneySteps,
   intentCoverage,
   journeyAssertions,
-  declaredNonSecretParams,
-  isSecretName,
-  secretParamNames,
   type AnnotationChange,
   type AnnotationDraft,
   type IntentCoverage,
@@ -24,6 +21,7 @@ import { contentHash, clock } from "@jevitate/domain";
 import type { StepObserver } from "@jevitate/interpreter";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 import { runJourneyProgrammatically, UnknownJourneyError, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
+import { NOT_A_CREDENTIAL_WAY_OUT, fixtureSecretNeeds, secretBoundNeeds } from "./secret-params.js";
 
 /**
  * #246 — `jevitate journey annotate`: replay a Journey, capture redacted before/after page evidence
@@ -167,25 +165,19 @@ export interface AnnotateJourneyResult {
 export class SecretBoundJourneyError extends Error {
   readonly code = "E_MODEL_REFUSED_SECRET";
   constructor(id: string, what: readonly string[]) {
-    super(`journey '${id}' needs ${what.join(", ")}, and nothing secret-bound goes to a model, so it can't be annotated; nothing was sent. Write its objective and expected result by hand, or annotate a Journey that needs no secret (sign in with a stored session)`);
+    super(`journey '${id}' needs ${what.join(", ")}, and nothing secret-bound goes to a model, so it can't be annotated; nothing was sent. Write its objective and expected result by hand, or annotate a Journey that needs no secret (sign in with a stored session). ${NOT_A_CREDENTIAL_WAY_OUT}`);
     this.name = "SecretBoundJourneyError";
   }
 }
 
 function assertNoSecretForModel(journey: Journey, params: Readonly<Record<string, string>>): void {
-  const names = secretParamNames(journey, params).map((n) => `secret parameter ${n}`);
-  const nonSecret = declaredNonSecretParams(journey);
-  const extracted = flatJourneySteps(journey)
-    .flatMap(({ recorded: { step } }) => (step.kind === "forEach" ? step.steps : [step]))
-    .flatMap((step) => (step.kind === "extract" && isSecretName(step.as) && !nonSecret.has(step.as) ? [`extracted credential ${step.as}`] : []));
-  if (names.length + extracted.length > 0) throw new SecretBoundJourneyError(journey.metadata.id, [...names, ...extracted]);
+  const needs = secretBoundNeeds(journey, params);
+  if (needs.length > 0) throw new SecretBoundJourneyError(journey.metadata.id, needs);
 }
 
 function assertNoFixtureSecret(id: string, fx: MissionFixtures | undefined): void {
-  if (fx === undefined) return;
-  const named = [...(fx.declaredOutputs() ?? [])].filter((n) => isSecretName(n));
-  const names = [...new Set([...fx.declaredSecretOutputs(), ...named])];
-  if (names.length > 0) throw new SecretBoundJourneyError(id, names.map((n) => `fixture secret ${n}`));
+  const needs = fixtureSecretNeeds(fx);
+  if (needs.length > 0) throw new SecretBoundJourneyError(id, needs);
 }
 
 /**

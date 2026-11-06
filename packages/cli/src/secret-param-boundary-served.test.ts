@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServer, type Server } from "node:http";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ProfileManager } from "@jevitate/daemon";
@@ -18,7 +18,7 @@ import { useSkippingTime } from "../../explore/src/testkit.js";
 import { safeRunPolicy } from "@jevitate/domain";
 import { runJourneyProgrammatically } from "./journey-api.js";
 import { makeEvidenceSelfHealer } from "./self-heal-adapter.js";
-import { annotateJourney, SecretBoundJourneyError } from "./journey-annotate-api.js";
+import { annotateJourney, annotationDraftPath, SecretBoundJourneyError } from "./journey-annotate-api.js";
 import { refusalOf } from "./demo-aspect-cli.js";
 import { OpenRouterGenerationGateway, envCredentialStore, type GenerationPort } from "@jevitate/ai-core";
 import { readJourneyChangeScope } from "./journey-heal.js";
@@ -759,7 +759,9 @@ describe("nothing secret-bound goes to a model: self-heal", { timeout: 120_000 }
   const fixtureOf = (outputs: Record<string, string>, secretOutputs: string[] = []) => (): never =>
     new MissionFixtures({ spec: { setup: [{ method: "POST", url: `${origin}/mint`, outputs, secretOutputs }] }, auth: {}, allowlist: [origin], baseUrl: origin } as never) as never;
   const heal = async (id: string, j: Journey, params: Record<string, string>, extra: Record<string, unknown> = {}): Promise<{ sent: unknown[]; text: string }> => {
-    approved(j);
+    const { keepApproval, ...rest } = extra as { keepApproval?: boolean };
+    extra = rest;
+    if (keepApproval !== true) approved(j);
     writeFileSync(join(journeysDir, `${id}.json`), JSON.stringify(j));
     const sent: unknown[] = [];
     const gen = gatewayRecording(sent, () => ({ order: [], control: null }));
@@ -793,6 +795,61 @@ describe("nothing secret-bound goes to a model: self-heal", { timeout: 120_000 }
     expect(r.text).not.toContain(VALUE);
   });
 
+  // Decided from the Journey, before it runs: the break can come before the extract, with the value already on the page.
+  it.each([
+    ["the broken step is the extract itself", [{ step: { ...extractKey.step, target: { role: "button", name: "Nowhere" } } }], []],
+    ["an earlier step breaks, the extract further on", [], [extractKey]],
+    ["an earlier step breaks, the extract further on in a forEach", [], [{ step: { kind: "forEach", items: { css: "#minted" }, as: "row", steps: [{ ...extractKey.step, target: { css: "button" } }] } }]],
+  ] as const)("a Journey that can extract a credential, %s: no model call, from step 1", async (what, before, after) => {
+    const id = `heal-first-${what.replace(/\W+/g, "-")}`;
+    const j = noSecretJourney(id, [...before]);
+    j.recording.pages[0]!.steps = [...j.recording.pages[0]!.steps, ...after] as never;
+    const r = await heal(id, j, {});
+    expect(r.sent).toEqual([]);
+    expect(r.text).toContain('"outcome":"quarantined"');
+    expect(r.text).toContain("self-heal skipped");
+    expect(r.text).toContain("extracted credential apiKey");
+    expect(r.text).not.toContain("ExtractVal5Rt1");
+  });
+
+  it("a fixture's secret output, before anything is held from it: no model call, from step 1", async () => {
+    const id = "heal-first-output";
+    const r = await heal(id, noSecretJourney(id), {}, { fixtures: fixtureOf({ minted: "$.sec" }, ["minted"]) });
+    expect(r.sent).toEqual([]);
+    expect(r.text).toContain("self-heal skipped");
+    expect(r.text).toContain("fixture secret minted");
+  });
+
+  it.each([
+    ["a parameter", { passengers: "2" }, [{ step: { kind: "fill", target: { testId: "who" }, value: { var: "passengers" }, expect: { kind: "visible", target: { testId: "who" } } } }], "passengers"],
+    ["an extract", {}, [{ step: { ...extractKey.step, as: "token_count" } }], "token_count"],
+  ] as const)("a name that only looks like a credential, on %s: refused, naming the way out, and a person's secret: false heals", async (what, params, extra, name) => {
+    const id = `heal-broad-${what.replace(/\W+/g, "-")}`;
+    const make = (): Journey => {
+      const j = noSecretJourney(id, [...extra]);
+      j.metadata.params = [name];
+      j.metadata.parameters = [{ name }];
+      return j;
+    };
+    const refused = await heal(id, make(), params);
+    expect(refused.sent).toEqual([]);
+    expect(refused.text).toContain("self-heal skipped");
+    expect(refused.text).toContain(name);
+    expect(refused.text).toContain('\\"secret\\": false');
+    expect(refused.text).toContain("jevitate journey promote");
+
+    const lifted = (channel: string): Journey => {
+      const j = make();
+      j.metadata.parameters = [{ name, secret: false }];
+      return approved(j, channel);
+    };
+    const byAgent = await heal(id, lifted("mcp"), params, { keepApproval: true });
+    expect(byAgent.sent).toEqual([]);
+    const byPerson = await heal(id, lifted("tty"), params, { keepApproval: true });
+    expect(byPerson.sent.length).toBeGreaterThan(0);
+    expect(byPerson.text).not.toContain("self-heal skipped");
+  });
+
   it("a run holding none still heals: the model is asked", async () => {
     const r = await heal("heal-on", noSecretJourney("heal-on"), {});
     expect(r.sent.length).toBeGreaterThan(0);
@@ -812,13 +869,15 @@ describe("nothing secret-bound goes to a model: self-heal", { timeout: 120_000 }
 
 describe("nothing secret-bound goes to a model: annotate", { timeout: 120_000 }, () => {
   useSkippingTime();
-  const annotate = async (j: Journey, params: Record<string, string>, extra: Record<string, unknown> = {}): Promise<{ sent: unknown[]; err: unknown }> => {
-    approved(j);
+  const annotate = async (j: Journey, params: Record<string, string>, extra: Record<string, unknown> = {}, channel?: string): Promise<{ sent: unknown[]; err: unknown; before: string; after: string; draft: string }> => {
+    approved(j, channel);
     writeFileSync(join(journeysDir, `${j.metadata.id}.json`), JSON.stringify(j));
+    const file = join(journeysDir, `${j.metadata.id}.json`);
+    const before = readFileSync(file, "utf8");
     const sent: unknown[] = [];
     const gen = gatewayRecording(sent, (task) => (task === "journey.goal" ? { goal: "g", successCriteria: [] } : { objective: "o", expectedResult: "e" }));
     const err = await annotateJourney({ dir: journeysDir, id: j.metadata.id, params, gen, now: () => "2026-11-06T00:00:00.000Z", ...extra } as never).then(() => undefined, (e: unknown) => e);
-    return { sent, err };
+    return { sent, err, before, after: readFileSync(file, "utf8"), draft: annotationDraftPath(journeysDir, j.metadata.id) };
   };
   const plain = (id: string, extra: unknown[] = []): Journey => {
     const j = journey(id, "who");
@@ -841,6 +900,33 @@ describe("nothing secret-bound goes to a model: annotate", { timeout: 120_000 },
     expect(r.err).toBeInstanceOf(SecretBoundJourneyError);
     expect((r.err as SecretBoundJourneyError).code).toBe("E_MODEL_REFUSED_SECRET");
     expect(r.sent).toEqual([]);
+    // The refusal leaves the Journey as it was, and no draft.
+    expect(r.after).toBe(r.before);
+    expect(existsSync(r.draft)).toBe(false);
+  });
+
+  it("a name that only looks like a credential: the refusal names the way out, and a person's secret: false annotates", async () => {
+    const make = (): Journey => {
+      const j = plain("an-broad", [{ step: { kind: "fill", target: { testId: "who" }, value: { var: "passengers" }, expect: { kind: "visible", target: { testId: "who" } } } }]);
+      j.metadata.params = ["passengers"];
+      j.metadata.parameters = [{ name: "passengers" }];
+      return j;
+    };
+    const refused = await annotate(make(), { passengers: "2" });
+    expect(refused.err).toBeInstanceOf(SecretBoundJourneyError);
+    expect((refused.err as Error).message).toContain("secret parameter passengers");
+    expect((refused.err as Error).message).toContain('"secret": false');
+    expect((refused.err as Error).message).toContain("jevitate journey promote");
+    expect(refused.sent).toEqual([]);
+    const lifted = (): Journey => {
+      const j = make();
+      j.metadata.parameters = [{ name: "passengers", secret: false }];
+      return j;
+    };
+    expect((await annotate(lifted(), { passengers: "2" }, {}, "mcp")).err).toBeInstanceOf(SecretBoundJourneyError);
+    const byPerson = await annotate(lifted(), { passengers: "2" }, {}, "tty");
+    expect(byPerson.err).toBeUndefined();
+    expect(byPerson.sent.length).toBeGreaterThan(0);
   });
 
   it("annotate_journey says so over MCP, by name", async () => {
@@ -868,6 +954,11 @@ describe("nothing secret-bound goes to a model: annotate", { timeout: 120_000 },
       showsSecrets = "";
     });
     expect(r.err).toBeUndefined();
+    // Succeeding, it leaves the Journey as it was: the draft is a sidecar, and neither holds a value.
+    expect(r.after).toBe(r.before);
+    expect(r.after).not.toContain("MarkedPwVal9Kx2");
+    expect(r.after).not.toContain("Ada-Plain");
+    expect(readFileSync(r.draft, "utf8")).not.toContain("MarkedPwVal9Kx2");
     expect(r.sent.length).toBeGreaterThan(0);
     expect(JSON.stringify(r.sent)).not.toContain("MarkedPwVal9Kx2");
   });
