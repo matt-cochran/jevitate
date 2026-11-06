@@ -265,8 +265,8 @@ export function journeyMutationSteps(journey: Journey, opts: JourneyLintOptions 
     const requests = [...observed, ...declared.map(({ method, pathGlob }) => ({ method, pathGlob }))];
     const knownHttpWrite = requests.length > 0;
     const action = recorded.step;
-    const checkedUiEffect = (STATE_CHANGING.has(action.kind) || action.kind === "select") &&
-      "expect" in action && !isNoClaimExpect(action) && !isOwnTargetVisible(action);
+    const checkedUiEffect = STATE_CHANGING.has(action.kind) &&
+      "expect" in action && action.expect.kind !== "count" && !isNoClaimExpect(action) && !isOwnTargetVisible(action);
     return knownHttpWrite || checkedUiEffect || isWriteStep(recorded, classify, [])
       ? [{ step: i + 1, requests, knownHttpWrite }]
       : [];
