@@ -52,7 +52,9 @@ const RUNNER_KEYS: Readonly<Record<string, string>> = {
 
 const SEAM = "test seam (clock / injected ports) — never a user setting";
 /** #767: what only `verify-fix`'s own command and MCP tool need; a batch re-check neither reports replays nor writes a result per finding. */
+const GUARD_TARGETS = "#789: the MCP floor reads ~/.jevitate/targets.json by default; only an MCP server built with another path passes one, and the CLI has no floor";
 const VERIFY_FIX_INVOCATION = {
+  runGuardTargetsFile: GUARD_TARGETS,
   onReplay: "#767: progress for the CLI's terminal layer, which only the verify-fix command registers",
   onSecrets: "#767: feeds the CLI's terminal layer, which only the verify-fix command registers",
   resultArtifact: "#767: one result file per verify-fix invocation; a batch re-check writes none",
@@ -111,7 +113,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "adversarial-strategy.ts runAdversarialCliMission": { hostHealth: SEAM, nowIso: SEAM },
   "feature-strategy.ts runFeatureCliMission": { hostHealth: SEAM, nowIso: SEAM },
   "run.ts runExploreMultiRun": { nowIso: SEAM },
-  "verify-fix-cli.ts runVerifyFix": { settleCeilingMs: "verify-fix reuses the recorded run's render wait", evidencePaceMs: EVIDENCE_PACE },
+  "verify-fix-cli.ts runVerifyFix": { runGuardTargetsFile: GUARD_TARGETS, settleCeilingMs: "verify-fix reuses the recorded run's render wait", evidencePaceMs: EVIDENCE_PACE },
   "usability-strategy.ts runUsabilityMission": {
     hostHealth: SEAM,
     env: SEAM,
