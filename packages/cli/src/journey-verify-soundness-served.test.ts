@@ -753,7 +753,74 @@ $('save').onclick=async()=>{${opts.optimistic === true ? "$('said').textContent=
   };
 };
 
+/** A Save the server answers with `Cache-Control: no-store`, whose body the page never reads: Chromium then never reports the request as finished. */
+const answeredUnread = (status: number) => () => {
+  const said = `Saved ${status}`;
+  return (req: IncomingMessage, res: ServerResponse): void => {
+    if (pathOfUrl(req) === "/api/save") return void res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }).end("{}");
+    html(res, `<button id="save">Save</button><p id="said"></p><script>document.getElementById('save').onclick=()=>fetch('/api/save',{method:'POST'}).then(()=>{document.getElementById('said').textContent='${said}'})</script>`);
+  };
+};
+const unreadJourney = (status: number) => (site: string): Journey => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", `Saved ${status}`) }, ...WROTE("/api/save") }]);
+
+/** A Save whose headers go at once and whose body, read by nobody, ends `bodyMs` later. Its effect lands as the body ends. */
+const streaming = (bodyMs: number, shared: boolean) => () => {
+  const saved = new Set<string>();
+  const s = sessions();
+  return (req: IncomingMessage, res: ServerResponse): void => {
+    const headers: Record<string, string> = {};
+    const sid = shared ? "" : s.sid(req, headers);
+    if (pathOfUrl(req) === "/api/save") {
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+      res.flushHeaders();
+      return after(bodyMs, () => {
+        saved.add(sid);
+        res.end("{}");
+      });
+    }
+    html(res, `<button id="save">Save</button><p id="said"></p><p id="saved">${saved.has(sid) ? "YES" : "NO"}</p><script>document.getElementById('save').onclick=()=>fetch('/api/save',{method:'POST'}).then(()=>{document.getElementById('said').textContent='Saved'})</script>`, headers);
+  };
+};
+const streamJourney = (assertion: ReturnType<typeof text>) => (site: string): Journey => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saved") }, ...WROTE("/api/save") }], { endState: [{ kind: "reloadThen", assertion }] });
+
 const ROWS_EXPERIMENT: readonly Row[] = [
+  {
+    name: "a no-store 200 whose body the page never reads: the write was answered",
+    serve: answeredUnread(200),
+    journey: unreadJourney(200),
+    verdict: "proven",
+    reading: ["step:2", "sensitive"],
+  },
+  {
+    name: "a no-store 401 whose body the page never reads: the write was answered",
+    serve: answeredUnread(401),
+    journey: unreadJourney(401),
+    verdict: "proven",
+    reading: ["step:2", "sensitive"],
+  },
+  {
+    name: "a write the server never answers stays open: its effect may land in a later replay",
+    serve: () => (req, res) => {
+      if (pathOfUrl(req) === "/api/save") return;
+      html(res, `<button id="save">Save</button><p id="said"></p><script>document.getElementById('save').onclick=()=>{document.getElementById('said').textContent='Saving';fetch('/api/save',{method:'POST'}).catch(()=>{})}</script>`);
+    },
+    journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saving") }, ...WROTE("/api/save") }]),
+    verdict: "inconclusive",
+    reason: /closed with a write still unanswered/,
+  },
+  {
+    name: "a body that ends a moment after its headers is waited for, so the end state reads its effect",
+    serve: streaming(1_000, false),
+    journey: streamJourney(text("#saved", "YES")),
+    verdict: "proven",
+    reading: ["end-state:0", "sensitive"],
+  },
+  {
+    name: "a body still streaming past that moment, its effect crossing replays, does not read proven",
+    serve: streaming(2_500, true),
+    journey: streamJourney(text("#saved", "NO")),
+    verdict: "inconclusive",
+  },
   {
     name: "H1: the base's job lands in the next replay and a fixture restore clears it",
     fixtures: true,

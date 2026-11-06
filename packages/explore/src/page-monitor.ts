@@ -403,6 +403,17 @@ export class RequestCapture {
   }
 
   /**
+   * @internal — `key`'s response arrived. A status is judged on the response, and Chromium may never
+   * report the end of a body nobody reads (a `no-store` response), so it stops awaiting one here.
+   */
+  responded(key: object, status: number, contentType: string | null): void {
+    const sent = this.#inflight.get(key);
+    if (sent === undefined) return;
+    const { pending: _pending, ...answered } = sent;
+    this.#inflight.set(key, { ...answered, status, contentType });
+  }
+
+  /**
    * @internal — `key` ended. `finished` is its finished record (then `add`ed), or null when the
    * monitor had already forgotten it (its document was replaced): it stays "sent, never finished".
    */
@@ -673,6 +684,8 @@ export class PageMonitor {
       const type = res.headers()["content-type"] ?? "";
       if (type !== "") this.#contentTypes.set(res.request(), type);
       if (RPC_CONTENT.test(type) || res.headers()["grpc-status"] !== undefined) this.#rpcReads.set(res.request(), rpcStatusOfResponse(res));
+      // An RPC's own result can be in its body's trailer, so only its end says how it went (#378).
+      else for (const c of this.#captures) c.responded(res.request(), res.status(), type === "" ? null : type);
       if (STREAMING_CONTENT.test(type)) {
         this.#background.set(res.request(), "stream");
         this.#touch(); // wake a settle wait that was counting it as pending

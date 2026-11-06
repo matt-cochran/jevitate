@@ -129,6 +129,55 @@ describe("a write a new document dropped", () => {
     expect(report.reason).toMatch(UNANSWERED);
   });
 
+  it("a write whose response arrived is answered, though the browser never says it finished", async () => {
+    const report = await proveWith(({ context }) => {
+      const save = request("POST", SAVE);
+      context.emit("request", save);
+      context.emit("response", { request: () => save });
+    });
+    expect(report.reason ?? "").not.toMatch(UNANSWERED);
+    expect(report.verdict, report.reason).toBe("insensitive");
+  });
+
+  it("a read's response answers no write", async () => {
+    const report = await proveWith((b) => {
+      write(b);
+      b.context.emit("response", { request: () => request("GET", SAVE) });
+    });
+    expect(report.reason).toMatch(UNANSWERED);
+  });
+
+  it("a response to a different write answers only that one", async () => {
+    const report = await proveWith(({ context }) => {
+      const answered = request("POST", SAVE);
+      context.emit("request", answered);
+      context.emit("request", request("POST", SAVE));
+      context.emit("response", { request: () => answered });
+    });
+    expect(report.reason).toMatch(UNANSWERED);
+  });
+
+  it("a request failing after its response is no abort: it was answered", async () => {
+    const report = await proveWith(({ context }) => {
+      const save = Object.assign(request("POST", SAVE), { failure: () => ({ errorText: "net::ERR_ABORTED" }) });
+      context.emit("request", save);
+      context.emit("response", { request: () => save });
+      context.emit("requestfailed", save);
+    });
+    expect(report.reason ?? "").not.toMatch(UNANSWERED);
+    expect(report.verdict, report.reason).toBe("insensitive");
+  });
+
+  it("the same write answered later counts once, however its body ends", async () => {
+    const report = await proveWith(({ context }) => {
+      const save = request("POST", SAVE);
+      context.emit("request", save);
+      context.emit("response", { request: () => save });
+      context.emit("requestfinished", save);
+    });
+    expect(report.verdict, report.reason).toBe("insensitive");
+  });
+
   it("a replay that throws is held to the same check: what it left open may land in the next", async () => {
     const report = await proveWith(write, true);
     expect(report.mutations[0]).toMatchObject({ outcome: "error" });

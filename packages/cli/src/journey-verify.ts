@@ -351,6 +351,8 @@ function relaxedWaitObserver(
 const READ_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
 /** How long a replay stays open after a write the browser gave up on: the server may still be working, and nothing will say when it stops. */
 const ABORTED_WRITE_GRACE_MS = 2_000;
+/** How long a replay waits for a body after its response: a body still streaming and one nobody reads look the same from here. */
+const RESPONDED_BODY_GRACE_MS = 2_000;
 /** How often a replay waiting for its open writes looks again. */
 const OPEN_WRITE_POLL_MS = 50;
 /** How long the replay that follows a failed independence replay waits: past most of what the failed one started. */
@@ -460,7 +462,8 @@ class ReplayProbe {
   readonly #relaxedWaits: ReplayDiagnostics["relaxedWaits"][number][] = [];
   readonly #beforeClose: ((writesSent: number) => Promise<void>) | undefined;
   readonly #scope: WriteScope | undefined;
-  readonly #open = new Map<unknown, { readonly line: string; readonly seq: number }>();
+  readonly #open = new Map<unknown, { readonly line: string; readonly seq: number; respondedAt?: number }>();
+  readonly #responded = new WeakSet<object>();
   #requestSeq = 0;
   #navigationSeq = 0;
   readonly #sent = new Map<string, number>();
@@ -494,17 +497,22 @@ class ReplayProbe {
   }
 
   #openInScope(): string[] {
-    return [...this.#open.values()].map((o) => o.line).filter((line) => this.#scope?.isBackground(line, this.#sent.get(line) ?? 0) !== true);
+    // A response is the answer. What it leaves in `#open` is only its body's moment, which `settleOpenWrites` gives it.
+    return [...this.#open.values()].filter((o) => o.respondedAt === undefined).map((o) => o.line).filter((line) => this.#scope?.isBackground(line, this.#sent.get(line) ?? 0) !== true);
   }
 
   /**
    * Waits for the writes in scope to be answered, new ones they lead to included, up to `boundMs`,
    * then a moment more after one the browser gave up on: a browser-side abort does not mean the server stopped.
+   * A response whose body has not ended gets a moment too. Past that it reads as answered: a body the page does
+   * not read may never report its end, and an effect that lands later is a job after an answer, which the
+   * independence and closing replays are there for.
    */
   async settleOpenWrites(boundMs: number): Promise<void> {
     const startedAt = clock.monotonicMs();
     while (clock.monotonicMs() - startedAt < boundMs) {
-      const graceLeft = this.#lastAbortAt === undefined ? 0 : this.#lastAbortAt + ABORTED_WRITE_GRACE_MS - clock.monotonicMs();
+      const graceUntil = Math.max(this.#lastAbortAt === undefined ? 0 : this.#lastAbortAt + ABORTED_WRITE_GRACE_MS, ...[...this.#open.values()].map((o) => (o.respondedAt === undefined ? 0 : o.respondedAt + RESPONDED_BODY_GRACE_MS)));
+      const graceLeft = graceUntil - clock.monotonicMs();
       if (this.#openInScope().length === 0 && graceLeft <= 0) return;
       await clock.sleep(Math.min(OPEN_WRITE_POLL_MS, boundMs - (clock.monotonicMs() - startedAt)));
     }
@@ -540,17 +548,30 @@ class ReplayProbe {
         for (const [r, o] of this.#open) {
           if (o.seq >= this.#navigationSeq) continue;
           this.#open.delete(r);
-          this.#lastAbortAt = clock.monotonicMs();
+          if (o.respondedAt === undefined) this.#lastAbortAt = clock.monotonicMs();
         }
       });
     }
-    source.on("requestfinished", (r) => {
+    source.on("response", (res) => {
+      const r = (res as unknown as { request(): WatchedRequest }).request();
       if (!isWrite(r)) return;
       this.#writesAnswered += 1;
+      this.#responded.add(r);
+      const open = this.#open.get(r);
+      if (open !== undefined) open.respondedAt = clock.monotonicMs();
+    });
+    source.on("requestfinished", (r) => {
+      if (!isWrite(r)) return;
+      if (!this.#responded.has(r)) this.#writesAnswered += 1;
       this.#open.delete(r);
     });
     source.on("requestfailed", (r) => {
       if (!isWrite(r)) return;
+      // Answered, then the page stopped reading: nothing was dropped.
+      if (this.#responded.has(r)) {
+        this.#open.delete(r);
+        return;
+      }
       this.#writesAborted += 1;
       // A block of ours never left the browser. Any other abort may have reached the server, which goes on working.
       if (this.#open.delete(r) && r.failure?.()?.errorText.includes("BLOCKED_BY_CLIENT") !== true) this.#lastAbortAt = clock.monotonicMs();

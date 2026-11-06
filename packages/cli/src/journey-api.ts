@@ -962,6 +962,27 @@ export function draftOnStored(stored: Journey, draft: ProposedRevisionDraft, env
 const BLOCK_WINDOW_SETTLE_MS = 5_000;
 
 /**
+ * A write on a held line that got an answer, by `line`. A response is the answer: Chromium may never
+ * report the end of a body the page does not read, and a write the server answered did not stay blocked.
+ */
+export function watchEscapedWrites(
+  context: { on(event: "request" | "response", listener: (arg: never) => void): unknown },
+  lineIfHeld: (r: { method(): string; url(): string }) => string | undefined,
+): () => string[] {
+  const sent = new Map<unknown, string>();
+  const escaped = new Set<string>();
+  context.on("request", ((r: { method(): string; url(): string }) => {
+    const line = lineIfHeld(r);
+    if (line !== undefined) sent.set(r, line);
+  }) as (arg: never) => void);
+  context.on("response", ((res: { request(): unknown }) => {
+    const line = sent.get(res.request());
+    if (line !== undefined) escaped.add(line);
+  }) as (arg: never) => void);
+  return () => [...escaped];
+}
+
+/**
  * #402 block-write: a `ReadOnlyGuard` armed on the page whose action window is the given step — opened
  * as it begins, closed once the network settled after it. Every held write is aborted (a write
  * navigation too: never answered with a status that could read as a success). The step's own lines
@@ -987,22 +1008,17 @@ async function stepWriteBlocker(
       return undefined;
     }
   };
-  const sentAfterWindow = new Set<unknown>();
-  const escaped = new Set<string>();
   const context = typeof page.context === "function" ? page.context() : undefined;
-  if (after !== undefined && typeof context?.on === "function") {
-    context.on("request", (r) => {
-      const line = lineOf(r);
-      if (!released && line !== undefined && held.has(line)) sentAfterWindow.add(r);
-    });
-    context.on("requestfinished", (r) => {
-      const line = lineOf(r);
-      if (line !== undefined && sentAfterWindow.has(r)) escaped.add(line);
-    });
-  }
+  const escaped =
+    after !== undefined && typeof context?.on === "function"
+      ? watchEscapedWrites(context as never, (r) => {
+          const line = lineOf(r);
+          return !released && line !== undefined && held.has(line) ? line : undefined;
+        })
+      : () => [];
   return {
     guard,
-    escaped: () => [...escaped],
+    escaped,
     observer: {
       beforeStep: async ({ index: i }) => {
         if (i === index) guard.beginAction();
