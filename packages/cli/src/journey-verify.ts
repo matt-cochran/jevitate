@@ -928,7 +928,6 @@ function reusedMutation(pair: CheckpointPair): JourneyVerifyMutation {
     ...(pair.param === undefined ? {} : { param: pair.param }),
     ...(pair.source === undefined ? {} : { source: pair.source }),
     ...reusedProofFields(pair),
-    ...(pair.controlSkipped === undefined ? {} : { controlSkipped: pair.controlSkipped }),
     ...(pair.retries === 0 ? {} : { retries: Array.from({ length: pair.retries }, () => ({ reason: RETRY_REASON_NOT_KEPT })) }),
     reused: true,
   };

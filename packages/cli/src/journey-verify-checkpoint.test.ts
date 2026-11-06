@@ -672,6 +672,27 @@ describe("a resume and an errored pair", () => {
     expect(await refusal(prove(labelled(proving).run, request(true)))).toBe("finished");
   });
 
+  it("runs a pair that skipped its control again, since what made the verdict look decided may be what the resume repairs", async () => {
+    await proveLabelled(labelled(erroringBlock), false);
+    writeSigned((body) => ({ ...body, completed: body.completed.map((p) => (p.id === "stale-value:2" ? { ...p, controlSkipped: true as const } : p)) }));
+    const notes: string[] = [];
+    const resumed = labelled(proving);
+    const second = await prove(resumed.run, request(true, { onNotice: (t) => notes.push(t) }), { onProgress: resumed.onProgress });
+    expect(resumed.labels).toEqual(["base", "independence replay, as recorded", "block-write:3", "stale-value:2", "closing replay, as recorded"]);
+    expect(second).toMatchObject({ verdict: "proven", reusedPairs: 1 });
+    expect(second.mutations.map((m) => [m.id, m.reused])).toEqual([
+      ["skip:3", true],
+      ["block-write:3", undefined],
+      ["stale-value:2", undefined],
+    ]);
+    expect(readBody().completed.map((p) => [p.id, p.controlSkipped])).toEqual([
+      ["skip:3", undefined],
+      ["block-write:3", undefined],
+      ["stale-value:2", undefined],
+    ]);
+    expect(notes.join("\n")).toContain("1 of 3 pairs finished and 2 errored or short of a control");
+  });
+
   it("after an interruption, does not reuse an errored pair", async () => {
     const killed = labelled((label) => (label === "stale-value:2" ? stall() : erroringBlock(label)));
     await expect(proveLabelled(killed, false)).rejects.toBeInstanceOf(JourneyVerifyStalledError);

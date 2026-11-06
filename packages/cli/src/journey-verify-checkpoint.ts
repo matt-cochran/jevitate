@@ -112,7 +112,7 @@ const pairRecord = z.strictObject({
   waitsCut,
   relaxed: z.strictObject({ outcome, failedSites, waitsCut, atBaseTime }).optional(),
   control: outcome.optional(),
-  /** A reading that needed a control kept none, because the verdict could no longer change. */
+  /** A reading that needed a control kept none, because the verdict could no longer change. A resume runs such a pair again (`reusableOnResume`). */
   controlSkipped: z.literal(true).optional(),
   atBaseTime,
   targeted: z
@@ -192,7 +192,12 @@ export type ResumeRefusalReason =
   | "pace"
   | "isolation";
 
-/** A resume that will not run. It never starts over: the checkpoint stays as it was, and a plain `--mutate` is the way to begin again. */
+/**
+ * A resume that will not run. It never starts over, and a plain `--mutate` is the way to begin again.
+ * Refused before its claim, the checkpoint stays as it was. `base-failed`, `pace` and `isolation` come
+ * after the claim wrote it: its finished results stand, but it no longer says `finished`, and an
+ * `independence-errored` note is gone. That is harmless: the next resume runs the independence replay again.
+ */
 export class JourneyVerifyResumeRefusedError extends Error {
   readonly code = "E_JOURNEY_VERIFY_RESUME_REFUSED";
   constructor(
@@ -532,6 +537,15 @@ function pairProblems(body: CheckpointBody, plan: MutationPlan, journey: Journey
  */
 export const isRepairableIsolation = (taint: CheckpointBody["taint"]): boolean => taint.isolation === "independence-errored" && !taint.restoreFailed;
 
+/**
+ * What a resume may reuse. An errored pair proved nothing. A pair that skipped its control stands on
+ * "the verdict is already decided", and an errored pair is one reason for that, which the resume then
+ * takes away: reused, its unvouched reading could turn the proof `proven`. So it runs again, whole,
+ * deciding afresh whether its control is needed. The control alone cannot be run on the old result: it has to reach
+ * each site no sooner than the replay it answers for did (`matchTo`), and a checkpoint keeps no arrivals.
+ */
+const reusableOnResume = (pair: CheckpointPair): boolean => !mutationErrored(reusedProofFields(pair)) && pair.controlSkipped !== true;
+
 /** A proof that ended on errored replays has a gap a resume can fill. Any other finished proof has said all it can. */
 const finishedForGood = (body: Pick<CheckpointBody, "state" | "verdict" | "errorGap">): boolean => body.state === "finished" && !(body.verdict === "inconclusive" && body.errorGap === true);
 
@@ -734,8 +748,8 @@ export async function openProofCheckpoint(
     if (old !== undefined) return refuse("too-old", old);
     const invalid = pairProblems(body, proof.plan, proof.journey, proof.sites);
     if (invalid !== undefined) return refuse("corrupt", `the checkpoint at ${req.path} cannot be used: ${invalid}`);
-    // An errored pair stays on file until its new result takes its place, and is never reused.
-    const reused = body.completed.filter((p) => !mutationErrored(reusedProofFields(p)));
+    // A pair run again stays on file until its new result takes its place, and is never reused.
+    const reused = body.completed.filter(reusableOnResume);
     const { verdict: _verdict, errorGap: _errorGap, ...unfinished } = body;
     const taint = body.taint.isolation === "independence-errored" ? { ...body.taint, isolation: null, notIsolatedBy: null } : body.taint;
     const claimed: CheckpointBody = { ...unfinished, taint, state: "running", phase: "base", independence: null, currentPair: null, replay: 0, reusedPairs: reused.length, updatedAt: clock.nowIso(), verifier: currentVerifierIdentity() };
@@ -745,8 +759,8 @@ export async function openProofCheckpoint(
     } catch (err) {
       return refuse("not-writable", `the claim could not be written to ${req.path} (${(err as NodeJS.ErrnoException).code ?? "error"})`);
     }
-    const errored = body.completed.length - reused.length;
-    notice(`journey verify: resuming with ${reused.length} of ${body.total} pairs finished${errored === 0 ? "" : ` and ${errored} errored, which run again`}; the base replay runs first and must pass before any is reused`);
+    const again = body.completed.length - reused.length;
+    notice(`journey verify: resuming with ${reused.length} of ${body.total} pairs finished${again === 0 ? "" : ` and ${again} errored or short of a control, which run again`}; the base replay runs first and must pass before any is reused`);
     const session = new ProofCheckpointSession(req.path, key, claimed, notice);
     return { session, resume: { pairs: new Map(reused.map((p) => [p.id, p])), restoreFailed: taint.restoreFailed, notIsolatedBy: taint.notIsolatedBy, isolation: taint.isolation } };
   };
@@ -888,8 +902,7 @@ export function resumeRefusalAgainstBase(state: ResumeState, plan: MutationPlan,
       const reached = undefinedHoles(r.reachedMs);
       const early = sitesReachedEarly(r.failedSites, m, pace, reached, r.endStateReachedMs);
       if (early.length > 0) return new JourneyVerifyResumeRefusedError("pace", `a ${r.kind} replay of ${m.id} failed at ${early.join(", ")} sooner than the re-measured base replay passed it, so the reused failure is not evidence`);
-      // A skipped control stands on the verdict being decided by other reused results, which still are.
-      if (NOT_THIN_CHECKED.has(r.kind) || pair.control !== undefined || pair.controlSkipped === true) continue;
+      if (NOT_THIN_CHECKED.has(r.kind) || pair.control !== undefined) continue;
       const thin = thinSites(r.failedSites, m, pace, reached, r.endStateReachedMs);
       if (sensitive.some((p) => thin.includes(p.site))) return new JourneyVerifyResumeRefusedError("pace", `a ${r.kind} replay of ${m.id} reached ${thin.join(", ")} with little to spare over the re-measured base replay, and no control replay answers for it`);
     }
