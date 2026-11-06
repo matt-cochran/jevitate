@@ -5,7 +5,7 @@ import type { AssertionRefLookup } from "@jevitate/recording";
 import { FixturePathError, SECRET_PARAM_NAME_RE, confineFixture, describeNavigateUrl, encodeUrlParamValue, literalOperand, navigateUrlParams, resolveAssertionRefs, resolveNavigateUrl } from "@jevitate/recording";
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, Click, Enter, Navigate, Target } from "@jevitate/screenplay";
-import { resolveTarget, type ResolveTargetOptions } from "./resolve-target.js";
+import { anchorLocator, resolveTarget, type ResolveTargetOptions } from "./resolve-target.js";
 import type { ReplayActionGuard } from "./replay-guard.js";
 import { applyTextEdit } from "./rich-text.js";
 import { evaluateVisual, isVisualAssertion } from "./visual-state.js";
@@ -146,6 +146,24 @@ function stepRefs(vars: Map<string, string>, lookup: AssertionRefLookup | undefi
 }
 
 /**
+ * Why a `visible` check failed when its element is still there by its recorded anchor: a step acts
+ * through the anchor and this check matches the descriptor exactly, so the action works and the check
+ * does not. It stays strict on purpose. Names from the recording only, never page text. One read: a
+ * page that can't answer gives no reason.
+ */
+async function anchoredElementReason(actor: Actor, a: Assertion): Promise<string | undefined> {
+  if (a.kind !== "visible") return undefined;
+  try {
+    const anchor = anchorLocator(actor.ability(BrowseTheWebToken).session.page, a.target.anchor);
+    if (anchor === null || (await anchor.count()) !== 1 || !(await anchor.isVisible())) return undefined;
+  } catch {
+    return undefined;
+  }
+  const by = a.target.anchor?.id !== undefined ? `id=${a.target.anchor.id}` : `name=${a.target.anchor?.name}`;
+  return `the element is still there by its recorded anchor (${by}), but nothing matches the recorded name exactly, so the app's text for it probably changed; a step's action uses the anchor and this check does not. If the new text is right, update the text in both the step's target and its expect, or re-record the step`;
+}
+
+/**
  * A step's postcondition: without `waitFor`, exactly the bounded `checkAssertion` it always was; with
  * it (#409), the outcome wait (`waitForOutcome`) — reported through `hooks.onWait` whatever its
  * ending, and a `PostconditionFailed` naming how it ended when the expectation never held.
@@ -159,12 +177,15 @@ async function postcondition(
   hooks: StepWaitHooks,
 ): Promise<void> {
   if (wait === undefined) {
-    if (!(await checkAssertion(actor, a))) throw new PostconditionFailed(a, context);
+    if (!(await checkAssertion(actor, a))) throw new PostconditionFailed(a, context, await anchoredElementReason(actor, a));
     return;
   }
   const waited = await waitForOutcome(actor, a, wait, index + 1);
   hooks.onWait?.(waited);
-  if (waited.ending !== "held") throw new PostconditionFailed(a, context, waited.detail);
+  if (waited.ending !== "held") {
+    const reason = await anchoredElementReason(actor, a);
+    throw new PostconditionFailed(a, context, reason === undefined ? waited.detail : `${waited.detail}; ${reason}`);
+  }
 }
 
 /**
