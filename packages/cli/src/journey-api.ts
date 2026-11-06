@@ -1,7 +1,7 @@
 import type { BoundSecretParams } from "./secret-params.js";
 import type { JourneyRunRecorder } from "./journey-run-record.js";
 import { allowedOriginSet, offAllowlistWriteOrigin, prepareMcpRunGuard } from "./mcp-run-guard.js";
-import { FsJourneyStore, JourneyRegistry, ParamValidationError, declaredNonSecretParams, describeStep, flatJourneySteps, journeyEndState, journeyParamSchema, journeyPrefix, lintJourney, lintUploadFixtures, secretNamedValues, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError, declaredNonSecretParams, describeStep, isSecretName, flatJourneySteps, journeyEndState, journeyParamSchema, journeyPrefix, lintJourney, lintUploadFixtures, secretNamedValues, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
 import { assertHttpChecksAllowed, createHttpProbe, httpCheckRefs } from "./http-probe.js";
 import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
 import { journeyEntry } from "./forge-verify.js";
@@ -713,7 +713,15 @@ export async function runJourneyProgrammatically(
       const selectAlternative = mutation.selectAlternativeAtStep;
       const fixtureBaseDir = opts.fixtureBaseDir ?? journeyFixtureBaseDir();
       // A value extracted before the run throws has no `output` to be read from, and must still be masked. The guard hears it through the interpreter.
-      const onExtracted = (value: string): void => opts.runRecorder?.noteValue(value);
+      // #564: a credential the run extracts joins the redaction set as it binds: the heal payload, the evidence screenshots.
+      const extractedCredentials = new Set<string>();
+      const nonSecretParams = declaredNonSecretParams(journey);
+      const onExtracted = async (value: string, name?: string): Promise<void> => {
+        opts.runRecorder?.noteValue(value);
+        if (name === undefined || !isSecretName(name) || nonSecretParams.has(name) || value.trim() === "") return;
+        extractedCredentials.add(value);
+        await mask.addSecret(value);
+      };
       const interpreter =
         opts.interpreter ??
         (opts.observer === undefined && shots === undefined && replayDeltas === undefined && outcomeChecks.observer() === undefined && blocker === undefined && healGuard === undefined && skipStep === undefined && selectAlternative === undefined && runGuard === undefined
@@ -731,7 +739,7 @@ export async function runJourneyProgrammatically(
       const heal: JourneyHealOptions | undefined =
         opts.heal === undefined || healGuard === undefined
           ? undefined
-          : { scope: opts.heal.scope, riskOf: journeyStepRisk(), writeGuard: healGuard.guard, allowedOrigins, observe: healObserver(healDir, mask) };
+          : { scope: opts.heal.scope, riskOf: journeyStepRisk(), writeGuard: healGuard.guard, allowedOrigins, runSecrets: () => [...secrets, ...extractedCredentials], observe: healObserver(healDir, mask) };
       const runner = new JourneyRunner(actor, interpreter, undefined, undefined, opts.selfHealer, heal);
       let result: JourneyRunResult;
       // #564: the run's secrets also cover every value it bound under a credential-like name (an
@@ -748,7 +756,7 @@ export async function runJourneyProgrammatically(
           ...(mutation.afterEndState === undefined ? {} : { afterEndState: mutation.afterEndState }),
         });
         runGuard?.check();
-        runSecrets = runSecretValues(secrets, raw, declaredNonSecretParams(journey));
+        runSecrets = [...new Set([...runSecretValues(secrets, raw, nonSecretParams), ...extractedCredentials])];
         result = redactSecretValues(raw, runSecrets);
       } finally {
         await gate.done();

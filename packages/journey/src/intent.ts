@@ -48,20 +48,30 @@ export function intentCoverage(journey: Journey): IntentCoverage {
 
 export { isSecretName };
 
-/** The parameters a Journey explicitly declares `secret: false`: what a credential-like name means is the author's call. */
+/** The approval channels a person made. `mcp` is an agent's; `non-interactive` and `ci` are scripts'. Absent: not known to be a person's. */
+const PERSON_APPROVAL_CHANNELS: ReadonlySet<string> = new Set(["tty", "pr-review"]);
+
+/**
+ * The parameters this Journey's `secret: false` lifts a credential-like name for: declared so, and
+ * the Journey's own approval came from a person. An agent can write the declaration and approve it
+ * over MCP, so that lifts nothing. Provenance is detection, not proof (docs/catalog.md): whoever can
+ * edit the Journey file can also write the channel. Enforcement is git review of `.jevitate/`.
+ */
 export function declaredNonSecretParams(journey: Journey): Set<string> {
+  const channel = journey.metadata.approval?.provenance?.channel;
+  if (channel === undefined || !PERSON_APPROVAL_CHANNELS.has(channel)) return new Set();
   return new Set((journey.metadata.parameters ?? []).filter((p) => p.secret === false).map((p) => p.name));
 }
 
 /**
  * The parameter names whose values are secret: declared `secret: true`, or a credential-like name
- * (defense in depth, for Journeys that declare no `parameters`) unless declared `secret: false`.
+ * (defense in depth, for Journeys that declare no `parameters`), unless `declaredNonSecretParams` lifts it.
  */
 export function secretParamNames(journey: Journey, params: Readonly<Record<string, string>> = {}): string[] {
   const nonSecret = declaredNonSecretParams(journey);
   const names = new Set<string>();
   for (const p of journey.metadata.parameters ?? []) {
-    if (p.secret === true || (p.secret !== false && isSecretName(p.name))) names.add(p.name);
+    if (p.secret === true || (isSecretName(p.name) && !nonSecret.has(p.name))) names.add(p.name);
   }
   for (const n of [...journey.metadata.params, ...Object.keys(params)]) {
     if (isSecretName(n) && !nonSecret.has(n)) names.add(n);

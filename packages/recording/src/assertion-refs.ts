@@ -15,30 +15,29 @@ import { encodeUrlParamValue } from "./navigate-params.js";
  * page's (encoded) URL.
  */
 
-/** Words that hold a credential whatever surrounds them, also inside an all-lowercase compound (`mypassword`, `authtoken`). */
-const SECRET_COMPOUND_RE =
-  /password|passwd|passcode|passphrase|credential|api[-_ ]?key|api[-_ ]?secret|private[-_ ]?key|access[-_ ]?key|secret[-_ ]?key|client[-_ ]?secret|auth[-_ ]?token|access[-_ ]?token|refresh[-_ ]?token|id[-_ ]?token|bearer[-_ ]?token|session[-_ ]?(id|key|token)/;
+/**
+ * Terms that read as a credential anywhere in a name, separators ignored. Deliberately broad, and it
+ * will match ordinary words (`passengers`, `token_count`, `footprint`): a refusal has a way out, a
+ * Journey's declared `secret: false` with a person's approval, and a credential that slips through
+ * has none. `auth` leaves out `author`, and `ssword` catches a misspelt or accented `password`.
+ */
+const SECRET_ANYWHERE_RE =
+  /pass|pwd|ssword|p4ss|s3cret|secret|t0ken|token|otp|auth(?!or(?!iz))|bearer|jwt|credential|session|sessid|cookie|csrf|xsrf|mfa|2fa|twofactor|cvv|cvc|hmac|nonce|saml|assertion|signature|iban|dsn|apikey|privatekey|accesskey|sshkey|signingkey|encryptionkey|sharedkey|licensekey|pincode|pinnumber|smscode|verificationcode|recoverycode|backupcode|invitecode|securitycode|securityanswer|cardnumber|ccnumber|creditcard|webhookurl|connectionstring|magiclink|resetlink|kennwort|wachtwoord|contrase|senha|clave|parola|пароль|密码|暗号|パスワード/;
 
-/** Words that read as a credential only as a whole segment of a name: `pin_code`, not `spin`; `pass`, not `passengers`. */
-const SECRET_SEGMENTS: ReadonlySet<string> = new Set([
-  "auth", "authn", "authorization", "bearer", "cookie", "cred", "creds", "cvc", "cvv", "hotp", "jwt", "mfa", "oauth", "otp", "pass", "pin", "pw", "pwd", "secret", "sess", "session", "ssn", "token", "totp",
-]);
+/** Short terms that are everyday letters inside other words (`shipping`, `inside`, `classname`), so they need their own edges. */
+const SECRET_BOUNDED_RE = /(?<![\p{L}\p{N}])(?:pins?|pw|sess|sid|ssn|creds?|key|tfa|mdp)(?![\p{L}])|pin(?![\p{L}])|pw(?![\p{L}])/u;
 
 /**
  * Does this binding NAME read as a credential (a parameter, an `extract` output, a fixture output)?
- * Matched on the name's segments (camelCase, snake_case, kebab-case, spaces, digits), never on a
- * substring, so `passengers` and `footprint` are not. Defense in depth: a parameter so named is
- * secret unless it declares `secret: false`, and (#564) an assertion may never reference a value so
- * named: its text would be model-visible and persisted. Re-exported by `@jevitate/journey`.
+ * A name can't prove a value is safe, so this errs on the side of matching. Defense in depth: a
+ * parameter so named is secret, unless it declares `secret: false` and a person approved the Journey
+ * (`declaredNonSecretParams`), and (#564) an assertion may never reference a value so named: its text
+ * would be model-visible and persisted. Re-exported by `@jevitate/journey`.
  */
 export function isSecretName(name: string): boolean {
-  if (SECRET_COMPOUND_RE.test(name.toLowerCase())) return true;
-  const segments = name
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-    .toLowerCase()
-    .split(/[^a-z]+/);
-  return segments.some((s) => SECRET_SEGMENTS.has(s) || (s.endsWith("s") && SECRET_SEGMENTS.has(s.slice(0, -1))));
+  const lower = name.toLowerCase();
+  if (SECRET_ANYWHERE_RE.test(lower.replace(/[^\p{L}\p{N}]+/gu, ""))) return true;
+  return SECRET_BOUNDED_RE.test(name.replace(/(\p{Ll}|\p{N})(\p{Lu})/gu, "$1_$2").replace(/(\p{Lu}+)(\p{Lu}\p{Ll})/gu, "$1_$2").toLowerCase());
 }
 
 /** A `${name}` placeholder (the grammar the `http` check's URL and assertions use, #543). */

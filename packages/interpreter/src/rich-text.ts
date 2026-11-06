@@ -109,7 +109,7 @@ function placeSelection(
  * Performs `edit` inside the contenteditable `locator` resolves to. Throws (fail-closed) when the
  * target is not a contenteditable or the anchor cannot be placed; the page is untouched then.
  */
-export async function applyTextEdit(page: Page, locator: Locator, edit: TextEdit): Promise<void> {
+export async function applyTextEdit(page: Page, locator: Locator, edit: TextEdit & { readonly beforeType?: () => void }): Promise<void> {
   const caret: "start" | "end" | null = edit.action === "insertBefore" ? "start" : edit.action === "insertAfter" ? "end" : null;
   const placed = await locator.evaluate(placeSelection, { anchor: edit.anchor, caret });
   if (!placed.ok) throw new Error(`editText refused: ${placed.reason}`);
@@ -125,6 +125,7 @@ export async function applyTextEdit(page: Page, locator: Locator, edit: TextEdit
     if (edit.action === "replace" && placed.text !== "") await page.keyboard.press("Delete");
     return;
   }
+  edit.beforeType?.();
   await page.keyboard.type(value);
 }
 

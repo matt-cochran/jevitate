@@ -1,5 +1,5 @@
 import { isAbsolute } from "node:path";
-import type { Locator, Page } from "playwright";
+import type { ElementHandle, Locator, Page } from "playwright";
 import type { Assertion, OutcomeWait, RecordedStep, Step, TargetDescriptor, ValueOrVar } from "@jevitate/recording";
 import type { AssertionRefLookup } from "@jevitate/recording";
 import { FixturePathError, isSecretName, confineFixture, describeNavigateUrl, encodeUrlParamValue, literalOperand, navigateUrlParams, resolveAssertionRefs, resolveNavigateUrl } from "@jevitate/recording";
@@ -134,12 +134,11 @@ export interface StepRefOptions {
 /**
  * A secret code resolved for this run (an operator's binding, never a request's) is only ever typed
  * on the origins it is bound to. The allowlist check on steps is static, and a redirect is not a
- * step: this reads the page the value is about to reach. Fails closed, naming only the origin.
+ * step: this reads the page the value is about to reach. Fails closed, naming only the origins.
  */
 function assertBoundSecretOrigin(actor: Actor, value: ValueOrVar, bound: ReadonlyMap<string, readonly string[]> | undefined): void {
-  if (bound === undefined || !("var" in value)) return;
-  const origins = bound.get(value.var);
-  if (origins === undefined) return;
+  if (!isBoundSecret(value, bound)) return;
+  const origins = bound?.get(value.var) ?? [];
   const url = actor.ability(BrowseTheWebToken).session.page.url();
   let origin: string;
   try {
@@ -148,7 +147,38 @@ function assertBoundSecretOrigin(actor: Actor, value: ValueOrVar, bound: Readonl
     origin = "an unreadable page";
   }
   if (!origins.includes(origin)) {
-    throw new Error(`E_SECRET_ORIGIN_REFUSED: secret parameter ${value.var} was not typed: the page is on ${origin}, and its binding is for ${origins.join(", ")}`);
+    throw new Error(
+      `E_SECRET_ORIGIN_REFUSED: secret parameter ${value.var} was not typed: the page is on ${origin}, and its binding is for ${origins.join(", ")}. ` +
+        `If that page should get it (a sign-in on another origin), run it on the CLI with journey run --secret-field and --allow ${origin}; targets.json binds a secret to its own origin only. Otherwise find out why the page went there`,
+    );
+  }
+}
+
+function isBoundSecret(value: ValueOrVar, bound: ReadonlyMap<string, readonly string[]> | undefined): value is Extract<ValueOrVar, { var: string }> {
+  return bound !== undefined && "var" in value && bound.has(value.var);
+}
+
+/**
+ * Types through an element handle, which dies with its document: a locator re-resolves while it
+ * waits for the field, on whatever page is there by then. The origin is read with the handle held.
+ * A field that left its document is looked for again, and the origin read again, so a re-render on
+ * the same page still types and a move to another origin refuses. A failure's text drops
+ * Playwright's call log, which quotes the value.
+ */
+async function typeBoundSecret(actor: Actor, value: ValueOrVar, bound: ReadonlyMap<string, readonly string[]> | undefined, locator: Locator, type: (handle: ElementHandle<Node>) => Promise<void>): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    const handle = await locator.elementHandle();
+    assertBoundSecretOrigin(actor, value, bound);
+    if (handle === null) throw new Error("the field to type a secret parameter into is gone");
+    try {
+      await type(handle);
+      return;
+    } catch (err) {
+      const message = (err instanceof Error ? err.message : String(err)).split("\nCall log")[0] ?? "";
+      if (attempt >= 3 || !message.includes("not attached")) throw new Error(`typing a secret parameter failed: ${message}`);
+    } finally {
+      await handle.dispose().catch(() => undefined);
+    }
   }
 }
 
@@ -241,7 +271,7 @@ export async function runStep(
   rec: RecordedStep,
   vars: Map<string, string>,
   index = 0,
-  targetOpts: ResolveTargetOptions & StepWaitHooks & StepRefOptions & { readonly fixtureBaseDir?: string; readonly boundSecretParams?: ReadonlyMap<string, readonly string[]>; readonly selectAlternative?: (index: number) => SelectAlternative | undefined; readonly actionGuard?: ReplayActionGuard; readonly onExtracted?: (value: string) => void } = {},
+  targetOpts: ResolveTargetOptions & StepWaitHooks & StepRefOptions & { readonly fixtureBaseDir?: string; readonly boundSecretParams?: ReadonlyMap<string, readonly string[]>; readonly selectAlternative?: (index: number) => SelectAlternative | undefined; readonly actionGuard?: ReplayActionGuard; readonly onExtracted?: (value: string, name?: string) => void | Promise<void> } = {},
 ): Promise<StepOutcome> {
   const step = rec.step;
   // #562/#565: an expectation's `${name}` / `{ var }` operands resolve as it is checked — after this
@@ -284,8 +314,11 @@ export async function runStep(
     case "fill": {
       const text = resolveValue(step.value, vars);
       const field = await strictTarget(actor, step.target, targetOpts);
-      assertBoundSecretOrigin(actor, step.value, targetOpts.boundSecretParams);
-      await Enter.theText(text).into(field).performAs(actor);
+      if (isBoundSecret(step.value, targetOpts.boundSecretParams)) {
+        await typeBoundSecret(actor, step.value, targetOpts.boundSecretParams, await resolveTarget(actor.ability(BrowseTheWebToken).session.page, step.target, targetOpts), (handle) => handle.fill(text));
+      } else {
+        await Enter.theText(text).into(field).performAs(actor);
+      }
       await postcondition(actor, expected(step.expect), step.waitFor, "fill", index, targetOpts);
       return { kind: "done" };
     }
@@ -306,7 +339,7 @@ export async function runStep(
         throw new Error(`extract: attribute "${step.attr}" not found on target`);
       }
       vars.set(step.as, value);
-      targetOpts.onExtracted?.(value);
+      await targetOpts.onExtracted?.(value, step.as);
       targetOpts.actionGuard?.noteExtracted?.(value);
       await postcondition(actor, expected(step.expect), step.waitFor, "extract", index, targetOpts);
       return { kind: "done" };
@@ -319,8 +352,11 @@ export async function runStep(
       const page = actor.ability(BrowseTheWebToken).session.page;
       const locator = await resolveTarget(page, step.target, targetOpts);
       const value = chosen ?? (await selectAlternativeValue(locator, alternative!.avoid));
-      assertBoundSecretOrigin(actor, step.value, targetOpts.boundSecretParams);
-      await locator.selectOption(value);
+      if (isBoundSecret(step.value, targetOpts.boundSecretParams)) {
+        await typeBoundSecret(actor, step.value, targetOpts.boundSecretParams, locator, (handle) => handle.selectOption(value).then(() => undefined));
+      } else {
+        await locator.selectOption(value);
+      }
       await postcondition(actor, expected(step.expect), step.waitFor, "select", index, targetOpts);
       return { kind: "done" };
     }
@@ -370,6 +406,7 @@ export async function runStep(
         action: step.action,
         ...(value === undefined ? {} : { value }),
         ...(step.format === undefined ? {} : { format: step.format }),
+        ...(step.value === undefined ? {} : { beforeType: () => assertBoundSecretOrigin(actor, step.value!, targetOpts.boundSecretParams) }),
       });
       await postcondition(actor, expected(step.expect), step.waitFor, "editText", index, targetOpts);
       return { kind: "done" };
@@ -445,7 +482,7 @@ async function runRowScopedChildStep(
   expected: (a: Assertion) => Assertion,
   index: number,
   parent: RecordedStep,
-  hooks: { readonly actionGuard?: ReplayActionGuard; readonly onExtracted?: (value: string) => void },
+  hooks: { readonly actionGuard?: ReplayActionGuard; readonly onExtracted?: (value: string, name?: string) => void | Promise<void> },
 ): Promise<void> {
   switch (childStep.kind) {
     case "click": {
@@ -466,7 +503,7 @@ async function runRowScopedChildStep(
         throw new Error(`extract: attribute "${childStep.attr}" not found on target`);
       }
       vars.set(childStep.as, value);
-      hooks.onExtracted?.(value);
+      await hooks.onExtracted?.(value, childStep.as);
       hooks.actionGuard?.noteExtracted?.(value);
       const expect = expected(childStep.expect);
       if (!(await checkAssertionInRow(actor, expect, rowLocator))) {

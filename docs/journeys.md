@@ -917,11 +917,16 @@ the shell history. `journey run` is the only command with `--secret-field` and `
 resolution. `journey verify`, `journey readiness`, `journey chain`, `journey demo`,
 `journey annotate`, `load run`, `explore --from-journey`, `source run`, `verify-fix` and
 `regression capture`/`run` take a secret parameter through `--param` only, with the same warning.
+On `journey chain` that means the producer: a consumer's secret parameter can't be supplied at all,
+through `--param` or `targets.json`, and the chain fails closed.
 
-A bound value is typed only where its binding applies. At the moment of typing, the page must be on
-the origin the `targets.json` entry is keyed by, or for `--secret-field` on the run's allowlist.
-Anywhere else, such as after a redirect, nothing is typed and the step fails with
-`E_SECRET_ORIGIN_REFUSED`. A value given with `--param` has no such check.
+A bound value is typed only where its binding applies. The page must be on the origin the
+`targets.json` entry is keyed by, or for `--secret-field` on the run's allowlist, checked with the
+field in hand on `fill`, `select` and `editText`. Anywhere else, such as after a redirect, nothing is
+typed and the step fails with `E_SECRET_ORIGIN_REFUSED`. For a sign-in on another origin (SSO), run
+`journey run --secret-field … --allow <origin>` on the CLI: `targets.json` binds a secret to its own
+origin only, so over MCP there is no way to send it there. A value given with `--param` has no such
+check.
 
 A value is never guessed. If two secret parameters match one binding, or one parameter matches two,
 nothing runs: `E_JOURNEY_RUN_ARGS` on the CLI, `E_SECRET_FIELD_AMBIGUOUS` over MCP. Bind each by a
@@ -936,16 +941,22 @@ the parameter out of the request. A `${setup.x}` reference holds no value and is
 in a `navigate` URL has no field to bind, so it runs on the CLI only. `run_check` and `run_campaign`
 read `params` from the suite or spec file, not from the request.
 
-**Which names count.** A parameter is secret when it declares `secret: true`, or when a segment of its
-name reads as a credential: `password`, `pwd`, `pass`, `secret`, `token`, `apiKey`, `accessKey`,
-`privateKey`, `auth`, `authorization`, `bearer`, `jwt`, `otp`, `totp`, `mfa`, `pin`, `ssn`, `cvv`,
-`cvc`, `session`, `sess`, `cookie`, `credential`. Segments split on camelCase, `_`, `-`, spaces and
-digits, so `pin_code` counts and `spin`, `passengers` and `footprint` do not. `token_count` and
-`session_name` have such a segment, so they are secret until the Journey declares
-`"secret": false`, which is the author's statement that the value is not a credential: it goes through
-MCP and is not redacted. Keep it for names that only look like credentials, because a reviewer reads
-it on the review sheet like any other parameter. An assertion still may not reference a
-credential-like name, whatever it declares.
+**Which names count.** A parameter is secret when it declares `secret: true`, or when its name reads
+as a credential. The name check is deliberately broad, since a credential that slips through has no
+way back: it matches `pass`, `pwd`, `secret`, `token`, `otp`, `auth`, `session`, `cookie`, `key`,
+`pin`, `ssn`, `cvv`, `signature`, `nonce`, `card_number`, and foreign words for password, anywhere in
+the name for the longer ones. So it also matches `passengers`, `token_count` and `footprint`.
+
+For those, declare `"secret": false` on the parameter and have a person approve the Journey: a typed
+`journey promote` at a terminal, or a verified PR review. Then the value goes through MCP and is not
+redacted. An approval over MCP, a scripted one (`non-interactive`, `ci`), one with no recorded channel
+or one the Journey has changed since lifts nothing. The rule is per Journey, so in `journey chain` and a
+`journey readiness` pair every Journey the params can reach has to lift it. A source's Journey never
+lifts it over MCP: its file is someone else's, so the name alone refuses. An assertion may not
+reference a credential-like name, whatever it declares.
+
+Provenance is detection, not proof: whoever can edit the Journey file can also write the channel. What
+enforces it is git review of `.jevitate/` (see [catalog.md](./catalog.md)).
 
 ### Parameters in a `navigate` URL
 

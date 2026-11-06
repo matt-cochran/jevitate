@@ -15,6 +15,11 @@ import type { CliDeps } from "./cli-shared.js";
 import { SECRET_PARAM_OVER_MCP } from "./secret-params.js";
 import { prefixFromBranch, type RecordedBranch } from "./journey-prefix.js";
 import { useSkippingTime } from "../../explore/src/testkit.js";
+import { safeRunPolicy } from "@jevitate/domain";
+import { runJourneyProgrammatically } from "./journey-api.js";
+import { makeEvidenceSelfHealer } from "./self-heal-adapter.js";
+import { readJourneyChangeScope } from "./journey-heal.js";
+import { MissionFixtures } from "./mission-fixtures.js";
 
 /**
  * The boundary: a secret parameter's value never travels through an MCP request (it would pass
@@ -27,6 +32,8 @@ const VALUE = "S3ntinelVaLue9Zq";
 const VAR = "JEV_TEST_SECRET_PARAM";
 const MINTED = "minted-tok-9Zq";
 let redirectTo: string | undefined;
+let leavesFor: string | undefined;
+let showsSecrets = "";
 
 let server: Server;
 let origin: string;
@@ -150,16 +157,24 @@ beforeAll(async () => {
   server = createServer((req, res) => {
     if (req.url === "/mint") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ tok: MINTED, order: "ord-1" }));
+      res.end(JSON.stringify({ tok: MINTED, sec: "SecOutVal9Kx2", order: "ord-1" }));
       return;
     }
     if (req.url === "/go" && redirectTo !== undefined) {
       res.writeHead(302, { location: redirectTo }).end();
       return;
     }
+    if (leavesFor !== undefined && (req.url ?? "").startsWith("/moves-")) {
+      const field = req.url === "/moves-disabled" ? "disabled" : req.url === "/moves-hidden" ? 'style="visibility:hidden"' : "";
+      const select = req.url === "/moves-select" ? `<label>Plan <select data-testid=plan disabled><option>none</option></select></label>` : "";
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(`<label>Password <input type=password ${field}></label>${select}<script>setTimeout(()=>{location.href=${JSON.stringify(`${leavesFor}/`)}},${select === "" ? 600 : 1500})</script>`);
+      return;
+    }
     pageLoads += 1;
     res.writeHead(200, { "content-type": "text/html" });
     res.end(
+      showsSecrets +
       `<h1>Sign in</h1><label>Password <input id=pw data-testid=pw type=password></label><input data-testid=who>` +
         `<button onclick="document.querySelector('[data-testid=status]').textContent='len='+document.getElementById('pw').value.length">Sign in</button><p data-testid=status></p>`,
     );
@@ -338,40 +353,95 @@ describe("CLI: a secret parameter off the command line", { timeout: 120_000 }, (
   });
 });
 
-describe("which names count (H3, M3)", { timeout: 120_000 }, () => {
-  useSkippingTime();
-  const fillNamed = (name: string, secret?: boolean): Journey => {
-    const j = journey(`named-${name}`, name);
-    j.metadata.parameters = [{ name, ...(secret === undefined ? {} : { secret }) }];
-    j.recording.pages[0]!.steps = [
-      { step: { kind: "navigate", url: "/", expect: { kind: "visible", target: { testId: "who" } } } },
-      { step: { kind: "fill", target: { testId: "who" }, value: { var: name }, expect: { kind: "visible", target: { testId: "who" } } } },
-    ] as never;
-    j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z" } as never;
-    writeFileSync(join(journeysDir, `${j.metadata.id}.json`), JSON.stringify(j));
-    return j;
-  };
+/** Approved by this channel: `tty` is a person's, `mcp` an agent's. No channel: an approval older than provenance. */
+function approved(j: Journey, channel?: string): Journey {
+  j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z", ...(channel === undefined ? {} : { provenance: { channel, agentSignals: [] } }) } as never;
+  return j;
+}
 
-  it.each(["pwd", "jwt", "bearer", "authorization", "auth", "pin_code", "pinCode", "privateKey", "access_key", "mfa_code", "ssn", "cvv", "sess"])("%s is refused when undeclared", async (name) => {
+function fillNamed(name: string, secret?: boolean, channel?: string, id = `named-${name}`): Journey {
+  const j = journey(id, name);
+  j.metadata.parameters = [{ name, ...(secret === undefined ? {} : { secret }) }];
+  j.recording.pages[0]!.steps = [
+    { step: { kind: "navigate", url: "/", expect: { kind: "visible", target: { testId: "who" } } } },
+    { step: { kind: "fill", target: { testId: "who" }, value: { var: name }, expect: { kind: "visible", target: { testId: "who" } } } },
+  ] as never;
+  approved(j, channel);
+  writeFileSync(join(journeysDir, `${j.metadata.id}.json`), JSON.stringify(j));
+  return j;
+}
+
+describe("which names count (H3, R5, M3)", { timeout: 120_000 }, () => {
+  useSkippingTime();
+
+  it.each(["pwd", "jwt", "bearer", "authorization", "auth", "pin_code", "pinCode", "privateKey", "access_key", "mfa_code", "ssn", "cvv", "sess", "usertoken", "mysecret", "otpcode", "csrftoken", "passwort", "pincode"])("%s is refused when undeclared", async (name) => {
     fillNamed(name);
     const r = await call("run_journey", { id: `named-${name}`, params: { [name]: VALUE } });
     expect(r.body).toMatchObject({ code: SECRET_PARAM_OVER_MCP, params: [name] });
     expect(r.text).not.toContain(VALUE);
   });
 
-  it.each(["passengers", "footprint", "compass", "bypass_cache", "passport_country", "spin", "hotpink", "author", "authorName"])("%s runs without declaring anything", async (name) => {
+  it.each(["author", "authorName", "shipping_method", "sku", "orderId"])("%s runs without declaring anything", async (name) => {
     fillNamed(name);
     const r = await call("run_journey", { id: `named-${name}`, params: { [name]: "3" } });
     expect(r.body["outcome"], r.text).toBe("ok");
   });
 
-  it.each(["token_count", "tokenCount", "session_name", "cookie_banner", "otp_channel"])("%s has a credential segment: refused until it declares secret: false", async (name) => {
+  it.each(["passengers", "footprint", "compass", "bypass_cache", "passport_country", "token_count", "tokenCount", "session_name", "cookie_banner", "otp_channel"])("%s: refused until it declares secret: false and a person approves", async (name) => {
     fillNamed(name);
-    expect((await call("run_journey", { id: `named-${name}`, params: { [name]: "3" } })).body).toMatchObject({ code: SECRET_PARAM_OVER_MCP });
-    fillNamed(name, false);
+    const refused = await call("run_journey", { id: `named-${name}`, params: { [name]: "3" } });
+    expect(refused.body).toMatchObject({ code: SECRET_PARAM_OVER_MCP });
+    expect(String(refused.body["message"])).toContain("jevitate journey promote");
+    fillNamed(name, false, "tty");
     const r = await call("run_journey", { id: `named-${name}`, params: { [name]: "3" } });
     expect(r.body["outcome"], r.text).toBe("ok");
     expect(r.body["output"]).toMatchObject({ [name]: "3" }); // and it is not redacted
+  });
+});
+
+describe("who may use secret: false (R4, R6)", { timeout: 120_000 }, () => {
+  useSkippingTime();
+  it.each([["mcp"], ["non-interactive"], ["ci"], [undefined]])("an approval by %s lifts nothing on password", async (channel) => {
+    fillNamed("password", false, channel, "sf-password");
+    const r = await call("run_journey", { id: "sf-password", env: "local", params: { password: VALUE } });
+    expect(r.body).toMatchObject({ code: SECRET_PARAM_OVER_MCP, params: ["password"] });
+    expect(String(r.body["message"])).toContain("jevitate journey promote");
+    expect(r.text).not.toContain(VALUE);
+    expect(pageLoads).toBe(0);
+  });
+
+  it("a person's approval lifts it, and only while it matches the Journey", async () => {
+    const j = fillNamed("token_count", false, "tty", "sf-person");
+    expect((await call("run_journey", { id: "sf-person", params: { token_count: "3" } })).body["outcome"]).toBe("ok");
+    // Edited after the person approved: a verify, which doesn't refuse a stale Journey, reads the same.
+    j.metadata.name = "edited";
+    writeFileSync(join(journeysDir, "sf-person.json"), JSON.stringify(j));
+    expect((await call("verify_journey", { id: "sf-person", plan: true, params: { token_count: "3" } })).body).toMatchObject({ code: SECRET_PARAM_OVER_MCP });
+  });
+
+  it("the CLI redacts it the same way until a person approved", async () => {
+    fillNamed("token_count", false, "mcp", "sf-cli");
+    const r = await cli(["journey", "run", "sf-cli", "--param", "token_count=tok3val", "--json"]);
+    expect(r.out).not.toContain("tok3val");
+    expect(r.err).toContain("token_count");
+  });
+
+  it("per Journey: another Journey's declaration lifts nothing, in a chain and in a pair", async () => {
+    fillNamed("password", undefined, undefined, "sf-nameonly");
+    fillNamed("password", false, "tty", "sf-falsey");
+    const requests = join(root, "requests.jsonl");
+    for (const args of [{ from: "sf-nameonly", to: "sf-falsey" }, { from: "sf-falsey", to: "sf-nameonly" }]) {
+      const r = await call("chain_journeys", { ...args, requests, params: { password: VALUE } });
+      expect(r.body).toMatchObject({ code: SECRET_PARAM_OVER_MCP, params: ["password"] });
+    }
+    const pair = await call("journey_readiness", { id: "sf-nameonly", with: "sf-falsey", params: { password: VALUE } });
+    expect(pair.body).toMatchObject({ code: SECRET_PARAM_OVER_MCP });
+    expect(pageLoads).toBe(0);
+  });
+
+  it("a source's Journey never lifts it: the name alone refuses", async () => {
+    const r = await call("sources", { action: "run", name: "nosuch", journeyId: "x", params: { token_count: "3" } });
+    expect(r.body).toMatchObject({ code: SECRET_PARAM_OVER_MCP });
   });
 });
 
@@ -414,6 +484,7 @@ describe("a bound secret is typed only on its own origin (M1)", { timeout: 120_0
     expect(r.body["outcome"], r.text).not.toBe("ok");
     expect(r.text).toContain("E_SECRET_ORIGIN_REFUSED");
     expect(r.text).toContain(otherOrigin);
+    expect(r.text).toContain("--secret-field and --allow"); // what to do, for a sign-in on another origin
     expect(r.text).not.toContain(VALUE);
     noLeak();
   });
@@ -428,6 +499,103 @@ describe("a bound secret is typed only on its own origin (M1)", { timeout: 120_0
   it("the page's own origin still gets it", async () => {
     const r = await call("run_journey", { id: "login", env: "local" });
     expect(r.body["outcome"], r.text).toBe("ok");
+  });
+});
+
+// Real time: the page's own timer has to move it while the step waits for the field.
+describe("[realtime] the page moves while the step waits (R1, R2)", { timeout: 120_000 }, () => {
+  let other: Server;
+  let leaks: string[] = [];
+  const sec = (id: string, url: string, steps: unknown[]): void => {
+    const j = journey(id);
+    j.recording.pages[0]!.steps = [{ step: { kind: "navigate", url, expect: { kind: "visible", target: { css: "body" } } } }, ...steps] as never;
+    approved(j);
+    writeFileSync(join(journeysDir, `${id}.json`), JSON.stringify(j));
+  };
+  const fillStep = { step: { kind: "fill", target: { label: "Password" }, value: { var: "secret1" }, expect: { kind: "visible", target: { css: "body" } } } };
+
+  beforeAll(async () => {
+    other = createServer((req, res) => {
+      if ((req.url ?? "").startsWith("/leak")) leaks.push(req.url ?? "");
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(
+        `<label>Password <input type=password oninput="fetch('/leak?v='+encodeURIComponent(this.value))"></label>` +
+          `<div data-testid=ed contenteditable oninput="fetch('/leak?v='+encodeURIComponent(this.textContent))">x</div>` +
+          `<label>Plan <select data-testid=plan onchange="fetch('/leak?v='+encodeURIComponent(this.value))"><option>none</option><option value="${VALUE}">p</option></select></label>`,
+      );
+    });
+    await new Promise<void>((r) => other.listen(0, "127.0.0.1", r));
+    const b = `http://127.0.0.1:${(other.address() as { port: number }).port}`;
+    redirectTo = `${b}/`;
+    leavesFor = b;
+    sec("moves-disabled", "/moves-disabled", [fillStep]);
+    sec("moves-hidden", "/moves-hidden", [fillStep]);
+    // select binds nothing by itself: a fill on A binds the value, then the page leaves for B before the select.
+    sec("moves-select", "/moves-select", [fillStep, { step: { kind: "select", target: { testId: "plan" }, value: { var: "secret1" }, expect: { kind: "visible", target: { css: "body" } } } }]);
+    sec("edit-on-b", "/", [fillStep, { step: { kind: "navigate", url: "/go", expect: { kind: "visible", target: { testId: "ed" } } } }, { step: { kind: "editText", target: { testId: "ed" }, anchor: { at: "end" }, action: "insertAfter", value: { var: "secret1" }, expect: { kind: "visible", target: { testId: "ed" } } } }]);
+    writeFileSync(join(root, "environments.json"), JSON.stringify({ local: { baseUrl: origin }, sso: { baseUrl: origin, allow: [b] } }));
+  });
+  afterAll(() => {
+    redirectTo = undefined;
+    leavesFor = undefined;
+    other.closeAllConnections();
+    other.close();
+    writeFileSync(join(root, "environments.json"), JSON.stringify({ local: { baseUrl: origin } }));
+  });
+  beforeEach(() => {
+    leaks = [];
+  });
+
+  it.each([
+    ["fill, field disabled on A", "moves-disabled", "local"],
+    ["fill, field hidden on A", "moves-hidden", "local"],
+    ["select after a fill, page leaves for B first", "moves-select", "local"],
+    ["editText after a 302, B off the allowlist", "edit-on-b", "local"],
+    ["editText after a 302, B on the allowlist: the binding is still A's", "edit-on-b", "sso"],
+  ])("%s: refused by name, nothing at B", async (_why, id, env) => {
+    const r = await call("run_journey", { id, env });
+    expect(r.body["outcome"], r.text).not.toBe("ok");
+    expect(r.text).toContain("E_SECRET_ORIGIN_REFUSED");
+    expect(r.text).not.toContain(VALUE);
+    expect(leaks).toEqual([]);
+  });
+});
+
+describe("a heal's model payload holds no secret of the run (R3)", { timeout: 120_000 }, () => {
+  useSkippingTime();
+  const SEC_OUT = "SecOutVal9Kx2";
+  const EXTRACTED = "ExtractVal5Rt1";
+
+  it("secretOutputs, a credential-named output and an extracted apiKey are redacted in heal.rank", async () => {
+    showsSecrets = `<button>Copy invite ${SEC_OUT}</button><button>Copy key ${MINTED}</button><button id=minted data-v="${EXTRACTED}">Minted ${EXTRACTED}</button>`;
+    const j = journey("heal-secrets");
+    j.recording.pages[0]!.steps = [
+      { step: { kind: "navigate", url: "/", expect: { kind: "visible", target: { testId: "pw" } } } },
+      { step: { kind: "fill", target: { label: "Password" }, value: { var: "secret1" }, expect: { kind: "visible", target: { testId: "pw" } } } },
+      { step: { kind: "extract", target: { css: "#minted" }, as: "apiKey", attr: "data-v", expect: { kind: "visible", target: { testId: "pw" } } } },
+      { step: { kind: "click", target: { role: "button", name: "Nowhere" }, expect: { kind: "visible", target: { testId: "pw" } } } },
+    ] as never;
+    approved(j);
+    writeFileSync(join(journeysDir, "heal-secrets.json"), JSON.stringify(j));
+    const inputs: unknown[] = [];
+    const gen = { generate: async (task: string, input: unknown) => (inputs.push({ task, input }), { output: { order: [], control: null } }) } as never;
+    const scope = await readJourneyChangeScope({ selfHeal: "hybrid", changeNotes: ["renamed Nowhere to Elsewhere"] } as never, journeysDir);
+    const result = await runJourneyProgrammatically({
+      dir: journeysDir,
+      id: "heal-secrets",
+      params: { secret1: VALUE },
+      policy: { ...safeRunPolicy(), selfHeal: { mode: "hybrid" } } as never,
+      selfHealer: makeEvidenceSelfHealer(gen),
+      heal: { scope },
+      fixtures: () => new MissionFixtures({ spec: { setup: [{ method: "POST", url: `${origin}/mint`, outputs: { minted: "$.sec", authToken: "$.tok" }, secretOutputs: ["minted"] }] }, auth: {}, allowlist: [origin], baseUrl: origin } as never),
+    } as never).finally(() => {
+      showsSecrets = "";
+    });
+    const payload = JSON.stringify(inputs);
+    expect(inputs.length, JSON.stringify(result)).toBeGreaterThan(0);
+    expect(payload).toContain("Copy invite"); // the inventory did reach the model...
+    for (const v of [SEC_OUT, EXTRACTED, MINTED, VALUE]) expect(payload).not.toContain(v); // ...without these
+    expect(JSON.stringify(result)).not.toContain(EXTRACTED);
   });
 });
 

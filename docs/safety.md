@@ -349,9 +349,18 @@ built-in verb (`Preview*`, `Recalculate*`, …).
 - An MCP request never carries a secret parameter's value: it is refused by name with
   `E_SECRET_PARAM_OVER_MCP` before anything runs. On a replay the value comes from an environment
   variable through `journey run --secret-field` or `secretFields` in `targets.json`; `--param` on the
-  CLI still works and warns on stderr. A value from a binding is typed only on the binding's origin,
-  checked as it is typed, so a redirect to another origin gets nothing (`E_SECRET_ORIGIN_REFUSED`)
+  CLI still works and warns on stderr
   ([Secret parameters on a replay](./journeys.md#secret-parameters-on-a-replay)).
+- A credential-like name is refused however it is spelt, broadly on purpose. `secret: false` lifts that
+  only when a person approved that Journey; an approval over MCP does not, per Journey. Provenance is
+  detection, not proof: an agent that can edit the Journey file can also write the channel, and git
+  review of `.jevitate/` is what catches that.
+- A value from a binding is typed only on the binding's origin, read with the field in hand, or the
+  step fails with `E_SECRET_ORIGIN_REFUSED`. Limit: a page that navigates in the instant between that
+  read and the value going in can't be excluded, though an element handle dies with its document.
+- Everything a self-heal sends a model is redacted with the run's whole set: secret parameters,
+  fixture secrets and credential-named outputs, and credentials extracted so far. Its evidence
+  screenshots use the same set. A secret the page transforms (lower-cased, say) is not recognised.
 - `--storage-state` files go only to the browser. Artifacts record their path, never their
   contents.
 - `jevitate login` (#427, #449) reads credentials only from the environment variables its flags

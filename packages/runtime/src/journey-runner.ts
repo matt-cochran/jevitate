@@ -111,6 +111,8 @@ export interface JourneyHealOptions {
   readonly writeGuard?: HealWriteGuard;
   /** Handed to the model healer. */
   readonly allowedOrigins?: readonly string[];
+  /** The rest of the run's redaction set, for the model healer: fixture secrets, credentials extracted so far. */
+  readonly runSecrets?: () => readonly string[];
 }
 
 /**
@@ -392,7 +394,6 @@ export class JourneyRunner {
     const healer = this.selfHealer;
     let askModel = healer !== undefined && !(guarded && healer.actsOnPage);
     let budgetOut: HealExhaustion | null = null;
-    const secrets = secretParamValues(req.journey, req.params);
     let refuted = 0;
 
     for (;;) {
@@ -405,6 +406,8 @@ export class JourneyRunner {
         }
         const t0 = clock.monotonicMs();
         let fresh: QueuedCandidate[] = [];
+        // Read now, not once: the run may have bound another credential since this heal began.
+        const secrets = [...new Set([...secretParamValues(req.journey, req.params), ...(this.heal?.runSecrets?.() ?? [])])];
         try {
           const proposal = await healer.proposeCandidates({
             actor: this.actor,

@@ -94,7 +94,7 @@ export class RecordingInterpreter {
       /** #789: see `ReplayActionGuard`. */
       readonly actionGuard?: ReplayActionGuard;
       /** #790: told each value an `extract` binds, as it binds it, whether or not the run goes on to return. */
-      readonly onExtracted?: (value: string) => void;
+      readonly onExtracted?: (value: string, name?: string) => void | Promise<void>;
       /** The secret parameters an operator's binding supplied → the origins each may be typed on, checked at type time. */
       readonly boundSecretParams?: ReadonlyMap<string, readonly string[]>;
     } = {},
@@ -107,7 +107,7 @@ export class RecordingInterpreter {
     fixtureBaseDir?: string;
     refLookup?: AssertionRefLookup;
     actionGuard?: ReplayActionGuard;
-    onExtracted?: (value: string) => void;
+    onExtracted?: (value: string, name?: string) => void | Promise<void>;
     boundSecretParams?: ReadonlyMap<string, readonly string[]>;
   } {
     return {
@@ -320,7 +320,7 @@ async function runFlat(
     fixtureBaseDir?: string;
     refLookup?: AssertionRefLookup;
     actionGuard?: ReplayActionGuard;
-    onExtracted?: (value: string) => void;
+    onExtracted?: (value: string, name?: string) => void | Promise<void>;
   },
   sink?: RecordingSink,
   startIndex = 0,
