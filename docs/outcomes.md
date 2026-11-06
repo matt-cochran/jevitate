@@ -93,6 +93,17 @@ holds only if all of these are true. Each one that fails can produce a false rea
   through. The site then reads `insensitive`, or `sensitive` for what remains, on an app the block no longer describes.
 - **An aborted write ends soon.** A write the browser gave up on, even after its response arrived, keeps its replay open
   for 2 s, and so does one a new document dropped. A server still working after that is seen only through the independence replay.
+- **A write belongs to the step that was running when it started.** A recording places a write by time, so a write a
+  timer sends after a later step started is credited to the later step. `block-write:<n>` goes further: it aborts every
+  write sent during step n's window, recorded there or not. So a timer's write that lands in the last write step's window
+  is blocked by that step's mutation, even if a delta names it under another step or none does. What still holds: the
+  check does depend on that write, since it failed when the write was stopped. What does not: the step named may not be
+  the one that caused it, so that step's mutation can read `sensitive` and the proof `proven` without that step mattering.
+  To spot it, read `--json`: the site's `provedBy` is `block-write:<n>`, `skip:<n>` passed, and step n's delta does not
+  name the check's request. That can also be a real difference between skip and block, so it is a reason to look, not a
+  verdict. To correct the credit, move the line to the delta of the step that starts the timer and add
+  `{"check":"end-state:0","mustFailWhen":"skip:<that step>"}` to `metadata.mutationPairs`: the site is then proved by that
+  skip. The last write's block still fails the check, and nothing in the proof marks that reading as wrong.
 - **A server that answers, then keeps doing work the Journey depends on, has not sent body bytes a page is reading.**
   Chromium reports nothing about a `no-store` response's body the page does not read until that body ends, so a body with
   nothing reported keeps the write open, up to the replay's bound, and then the proof reads `inconclusive`. Once a body is

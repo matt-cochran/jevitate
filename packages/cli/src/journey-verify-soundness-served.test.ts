@@ -1008,6 +1008,25 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     verdict: "insensitive",
     reading: ["end-state:0", "insensitive"],
   },
+  // KNOWN LIMIT, NOT DESIRED BEHAVIOUR: this row pins a reading so a change to it is seen, and does not endorse it.
+  // A's timer sends the write. The recording credits it to B, by time. C sends another write and is the last one, so
+  // the end state is paired with C's mutations. block-write:4 aborts every write sent during C's window, the timer's
+  // included, so the check fails and the re-run reproduces it, though C had nothing to do with that write. skip:4 passes.
+  {
+    name: "stated limit, today's reading: a timer's write, recorded under the next step, is blocked in the last write's window, so that step's block proves a check it had no part in, proven",
+    limit: true,
+    serve: () => (req: IncomingMessage, res: ServerResponse): void => {
+      if (pathOfUrl(req).startsWith("/api/")) {
+        req.resume();
+        return void res.writeHead(200, { "content-type": "application/json" }).end("{}");
+      }
+      html(res, `<button id="a">A</button><button id="b">B</button><button id="c">C</button><p id="said"></p><script>document.getElementById('a').onclick=()=>{setTimeout(()=>fetch('/api/sync',{method:'POST'}),1200)};document.getElementById('b').onclick=()=>{document.getElementById('said').textContent='B'};document.getElementById('c').onclick=()=>fetch('/api/last',{method:'POST'})</script>`);
+    },
+    journey: (site) => J(site, [NAV_TO("#a"), { step: { kind: "click", target: { css: "#a" }, expect: NOCLAIM } }, { step: { kind: "click", target: { css: "#b" }, expect: NOCLAIM }, ...WROTE("/api/sync") }, { step: { kind: "click", target: { css: "#c" }, expect: NOCLAIM }, ...WROTE("/api/last") }], { networkChecks: POST("/api/sync") }),
+    verdict: "proven",
+    reading: ["end-state:0", "sensitive"],
+    under: ["block-write:4", "end-state:0", "sensitive"],
+  },
   {
     name: "stated limit, today's reading: a one-off slow job, no sibling to disagree, plenty of room reads proven though the claim is independent",
     limit: true,
