@@ -414,6 +414,29 @@ describe("a write a new document dropped", () => {
     expect(report.verdict, report.reason).toBe("insensitive");
   });
 
+  it("waiting on an open write never asks for a negative sleep: time passes between checking the bound and reading it again", async () => {
+    // A real clock moves between two reads. Each read here moves it, by fractions that land just past the bound.
+    const asked: number[] = [];
+    for (const tick of [0.25, 0.4, 0.7, 1.1, 3.3, 7.7, 17.3]) {
+      let reads = 0;
+      const moving = new (class extends FakeClock {
+        override monotonicMs(): number {
+          reads += 1;
+          return super.monotonicMs() + reads * tick;
+        }
+        override setTimeout<A extends unknown[]>(fn: (...args: A) => void, ms?: number, ...args: A): ReturnType<FakeClock["setTimeout"]> {
+          if (ms !== undefined) asked.push(ms);
+          return super.setTimeout(fn, ms, ...args);
+        }
+      })();
+      fake = moving;
+      installClock(moving);
+      await proveWith(write);
+    }
+    expect(asked.length).toBeGreaterThan(0);
+    expect(Math.min(...asked)).toBeGreaterThanOrEqual(0);
+  });
+
   describe("the 2 s a replay stays open", () => {
     /** How long the first mutated replay stayed open after `during`, up to its close. */
     const heldOpenMs = async (during: (b: Browser) => void): Promise<number> => {

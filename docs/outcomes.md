@@ -123,8 +123,8 @@ holds only if all of these are true. Each one that fails can produce a false rea
 
   Reads as open, so `inconclusive` or `cascade`, though the server did answer: an unread `no-store` body over about 2 MB, which
   is never reported; a write a dedicated worker sends unread with `no-store`, since the page's events don't show it; one a
-  popup sends as it opens, before the replay can watch it; and any unread `no-store` write if the browser doesn't let the
-  replay watch the page within 2 s.
+  popup sends as it opens, before the replay can watch it; a body a frame or a popup had reported, once the opened page loads
+  a new document; and any unread `no-store` write if the browser doesn't let the replay watch the page within 2 s.
 
 Some readings are limits rather than assumptions: they are never `proven`, but they say less than the Journey deserves.
 

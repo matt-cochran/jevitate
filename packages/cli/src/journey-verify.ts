@@ -535,7 +535,7 @@ class ReplayProbe {
       const graceUntil = Math.max(this.#lastAbortAt === undefined ? 0 : this.#lastAbortAt + ABORTED_WRITE_GRACE_MS, ...[...this.#bodies.values()].map((b) => (b.arrivedAt === undefined ? 0 : b.arrivedAt + RESPONDED_BODY_GRACE_MS)));
       const graceLeft = graceUntil - clock.monotonicMs();
       if (this.#openInScope().length === 0 && graceLeft <= 0) return;
-      await clock.sleep(Math.min(OPEN_WRITE_POLL_MS, boundMs - (clock.monotonicMs() - startedAt)));
+      await clock.sleep(Math.max(0, Math.min(OPEN_WRITE_POLL_MS, boundMs - (clock.monotonicMs() - startedAt))));
     }
   }
 

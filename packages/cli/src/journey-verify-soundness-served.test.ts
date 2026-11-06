@@ -941,10 +941,12 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     reading: ["end-state:0", "sensitive"],
   },
   {
-    name: "a body still open past the bound, its effect crossing replays, does not read proven",
-    serve: streaming(2_500, true),
-    journey: streamJourney(text("#saved", "NO")),
+    name: "a body still open past the bound, its effect still to land in a later replay: the proof stops at the base",
+    // The body outlasts the base's wait, so the base reads NO and passes, then closes on the open write. It reads the page as loaded: a reload would drop the write, which is the stated 2 s abort.
+    serve: streaming(60_000, true),
+    journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saved") }, ...WROTE("/api/save") }], { endState: [{ kind: "page", assertion: text("#saved", "NO") }] }),
     verdict: "inconclusive",
+    reason: STILL_OPEN,
   },
   {
     name: "stated limit, today's reading: a body the page reads and the server holds open reports its first bytes, so past 2 s it reads as answered, proven",
