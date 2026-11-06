@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { JourneyReviewSchema, JourneySchema, type Journey } from "@jevitate/journey";
+import { JourneyReviewSchema, JourneySchema, journeyProofHash, type Journey } from "@jevitate/journey";
 import { buildJourneyReview, renderReviewMarkdown, renderReviewText, reviewSheetHash } from "./journey-review.js";
 
 /** #496 — the human-readable review sheet, on a real 6-step Journey. */
@@ -125,7 +125,7 @@ describe("#496 JSON model", () => {
     const j = crm();
     j.metadata.goal = "Import contacts";
     j.metadata.successCriteria = [{ description: "contacts listed" }];
-    const r = buildJourneyReview(j, { approvedSnapshot: j, lastVerify: { journeyId: j.metadata.id, contentHash: buildJourneyReview(j).contentHash, verdict: "sensitive", summary: {}, at: "2026-10-11T08:00:00.000Z" } });
+    const r = buildJourneyReview(j, { approvedSnapshot: j, lastVerify: { journeyId: j.metadata.id, contentHash: buildJourneyReview(j).contentHash, proofHash: journeyProofHash(j), verdict: "proven", summary: {}, at: "2026-10-11T08:00:00.000Z" } });
     expect(r.attention?.filter((a) => a.severity === "warn" && !/prove nothing/.test(a.text))).toEqual([]);
   });
 });

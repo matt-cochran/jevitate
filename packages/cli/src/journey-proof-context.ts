@@ -24,12 +24,13 @@ export const JourneyProofContextSchema = z
       .strict()
       .optional(),
     emulation: z.object({ viewport: ViewportSchema.optional(), device: z.string().optional(), geolocation: GeolocationSchema.optional() }).strict().optional(),
+    readRequests: z.array(z.string()).optional(),
   })
   .strict();
 export type JourneyProofContext = z.infer<typeof JourneyProofContextSchema>;
 
 /** Canonical, secret-free execution context for a verify receipt. */
-export function journeyProofContext(browser: BrowserRunOptions | undefined, emulation: EmulationSpec | undefined): JourneyProofContext | undefined {
+export function journeyProofContext(browser: BrowserRunOptions | undefined, emulation: EmulationSpec | undefined, readRequests: readonly string[] = []): JourneyProofContext | undefined {
   const browserContext = {
     ...(browser?.executablePath === undefined ? {} : { executablePath: browser.executablePath }),
     ...(browser?.channel === undefined ? {} : { channel: browser.channel }),
@@ -42,6 +43,7 @@ export function journeyProofContext(browser: BrowserRunOptions | undefined, emul
   const context = {
     ...(Object.keys(browserContext).length === 0 ? {} : { browser: browserContext }),
     ...(emulation === undefined ? {} : { emulation }),
+    ...(readRequests.length === 0 ? {} : { readRequests: [...new Set(readRequests)].sort() }),
   };
   return Object.keys(context).length === 0 ? undefined : JourneyProofContextSchema.parse(context);
 }
@@ -50,4 +52,11 @@ export function journeyProofContext(browser: BrowserRunOptions | undefined, emul
 export function journeyProofHashForContext(journey: Journey, context: JourneyProofContext | undefined): string {
   const executableHash = journeyProofHash(journey);
   return context === undefined ? executableHash : contentHash({ v: 1, executableHash, context });
+}
+
+/** Unknown planner identity or a different effective read policy cannot be fresh evidence. */
+export function currentJourneyProof(journey: Journey, record: { readonly journeyId: string; readonly proofHash?: string; readonly proofContext?: JourneyProofContext }, readRequests: readonly string[] = []): boolean {
+  return record.journeyId === journey.metadata.id && record.proofHash !== undefined &&
+    JSON.stringify([...new Set(readRequests)].sort()) === JSON.stringify([...new Set(record.proofContext?.readRequests ?? [])].sort()) &&
+    record.proofHash === journeyProofHashForContext(journey, record.proofContext);
 }
