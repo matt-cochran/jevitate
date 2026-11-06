@@ -276,6 +276,17 @@ describe("#790 shapes and retention", () => {
     expect([...journeyRouteLiterals(j)].sort()).toEqual(["api", "comments", "here", "invite", "open", "publish", "start"]);
   });
 
+  it("names a method only if it is a standard one", async () => {
+    await withJourneyRunRecord({ channel: "mcp", id: "x", params: {}, logsRoot: logs }, async (rec) => {
+      rec.noteRefusedWrite({ method: () => "TOKEN-a1b2c3", url: () => "https://evil.example/zz" } as never);
+      rec.noteRefusedWrite({ method: () => "delete", url: () => "https://evil.example/zz" } as never);
+      return { outcome: "ok" };
+    });
+    const [one] = records();
+    expect(one!.text.toLowerCase()).not.toContain("a1b2c3");
+    expect(one!.record.writes.shapes.map((s) => s.method)).toEqual(["OTHER", "DELETE"]);
+  });
+
   it("masks a value from an off-origin host whatever its case, and an extracted one when the run throws", async () => {
     await withJourneyRunRecord({ channel: "mcp", id: "x", params: { token: "SeCrEtTok" }, logsRoot: logs }, async (rec) => {
       rec.noteValue("ExTrAcTeD");

@@ -30,6 +30,9 @@ import { logDateOf, logsRoot } from "./project-dir.js";
 export type RunChannel = "mcp" | "cli";
 
 const READS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
+/** What a record names a method by. A method is the page's own text, so anything else is `OTHER`, never stored. */
+const STANDARD_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE", "CONNECT", "TRACE"]);
+const methodShape = (method: string): string => (STANDARD_METHODS.has(method) ? method : "OTHER");
 /** An API version: the one segment kept with no Journey to vouch for it. */
 const API_VERSION = /^v\d{1,2}$/;
 /** A template's or a glob's segment, which is no literal text. */
@@ -156,7 +159,7 @@ export class JourneyRunRecorder {
     const context = page.context();
     const onRequest = (request: Request): void => {
       const method = request.method().toUpperCase();
-      if (!READS.has(method)) this.#writes.set(request, { method, url: request.url(), refused: false });
+      if (!READS.has(method)) this.#writes.set(request, { method: methodShape(method), url: request.url(), refused: false });
     };
     context.on("request", onRequest);
     this.#detach = () => context.off("request", onRequest);
@@ -171,7 +174,7 @@ export class JourneyRunRecorder {
   readonly noteRefusedWrite = (request: Request): void => {
     const seen = this.#writes.get(request);
     if (seen !== undefined) seen.refused = true;
-    else this.#writes.set(request, { method: request.method().toUpperCase(), url: request.url(), refused: true });
+    else this.#writes.set(request, { method: methodShape(request.method().toUpperCase()), url: request.url(), refused: true });
   };
 
   #record(end: RunEnd): JourneyRunRecord {
