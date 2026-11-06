@@ -199,7 +199,7 @@ export async function runStep(
   rec: RecordedStep,
   vars: Map<string, string>,
   index = 0,
-  targetOpts: ResolveTargetOptions & StepWaitHooks & StepRefOptions & { readonly fixtureBaseDir?: string; readonly selectAlternative?: (index: number) => SelectAlternative | undefined; readonly actionGuard?: ReplayActionGuard } = {},
+  targetOpts: ResolveTargetOptions & StepWaitHooks & StepRefOptions & { readonly fixtureBaseDir?: string; readonly selectAlternative?: (index: number) => SelectAlternative | undefined; readonly actionGuard?: ReplayActionGuard; readonly onExtracted?: (value: string) => void } = {},
 ): Promise<StepOutcome> {
   const step = rec.step;
   // #562/#565: an expectation's `${name}` / `{ var }` operands resolve as it is checked — after this
@@ -262,6 +262,7 @@ export async function runStep(
         throw new Error(`extract: attribute "${step.attr}" not found on target`);
       }
       vars.set(step.as, value);
+      targetOpts.onExtracted?.(value);
       await postcondition(actor, expected(step.expect), step.waitFor, "extract", index, targetOpts);
       return { kind: "done" };
     }
@@ -352,7 +353,7 @@ export async function runStep(
         const rowLocator = itemsLocator.nth(i);
         vars.set(`${step.as}.__index`, String(i));
         for (const childStep of step.steps) {
-          await runRowScopedChildStep(actor, childStep, rowLocator, vars, expected, index, rec, targetOpts.actionGuard);
+          await runRowScopedChildStep(actor, childStep, rowLocator, vars, expected, index, rec, targetOpts);
           // #580: an `extract` inside a `forEach` also publishes its value under the row's indexed
           // binding (`<as>.<i>.<field>`), alongside the row-scoped `<field>` (last row wins) it has
           // always bound. Copied per row, while `<field>` still holds THIS row's value.
@@ -398,13 +399,13 @@ async function runRowScopedChildStep(
   expected: (a: Assertion) => Assertion,
   index: number,
   parent: RecordedStep,
-  actionGuard: ReplayActionGuard | undefined,
+  hooks: { readonly actionGuard?: ReplayActionGuard; readonly onExtracted?: (value: string) => void },
 ): Promise<void> {
   switch (childStep.kind) {
     case "click": {
       const clicked = resolveInRoot(rowLocator, childStep.target);
       // #789: as a plain click's, judged as the child it is, at the `forEach`'s own step number.
-      await actionGuard?.beforeAction({ index, recorded: { ...parent, step: childStep }, locator: clicked });
+      await hooks.actionGuard?.beforeAction({ index, recorded: { ...parent, step: childStep }, locator: clicked });
       await clicked.click();
       const expect = expected(childStep.expect);
       if (!(await checkAssertionInRow(actor, expect, rowLocator))) {
@@ -419,6 +420,7 @@ async function runRowScopedChildStep(
         throw new Error(`extract: attribute "${childStep.attr}" not found on target`);
       }
       vars.set(childStep.as, value);
+      hooks.onExtracted?.(value);
       const expect = expected(childStep.expect);
       if (!(await checkAssertionInRow(actor, expect, rowLocator))) {
         throw new PostconditionFailed(expect, "forEach extract");

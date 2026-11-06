@@ -4,6 +4,7 @@ import { ReplayRefusal, type ReplayActionGuard } from "@jevitate/interpreter";
 import type { BrowserSession } from "@jevitate/playwright";
 import type { RecordedStep } from "@jevitate/recording";
 import { inMcpInvocation, noteMcpRefusal } from "./approval-provenance.js";
+import { maskValues } from "./mask-values.js";
 import { environmentsFilePath, loadEnvironmentsFile, type ResolvedJourneyEnvironment } from "./environments.js";
 import { EXIT_CODES } from "./exit-codes.js";
 import { canonicalOrigin, loadTargetsFile, type McpRunAllowances, type TargetConfig } from "./target-config.js";
@@ -157,7 +158,7 @@ export class McpRunGuard implements ReplayActionGuard {
   readonly #origin: string;
   readonly #allowed: ReadonlySet<string>;
   readonly #policy: SafetyPolicy;
-  #values: readonly string[] = [];
+  #values: string[] = [];
   #refusal: RunGuardRefusedError | undefined;
   #step: number | undefined;
   #onRefusedWrite: ((request: Request) => void) | undefined;
@@ -225,8 +226,13 @@ export class McpRunGuard implements ReplayActionGuard {
     return true;
   }
 
+  /** A value the run extracted: a refusal that quotes it gives it to the model. */
+  noteValue(value: string): void {
+    this.#values.push(value);
+  }
+
   #mask(piece: string): string {
-    return this.#values.reduce((text, v) => text.split(v).join("[param]"), piece);
+    return maskValues(piece, this.#values, "[param]");
   }
 
   #refuseWrite(off: string, note: string): void {

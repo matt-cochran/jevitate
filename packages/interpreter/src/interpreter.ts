@@ -93,6 +93,8 @@ export class RecordingInterpreter {
       readonly refLookup?: AssertionRefLookup;
       /** #789: see `ReplayActionGuard`. */
       readonly actionGuard?: ReplayActionGuard;
+      /** #790: told each value an `extract` binds, as it binds it, whether or not the run goes on to return. */
+      readonly onExtracted?: (value: string) => void;
     } = {},
   ) {}
 
@@ -103,6 +105,7 @@ export class RecordingInterpreter {
     fixtureBaseDir?: string;
     refLookup?: AssertionRefLookup;
     actionGuard?: ReplayActionGuard;
+    onExtracted?: (value: string) => void;
   } {
     return {
       ...(this.options.targetTimeoutMs === undefined ? {} : { timeoutMs: this.options.targetTimeoutMs }),
@@ -112,6 +115,7 @@ export class RecordingInterpreter {
       ...(this.options.fixtureBaseDir === undefined ? {} : { fixtureBaseDir: this.options.fixtureBaseDir }),
       ...(this.options.refLookup === undefined ? {} : { refLookup: this.options.refLookup }),
       ...(this.options.actionGuard === undefined ? {} : { actionGuard: this.options.actionGuard }),
+      ...(this.options.onExtracted === undefined ? {} : { onExtracted: this.options.onExtracted }),
     };
   }
 
@@ -312,6 +316,7 @@ async function runFlat(
     fixtureBaseDir?: string;
     refLookup?: AssertionRefLookup;
     actionGuard?: ReplayActionGuard;
+    onExtracted?: (value: string) => void;
   },
   sink?: RecordingSink,
   startIndex = 0,

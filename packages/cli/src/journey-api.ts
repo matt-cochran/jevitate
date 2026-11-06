@@ -704,14 +704,20 @@ export async function runJourneyProgrammatically(
       const skipStep = mutation.skipStep;
       const selectAlternative = mutation.selectAlternativeAtStep;
       const fixtureBaseDir = opts.fixtureBaseDir ?? journeyFixtureBaseDir();
+      // A value extracted before the run throws has no `output` to be read from, and must still be masked.
+      const onExtracted = (value: string): void => {
+        opts.runRecorder?.noteValue(value);
+        runGuard?.noteValue(value);
+      };
       const interpreter =
         opts.interpreter ??
         (opts.observer === undefined && shots === undefined && replayDeltas === undefined && outcomeChecks.observer() === undefined && blocker === undefined && healGuard === undefined && skipStep === undefined && selectAlternative === undefined && runGuard === undefined
-          ? new RecordingInterpreter({ fixtureBaseDir, refLookup: refs })
+          ? new RecordingInterpreter({ fixtureBaseDir, refLookup: refs, onExtracted })
           : new RecordingInterpreter({
               observer,
               fixtureBaseDir,
               refLookup: refs,
+              onExtracted,
               ...(runGuard === undefined ? {} : { actionGuard: runGuard }),
               ...(skipStep === undefined ? {} : { skipStep: (i: number) => skipStep(i) }),
               ...(selectAlternative === undefined ? {} : { selectAlternative: (i: number) => (i === selectAlternative.index ? { avoid: selectAlternative.avoid } : undefined) }),

@@ -8,6 +8,7 @@ import type { BrowserContext, Request } from "playwright";
 import { journeyReviewHash } from "./journey-review.js";
 import { loadLogsRetention, pruneLogs } from "./logs-retention.js";
 import { artifactStamp } from "./mission-journal.js";
+import { maskValues } from "./mask-values.js";
 import { logDateOf, logsRoot } from "./project-dir.js";
 
 /**
@@ -17,9 +18,10 @@ import { logDateOf, logsRoot } from "./project-dir.js";
  * (method and path SHAPE only), when, and by which channel.
  *
  * Value-free by construction: nothing here reads a parameter's value into the record, and no free text
- * is stored (no failure reason, no page text, no query string, no body). A path keeps only segments that
- * read as route words; every other segment, and any holding a parameter's or an extracted value, is
- * replaced by its kind.
+ * is stored (no failure reason, no page text, no query string, no body). A path keeps only segments the
+ * Journey itself recorded as literal route text, so the record says no more than the Journey does; every
+ * other segment, and any holding a parameter's or an extracted value, is replaced by its kind. A word
+ * can't be told from a token by its look (`/invite/brave-otter`), so a shape may be coarse.
  *
  * A failure to write it never changes a run's outcome: it is reported beside the result as
  * `runRecordError`, like `artifactError`.
@@ -28,13 +30,36 @@ import { logDateOf, logsRoot } from "./project-dir.js";
 export type RunChannel = "mcp" | "cli";
 
 const READS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
-/** A route word: `comments`, `reset-password`, `v2`. An id, a slug of many words, a token or a mixed-case value is never one. */
-const ROUTE_WORD = /^(?:v\d{1,2}|[a-z]{1,20}(?:[-_][a-z]{1,20})?)$/;
+/** An API version: the one segment kept with no Journey to vouch for it. */
+const API_VERSION = /^v\d{1,2}$/;
+/** A template's or a glob's segment, which is no literal text. */
+const NOT_LITERAL = /[*?{}$:]/;
 /** The most distinct write shapes one record lists (the count stays exact). */
 const MAX_SHAPES = 50;
 
-/** The shape of a URL path: route words kept, a value's segment `:param`, anything else `:id`. */
-export function writePathShape(pathname: string, values: readonly string[]): string {
+/** The path of a recorded URL or request line, whichever it is. */
+function pathOfRecorded(recorded: string): string {
+  const line = /^[A-Z]+\s+(\S+)/.exec(recorded.trim())?.[1] ?? recorded.trim();
+  try {
+    return /^https?:\/\//i.test(line) ? new URL(line).pathname : (line.split(/[?#]/)[0] ?? "");
+  } catch {
+    return "";
+  }
+}
+
+/** The path segments a Journey recorded as literal text: its pages' and navigations' URLs, and the requests its steps recorded or check. */
+export function journeyRouteLiterals(journey: Journey): ReadonlySet<string> {
+  const paths = journey.recording.pages.map((page) => page.url);
+  for (const { recorded } of flatJourneySteps(journey)) {
+    if (recorded.step.kind === "navigate") paths.push(recorded.step.url);
+    paths.push(...(recorded.delta?.requests ?? []));
+    for (const check of recorded.expectRequests ?? []) if ("pathGlob" in check) paths.push(check.pathGlob);
+  }
+  return new Set(paths.flatMap((p) => pathOfRecorded(p).split("/")).filter((segment) => segment !== "" && !NOT_LITERAL.test(segment)));
+}
+
+/** The shape of a URL path: what the Journey recorded as literal kept, a value's segment `:param`, anything else `:id`. */
+export function writePathShape(pathname: string, values: readonly string[], literals: ReadonlySet<string> = new Set()): string {
   const lowered = values.filter((v) => v !== "").map((v) => v.toLowerCase());
   return pathname
     .split("/")
@@ -48,7 +73,7 @@ export function writePathShape(pathname: string, values: readonly string[]): str
       }
       const lower = segment.toLowerCase();
       if (lowered.some((v) => lower.includes(v) || v.includes(lower))) return ":param";
-      return ROUTE_WORD.test(segment) ? segment : ":id";
+      return literals.has(raw) || API_VERSION.test(segment) ? segment : ":id";
     })
     .join("/");
 }
@@ -101,6 +126,8 @@ export class JourneyRunRecorder {
   #hash: string | undefined;
   #stepCount: number | undefined;
   #origin: string | undefined;
+  #literals: ReadonlySet<string> = new Set();
+  readonly #extracted = new Set<string>();
   #detach: (() => void) | undefined;
 
   constructor(req: { readonly channel: RunChannel; readonly id: string; readonly params: Readonly<Record<string, string>>; readonly logsRoot?: string | undefined }) {
@@ -116,6 +143,7 @@ export class JourneyRunRecorder {
       this.#hash ??= journeyReviewHash(journey);
       this.#stepCount ??= flatJourneySteps(journey).length;
       this.#origin = new URL(journey.recording.site).origin;
+      this.#literals = journeyRouteLiterals(journey);
     } catch {
       // What could not be read stays absent from the record.
     }
@@ -134,6 +162,11 @@ export class JourneyRunRecorder {
     this.#detach = () => context.off("request", onRequest);
   }
 
+  /** A value the run extracted, as it was extracted: a run that throws returns no `output` to read it from. Masked from the record, never stored. */
+  readonly noteValue = (value: string): void => {
+    this.#extracted.add(value);
+  };
+
   /** A write the run guard kept from leaving the browser. */
   readonly noteRefusedWrite = (request: Request): void => {
     const seen = this.#writes.get(request);
@@ -143,7 +176,7 @@ export class JourneyRunRecorder {
 
   #record(end: RunEnd): JourneyRunRecord {
     const output = end.output !== null && typeof end.output === "object" ? Object.values(end.output as Record<string, unknown>).filter((v): v is string => typeof v === "string") : [];
-    const values = [...Object.values(this.#params), ...output];
+    const values = [...Object.values(this.#params), ...this.#extracted, ...output];
     const shapes = new Map<string, { method: string; path: string; count: number; origin?: string; refused?: true }>();
     let count = 0;
     let refused = 0;
@@ -157,8 +190,8 @@ export class JourneyRunRecorder {
         continue;
       }
       if (url.protocol !== "http:" && url.protocol !== "https:") continue;
-      const path = writePathShape(url.pathname, values);
-      const origin = url.origin === this.#origin ? undefined : values.reduce((o, v) => (v === "" ? o : o.split(v).join("[param]")), url.origin);
+      const path = writePathShape(url.pathname, values, this.#literals);
+      const origin = url.origin === this.#origin ? undefined : maskValues(url.origin, values, "[param]");
       const key = `${w.method} ${origin ?? ""}${path} ${w.refused}`;
       const shape = shapes.get(key);
       if (shape !== undefined) shape.count += 1;
