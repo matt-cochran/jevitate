@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 // A real browser: the default new PlaywrightBrowserPort() behind run_journey (test/browser-suites.ts reads this).
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ALLOWED_TOOLS } from "@jevitate/mcp-facade";
@@ -508,5 +508,26 @@ describe("an alias of a flagged origin", () => {
     expect(resolveTargetConfig(file, "https://app.example.com.").safety?.deny).toEqual(["Wire transfer"]);
     expect(resolveTargetConfig({ "https://APP.example.com/": { safety: { deny: ["x"] } } }, "https://app.example.com").safety?.deny).toEqual(["x"]);
     expect(resolveTargetConfig(file, "https://other.example.com").safety?.deny).toBeUndefined();
+  });
+});
+
+describe("the operator's own files under ~/.jevitate", () => {
+  const home = homeDataRoot();
+  it.each(["targets.json", "TARGETS.JSON", "Targets.Json", "./x/../targets.json", "verify-checkpoint.key", "VERIFY-CHECKPOINT.KEY"])("%s is refused to a path argument", (name) => {
+    expect(() => confineMcpPath(join(home, name), "file", [home])).toThrow(McpPathError);
+  });
+
+  it("is refused through a linked home, on the real path", () => {
+    const dir = mkdtempSync(join(tmpdir(), "jev-paths-"));
+    mkdirSync(home, { recursive: true });
+    const link = join(dir, "home-link");
+    symlinkSync(home, link);
+    expect(() => confineMcpPath(join(link, "targets.json"), "file", [dir, home])).toThrow(McpPathError);
+    expect(() => confineMcpPath(join(link, "verify-checkpoint.key"), "file", [dir, home])).toThrow(McpPathError);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("another file there is still allowed", () => {
+    expect(confineMcpPath(join(home, "other.json"), "file", [home])).toBe(join(home, "other.json"));
   });
 });

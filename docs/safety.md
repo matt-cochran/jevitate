@@ -240,7 +240,8 @@ real writes. Which guards apply depends on who starts it. These are the ones in 
 
 The `mcpRun` settings live in a target's entry in `~/.jevitate/targets.json`:
 `"mcpRun": { "allowDestructive": true, "allowOffAllowlistWrites": ["https://api.example.com"], "allowProduction": true }`.
-No MCP tool takes these as arguments, and MCP path arguments cannot name that file. A refusal ends
+No MCP tool takes these as arguments, and MCP path arguments cannot name that file or
+`~/.jevitate/verify-checkpoint.key`, in any case or through a link. A refusal ends
 the run with `outcome: refused` and exit code 2. It is not a failed step, is never healed or
 retried, and names the setting that lifts it. If `targets.json` or `environments.json` cannot be read,
 an MCP run refuses with `E_RUN_GUARD_CONFIG` rather than run unguarded. A redirect from an allowed
@@ -270,6 +271,8 @@ What does not guard a run today:
   `metadata.allowedOrigins`, and once `promote_journey` has run, the run's guard allows writes to those origins.
   `mcpRun.allowOffAllowlistWrites` isn't the only thing that lifts that refusal
   ([#799](https://github.com/matt-cochran/jevitate/issues/799)).
+- A Journey's approval is a plain hash of its content, with no signature. Forging one needs write access to the
+  Journey's file, which no MCP tool gives, and anyone with that access can forge it.
 - The MCP and CLI rules above are separate; one trust model for both is
   [#792](https://github.com/matt-cochran/jevitate/issues/792).
 
