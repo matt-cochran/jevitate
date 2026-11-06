@@ -1,6 +1,6 @@
 === DECLARATION (src/index.ts, TS compiler API) ===
 
-# @jevitate/ai-core (177 exports)
+# @jevitate/ai-core (181 exports)
   aggregateOf: function
   AI_CORE: variable
   ALL_CREDENTIAL_KEYS: variable
@@ -101,10 +101,12 @@
   ModelConstraints: type-alias
   ModelConstraintsSchema: variable
   ModelPrice: interface
+  ModelSecretsFullError: class
   NO_PLAINTEXT_CREDENTIAL_KEYS: variable
   NoEligibleModelError: class
   NoulAnswer: interface
   NoulQuestion: interface
+  openModelSecretScope: function
   OPENROUTER_JEV_BASE_URL: variable
   OPENROUTER_JEV_MODEL: variable
   OpenRouterCall: interface
@@ -119,6 +121,7 @@
   redactContext: function
   redactCredentialShapes: function
   REDACTION_MASK: variable
+  redactModelPayload: function
   redactText: function
   redactUrl: function
   requireKeys: function
@@ -177,6 +180,7 @@
   UxSpecificsOutput: variable
   VerifyFetch: type-alias
   verifyKey: function
+  withModelSecrets: function
   withPreflight: function
 
 # @jevitate/application (5 exports)
@@ -1227,7 +1231,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (302 exports)
+# @jevitate/journey (308 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1302,6 +1306,7 @@
   classifyMutation: function
   classifyReplay: function
   controlCanChangeVerdict: function
+  declaredNonSecretParams: function
   declaredTargetedProofFor: function
   deriveParamSchema: function
   describeStep: function
@@ -1348,8 +1353,10 @@
   heldSites: function
   intentCoverage: function
   IntentCoverage: interface
+  isLoadRefusedName: other
   isNoClaimExpect: function
   isOwnTargetVisible: function
+  isSecretName: other
   isSweepMode: function
   JevLayer: type-alias
   JevLayerSchema: variable
@@ -1370,6 +1377,7 @@
   JourneyAnchor: interface
   JourneyAnchorListing: interface
   JourneyApproval: interface
+  journeyApprovalMatches: function
   JourneyApprovalWaiver: interface
   journeyAssertions: function
   JourneyAssertionSite: type-alias
@@ -1379,6 +1387,7 @@
   JourneyCatalogLinksSchema: variable
   journeyEndState: function
   JourneyInputsSchema: variable
+  journeyLegacyReviewHash: function
   JourneyLintFinding: interface
   JourneyLintOptions: interface
   JourneyLintRule: type-alias
@@ -1399,6 +1408,7 @@
   JourneyReviewAnchorWarning: type-alias
   JourneyReviewAttention: type-alias
   JourneyReviewChange: type-alias
+  journeyReviewHash: function
   JourneyReviewLocatorHealth: type-alias
   JourneyReviewProposal: type-alias
   JourneyReviewRiskyControl: type-alias
@@ -1421,6 +1431,7 @@
   lintJourney: function
   lintUploadFixtures: function
   listJourneyAnchors: function
+  loadRefusedParamNames: function
   MAX_DECLARED_RELAXATIONS: variable
   MAX_TARGETED_RELAXATIONS: variable
   Metric: type-alias
@@ -1497,7 +1508,6 @@
   ReviewWriteRequestSchema: variable
   runDeclaredTargetedProof: function
   runTargetedProof: function
-  SECRET_PARAM_NAME_RE: variable
   secretNamedValues: function
   secretParamNames: function
   secretParamValues: function
@@ -1836,7 +1846,7 @@
   targetDisplay: function
   validateCandidates: function
 
-# @jevitate/recording (202 exports)
+# @jevitate/recording (203 exports)
   ACTION_OPS: variable
   ActionDeltaRecord: interface
   ActionOp: type-alias
@@ -1929,6 +1939,8 @@
   InvariantSpecSchema: variable
   InvariantWhen: interface
   isInsideRoot: function
+  isLoadRefusedName: function
+  isSecretName: function
   isWriteRequest: function
   JSON_PATH_EACH: variable
   jsonPathHasEach: function
@@ -1994,7 +2006,6 @@
   resolveHttpUrl: function
   resolveNavigateUrl: function
   rpcMethodOf: function
-  SECRET_PARAM_NAME_RE: variable
   SecretMaterializationError: class
   selectJsonValues: function
   SpliceAt: interface
