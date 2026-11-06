@@ -19,6 +19,7 @@ import {
   judgeAssertions,
   mutationProofVerdict,
   mutationReplay,
+  mutationWriteMatches,
   needsRelaxedReplay,
   planJourneyMutations,
   relaxedMutationReplay,
@@ -164,22 +165,13 @@ type Run = typeof runJourneyProgrammatically;
 
 const REQUEST_LINE = /^(\S+)\s+(\S+)/;
 
-function pathOf(p: string): string {
-  try {
-    return /^https?:\/\//i.test(p) ? new URL(p).pathname : p.split("?")[0]!;
-  } catch {
-    return p;
-  }
-}
-
-/** Was the step's own recorded write among the blocked? With no recorded request, any blocked write counts. */
-function blockedOwnWrite(recorded: readonly string[], blocked: readonly BlockedWrite[]): boolean {
-  if (recorded.length === 0) return blocked.length > 0;
-  return recorded.some((line) => {
+/** Only a positively matching recorded or declared write establishes applicability. */
+function blockedOwnWrite(recorded: readonly string[], declared: NonNullable<MutationReplay["blockMatchers"]>, blocked: readonly BlockedWrite[]): boolean {
+  const observed = recorded.flatMap((line) => {
     const m = REQUEST_LINE.exec(line.trim());
-    if (m === null) return false;
-    return blocked.some((b) => b.method.toUpperCase() === m[1]!.toUpperCase() && pathOf(b.path) === pathOf(m[2]!));
+    return m === null ? [] : [{ method: m[1]!, pathGlob: m[2]!, literal: true as const }];
   });
+  return [...observed, ...declared].some((matcher) => blocked.some((request) => mutationWriteMatches(matcher, request)));
 }
 
 function failedSitesOf(result: { outcome: string; reason?: string; at?: number }, failures: readonly OutcomeCheckFailure[]): MutationFailedSite[] {
@@ -237,7 +229,7 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
         if (r.outcome === "quarantined" && /no-alternative/.test(r.reason)) {
           return { outcome: "not-applied", failedSites: [], ...blockedFields, reason: r.reason };
         }
-        if (how.blockIndex !== undefined && !blockedOwnWrite(how.blockRequests ?? [], blocked)) {
+        if (how.blockIndex !== undefined && !blockedOwnWrite(how.blockRequests ?? [], how.blockMatchers ?? [], blocked)) {
           return {
             outcome: "not-applied",
             failedSites: [],
@@ -346,7 +338,7 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
   };
   // Reasons and check texts can quote what the page showed: a secret parameter never comes back.
   const redacted = redactSecretParams(report, journey, opts.params);
-  const proofContext = journeyProofContext(opts.browser, opts.emulation);
+  const proofContext = journeyProofContext(opts.browser, opts.emulation, opts.readRequests);
   // #432: the verdict is kept beside the Journey (bound to its review hash) for `journey review`.
   await writePreflightedVerifyRecord(receiptDestination, {
     journeyId: journey.metadata.id,

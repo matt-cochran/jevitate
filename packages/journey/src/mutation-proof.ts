@@ -1,8 +1,9 @@
 import type { Assertion, OutcomeWait, RecordedStep, Step } from "@jevitate/recording";
+import { expandBraces, matchGlob } from "@jevitate/domain";
 import { WAIT_FOR_STALL_MS } from "@jevitate/recording";
 import type { Journey, JourneyTargetedProofPlan } from "./journey.js";
 import { isNoClaimExpect, journeyAssertions, type JourneyAssertionSite } from "./assertions.js";
-import { journeyWriteSteps, type JourneyLintOptions } from "./lint.js";
+import { journeyMutationSteps, journeyWriteSteps, type JourneyLintOptions } from "./lint.js";
 import { resolveJourneyStep } from "./anchors.js";
 import { secretParamNames } from "./intent.js";
 import { actionRefs, alteredValue, mutableParamValue, pinAssertionRefs, sitePageAssertion, siteRefs, swappedValue, truncatedValue } from "./mutation-proof-refs.js";
@@ -16,7 +17,7 @@ import { actionRefs, alteredValue, mutableParamValue, pinAssertionRefs, sitePage
  * requests inside one step's window, or type an empty value into one fill — never send, fabricate
  * or answer a request.
  *
- *  - `skip:<n>` — a write step's action is left out (its own `expect`, when it has one, is still
+ *  - `skip:<n>` — an effect action is left out (its own `expect`, when it has one, is still
  *    checked at the same place, so a claim that holds without the action is caught);
  *  - `block-write:<n>` — the write requests a write step sends are aborted before they leave the
  *    browser (`mutationReplay` names the step's recorded writes; one of them must be blocked, or the
@@ -114,6 +115,8 @@ export type AssertionVerdict = MutationVerdict | "unpaired";
 
 export interface AssertionProof {
   readonly site: string;
+  /** An unpaired network/persistence end-state is an unresolved proof obligation. */
+  readonly required?: true;
   readonly verdict: AssertionVerdict;
   /** The mutation that proved it sensitive. */
   readonly provedBy?: string;
@@ -371,10 +374,36 @@ function fillValue(step: Step, params: Readonly<Record<string, string>>): string
   return v.redacted ? null : v.value;
 }
 
+/** A positive request matcher used for provenance and blocked-write applicability. */
+export function mutationWriteMatches(expected: { readonly method: string; readonly pathGlob: string; readonly literal?: true }, actual: { readonly method: string; readonly path: string }): boolean {
+  if (expected.method !== "*" && expected.method.toUpperCase() !== actual.method.toUpperCase()) return false;
+  const absolute = /^https?:\/\//i.test(expected.pathGlob);
+  const normalize = (path: string): string => {
+    try {
+      return /^https?:\/\//i.test(path) ? (absolute ? new URL(path).origin + new URL(path).pathname : new URL(path).pathname) : path.split("?")[0]!;
+    } catch {
+      return path;
+    }
+  };
+  if (expected.literal === true) return normalize(expected.pathGlob) === normalize(actual.path);
+  return matchGlob(normalize(expected.pathGlob), normalize(actual.path));
+}
+
+function requestRelation(expected: { readonly method: string; readonly pathGlob: string }, candidate: { readonly method: string; readonly pathGlob: string; readonly literal?: true }): "definite" | "possible" | "none" {
+  if (expected.method !== "*" && expected.method.toUpperCase() !== candidate.method.toUpperCase()) return "none";
+  const patterned = (path: string): boolean => path.includes("*") || expandBraces(path).length > 1;
+  if (candidate.literal === true || !patterned(candidate.pathGlob)) return mutationWriteMatches(expected, { method: candidate.method, path: candidate.pathGlob }) ? "definite" : "none";
+  if (expected.pathGlob === candidate.pathGlob) return "definite";
+  if (!patterned(expected.pathGlob)) return mutationWriteMatches(candidate, { method: candidate.method, path: expected.pathGlob }) ? "possible" : "none";
+  // Unresolved pattern intersections are possible owners, never positive provenance.
+  return "possible";
+}
+
 /**
- * #402: the Journey's mutations and which assertion each must break. Derived pairs: a write step's
- * `skip`/`block-write` with that step's own `expect`/`check` and `expectRequests` — and, for the LAST
- * write step, every end-state check; a fill's `stale-value` with that step's own assertion and every
+ * #402: the Journey's mutations and which assertion each must break. UI actions get skips;
+ * positively evidenced HTTP writes also get blocks. Own checks pair with their action, final UI
+ * checks with the last effect, and network checks with their unique originating request step.
+ * A fill's `stale-value` pairs with that step's own assertion and every
  * `valueEquals`/`textIncludes` that checks the typed value. Plus `metadata.mutationPairs` (anchors resolved).
  * An explicit no-claim `expect` (`isNoClaimExpect`) asserts nothing, so it is never paired.
  */
@@ -393,14 +422,26 @@ export function planJourneyMutations(
   };
   const ownSites = (n: number): JourneyAssertionSite[] => sites.filter((s) => (s.where === "step" || s.where === "step-request") && s.step === n);
 
-  const writes = journeyWriteSteps(journey, opts);
-  const lastWrite = writes.at(-1)?.step;
-  for (const w of writes) {
-    for (const kind of ["skip", "block-write"] as const) {
+  const candidates = journeyMutationSteps(journey, opts);
+  const lastEffect = candidates.at(-1)?.step;
+  for (const w of candidates) {
+    for (const kind of w.knownHttpWrite ? ["skip", "block-write"] as const : ["skip"] as const) {
       const m = mutation(kind, w.step);
       mutations.push(m);
       for (const s of ownSites(w.step)) pair(s, m);
-      if (w.step === lastWrite) for (const s of sites) if (s.where === "end-state") pair(s, m);
+      for (const s of sites) {
+        if (s.where !== "end-state") continue;
+        const check = s.check;
+        if (check.kind === "page" || check.kind === "reloadThen" || check.kind === "http") {
+          if (w.step === lastEffect && (check.kind === "page" || w.knownHttpWrite)) pair(s, m);
+          continue;
+        }
+        // Request checks belong to the unique matching originating step. Ambiguous
+        // provenance stays unpaired until an explicit causal pair is supplied.
+        const relations = candidates.map((candidate) => ({ candidate, relations: candidate.requests.map((request) => requestRelation(check, request)) }));
+        const possible = relations.filter((entry) => entry.relations.some((relation) => relation !== "none"));
+        if (possible.length === 1 && possible[0]!.candidate.step === w.step && possible[0]!.relations.includes("definite")) pair(s, m);
+      }
     }
   }
 
@@ -491,13 +532,14 @@ export function mutationReplay(journey: Journey, m: JourneyMutation, opts: Mutat
   if (m.kind === "swap-param" || m.kind === "truncate-param" || m.kind === "guard-param") return paramReplay(journey, m, opts.params ?? {});
   if (m.kind === "block-write") {
     const requests = journeyWriteSteps(journey, opts).find((w) => w.step === m.step)?.requests ?? [];
+    const blockMatchers = journeyMutationSteps(journey, opts).find((w) => w.step === m.step)?.requests ?? [];
     const step = flat(journey)[index]?.step;
     // #409: the blocked job never runs, so its waited claim waits at most the hang threshold.
-    if (step === undefined || !("waitFor" in step) || step.waitFor === undefined) return { journey, blockIndex: index, blockRequests: [...requests] };
+    if (step === undefined || !("waitFor" in step) || step.waitFor === undefined) return { journey, blockIndex: index, blockRequests: [...requests], blockMatchers };
     const copy = structuredClone(journey);
     const target = flat(copy)[index]!;
     target.step = { ...step, waitFor: mutationWait(step.waitFor) } as Step;
-    return { journey: copy, blockIndex: index, blockRequests: [...requests] };
+    return { journey: copy, blockIndex: index, blockRequests: [...requests], blockMatchers };
   }
   const step = flat(journey)[index]?.step;
   if (step === undefined) throw new Error(`journey '${journey.metadata.id}' has no step ${m.step}`);
@@ -533,6 +575,8 @@ export interface MutationReplay {
   readonly skipIndex?: number;
   readonly blockIndex?: number;
   readonly blockRequests?: readonly string[];
+  /** Observed or declared method/path matchers; not fabricated recorded request lines. */
+  readonly blockMatchers?: readonly { readonly method: string; readonly pathGlob: string; readonly literal?: true }[];
   readonly params?: Readonly<Record<string, string>>;
   /**
    * #579: instead of altering a parameter (a `select` cannot be swapped by rewriting params), pick a
@@ -612,12 +656,13 @@ export function relaxedMutationReplay(journey: Journey, m: JourneyMutation, opts
   }
   if (m.kind === "block-write") {
     const requests = journeyWriteSteps(journey, opts).find((w) => w.step === m.step)?.requests ?? [];
+    const blockMatchers = journeyMutationSteps(journey, opts).find((w) => w.step === m.step)?.requests ?? [];
     const copy = structuredClone(journey);
     const target = flat(copy)[index]!;
     const step: Record<string, unknown> = { ...target.step, expect: relaxedExpect(target.step) };
     delete step.waitFor;
     target.step = step as Step;
-    return { journey: copy, blockIndex: index, blockRequests: [...requests] };
+    return { journey: copy, blockIndex: index, blockRequests: [...requests], blockMatchers };
   }
   const copy = structuredClone(journey);
   const target = flat(copy)[index]!;
@@ -990,7 +1035,7 @@ export function judgeAssertions(journey: Journey, plan: MutationPlan, results: R
   return journeyAssertions(journey).map((site) => {
     const key = assertionSiteKey(site);
     const paired = plan.mutations.filter((m) => plan.pairs.some((p) => p.site === key && p.mutation === m.id));
-    if (paired.length === 0) return { site: key, verdict: "unpaired" };
+    if (paired.length === 0) return { site: key, verdict: "unpaired", ...(site.where === "end-state" && site.check.kind !== "page" ? { required: true as const } : {}) };
     const verdicts = paired.map((m) => ({ m, v: classifyMutation(site, m, results.get(m.id) ?? { outcome: "error", failedSites: [] }) }));
     // #616: set when every sensitive verdict rested on an unproven relaxed site — those count as cascades.
     let unsound: string | undefined;
@@ -1042,6 +1087,7 @@ export function mutationProofVerdict(input: {
   const paired = input.assertions.filter((a) => a.verdict !== "unpaired");
   if (paired.length === 0) return { verdict: "inconclusive", reason: "no assertion is paired with a mutation (no write step, no checked fill, no checked parameter, no mutationPairs)" };
   if (paired.some((a) => a.verdict === "insensitive")) return { verdict: "insensitive" };
+  if (input.assertions.some((a) => a.required === true && a.verdict === "unpaired")) return { verdict: "inconclusive", reason: "a network or persistence end-state has no established causal mutation pair" };
   if (paired.every((a) => a.verdict === "sensitive")) return { verdict: "proven" };
   const refusals = input.assertions.map((a) => a.targetedRefusal).filter((r): r is string => r !== undefined);
   if (refusals.length > 0) {

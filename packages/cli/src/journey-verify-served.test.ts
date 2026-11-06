@@ -43,6 +43,9 @@ function page(saved: string | undefined): string {
         }
       } catch { /* aborted */ }
     });
+    document.getElementById("continue").addEventListener("click", () => {
+      document.querySelector("[data-testid=status]").textContent = "Reviewed: " + document.getElementById("t").value;
+    });
   </script>
 </main></body></html>`;
 }
@@ -272,6 +275,25 @@ describe("journey verify --mutate (#402, served)", () => {
     expect(m.outcome).toBe("not-applied");
     expect(m.reason).toMatch(/own write was not blocked/);
   }, 180_000);
+
+  it("proves a local review action by skip after the actual save write", async () => {
+    const j = strong("local-review-after-save");
+    j.recording.pages[0]!.steps.push({
+      step: { kind: "click", target: { role: "button", name: "Continue" }, expect: { kind: "textIncludes", target: { testId: "status" }, text: "Reviewed: hello" } },
+      delta: { verdict: "relevant-change", why: "local review", changes: ["Reviewed: hello"], requests: [], overheadMs: 0 },
+    });
+    j.metadata.endState = [{ kind: "page", assertion: { kind: "textIncludes", target: { testId: "status" }, text: "Reviewed: hello" } }];
+    const { report } = await verify(j, ["--json"]);
+    expect(report.assertions.find((assertion) => assertion.site === "step:4")).toMatchObject({ verdict: "sensitive", provedBy: "skip:4" });
+  }, 240_000);
+
+  it("applies an expectation-only HTTP mutation when the actual blocked write matches its declared glob", async () => {
+    const j = strong("declared-write-glob");
+    j.recording.pages[0]!.steps[2]!.delta = { ...saveDelta, requests: [] };
+    j.recording.pages[0]!.steps[2]!.expectRequests = [{ kind: "responseStatus", method: "POST", pathGlob: "/api/sa*", status: { class: 2 } }];
+    const { report } = await verify(j, ["--json"]);
+    expect(report.mutations.find((mutation) => mutation.id === "block-write:3")).toMatchObject({ outcome: "failed", blockedWrites: ["POST /api/save"] });
+  }, 240_000);
 
   it("human output: one line per assertion, then a summary", async () => {
     const { exitCode, out } = await verify(weak("weak-human"));

@@ -160,7 +160,7 @@ describe("#402 mutationReplay", () => {
 
   it("block-write blocks writes in that step's window only", () => {
     const journey = saveJourney();
-    expect(mutationReplay(journey, { kind: "block-write", step: 3, id: "block-write:3" })).toEqual({ journey, blockIndex: 2, blockRequests: ["POST /api/save → 200"] });
+    expect(mutationReplay(journey, { kind: "block-write", step: 3, id: "block-write:3" })).toEqual({ journey, blockIndex: 2, blockRequests: ["POST /api/save → 200"], blockMatchers: [{ method: "POST", pathGlob: "/api/save", literal: true }] });
   });
 
   it("stale-value types an empty value", () => {

@@ -164,9 +164,10 @@ describe("#565 classification and verdict of parameter-relative checks", () => {
     expect(classifyMutation(siteByKey("end-state:0"), mutationById("swap-param:reply"), ignored)).toBe("insensitive");
   });
 
-  it("the proof is proven when every param mutation breaks its checks", () => {
+  it("the proof is proven when parameter and preview mutations each break their own checks", () => {
     const p = plan();
-    const results = new Map(p.mutations.map((m) => [m.id, failedAtFill]));
+    const previewFailure: MutationRunResult = { outcome: "failed", failedSites: [{ where: "step", step: 4, postcondition: true }], relaxed: { outcome: "failed", failedSites: [{ where: "end-state", index: 0 }] } };
+    const results = new Map(p.mutations.map((m) => [m.id, m.id === "skip:4" ? previewFailure : failedAtFill]));
     const assertions = judgeAssertions(composeJourney(), p, results);
     expect(mutationProofVerdict({ basePassed: true, mutations: [...results.values()], assertions }).verdict).toBe("proven");
   });
