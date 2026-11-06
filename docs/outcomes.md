@@ -109,15 +109,16 @@ holds only if all of these are true. Each one that fails can produce a false rea
   `inconclusive`. A response does not close it, and neither do bytes arriving, with one exception. Chromium never reports the
   end of a `no-store` body the page does not read, so a write that waited for that would read `inconclusive` about a request
   answered in milliseconds. It does report such a body's bytes, only when the body ends. So on a `no-store` response, and on
-  no other, reported bytes count: the replay stays open for 2 s more, which every replay with such a write pays, and the
-  write reads as answered. A `no-store` body with nothing reported stays open.
+  no other, reported bytes count: the replay stays open until 2 s after they were reported, so such a write costs a replay
+  up to 2 s, and nothing if it was open that long anyway, and the write reads as answered. A `no-store` body with nothing reported stays open.
 
   This can be a false reading. The bytes are reported as they arrive, not at the end, when the page reads the body, holds
   an unread `r.clone()` of it (a fetch wrapper that clones does this), or sent it with `sendBeacon`. So a `no-store` response
   whose server has sent its first bytes and goes on working reads as answered after those 2 s for those pages, and what the
   server does next is seen only through the independence replay. If that work changes what a site reads, that site can read
-  `sensitive` and the proof `proven`. This can't be limited to pages that don't read: the browser's events look the same
-  for a complete unread body and for the first bytes of one that is read, cloned or beaconed. A page that reads a body
+  `sensitive` and the proof `proven`. This can't be limited to pages that don't read: the browser sends the same kinds of event
+  for a complete unread body and for the first bytes of one that is read, cloned or beaconed. Their byte counts can differ (on
+  chunked HTTP/1.1 they carry framing), but that was seen in one probe and is not relied on. A page that reads a body
   to its end is not at risk once it ends, since the write then finishes.
 
   Reads as open, so `inconclusive` or `cascade`, though the server did answer: an unread `no-store` body over about 2 MB, which

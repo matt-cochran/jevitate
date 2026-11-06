@@ -469,8 +469,11 @@ class ReplayProbe {
   readonly #beforeClose: ((writesSent: number) => Promise<void>) | undefined;
   readonly #scope: WriteScope | undefined;
   readonly #open = new Map<unknown, { readonly line: string; readonly seq: number; responded?: boolean }>();
-  /** Writes in scope the browser has not said ended, by its own request id: whether the response is `no-store`, and when its body was reported. */
-  readonly #bodies = new Map<string, { readonly line: string; noStore: boolean; arrivedAt?: number }>();
+  /** Writes in scope the browser has not said ended, by its own request id: the document that sent it, whether the response is `no-store`, and when its body was reported. */
+  readonly #bodies = new Map<string, { readonly line: string; readonly loaderId: string | undefined; noStore: boolean; arrivedAt?: number }>();
+  /** The opened page's top frame and its latest document, as the browser names them. */
+  #topFrame: string | undefined;
+  #topLoader: string | undefined;
   readonly #responded = new WeakSet<object>();
   #requestSeq = 0;
   #navigationSeq = 0;
@@ -555,11 +558,15 @@ class ReplayProbe {
     if (typeof context?.newCDPSession !== "function") return;
     const attach = async (target: NonNullable<BrowserSession["page"]>): Promise<void> => {
       const cdp = await context.newCDPSession(target);
-      cdp.on("Network.requestWillBeSent", ({ requestId, request }) => {
+      cdp.on("Network.requestWillBeSent", ({ requestId, request, loaderId, frameId, type }) => {
+        if (target === page && type === "Document" && requestId === loaderId && (this.#topFrame ?? frameId) === frameId) {
+          this.#topFrame = frameId;
+          this.#topLoader = loaderId;
+        }
         const line = lineOfRequest(request.method, request.url);
         // A redirect keeps its id, and may have turned the write into a read.
         if (READ_METHODS.has(request.method.toUpperCase()) || this.#scope?.counts(line, request.url) !== true) this.#bodies.delete(requestId);
-        else this.#bodies.set(requestId, { line, noStore: false });
+        else this.#bodies.set(requestId, { line, loaderId, noStore: false });
       });
       cdp.on("Network.responseReceived", ({ requestId, response }) => {
         const body = this.#bodies.get(requestId);
@@ -612,8 +619,8 @@ class ReplayProbe {
           this.#open.delete(r);
           this.#lastAbortAt = clock.monotonicMs();
         }
-        // What was reported belongs to what the old document had open, and may never say it ended.
-        for (const [id, b] of this.#bodies) if (b.arrivedAt !== undefined) this.#bodies.delete(id);
+        // A body an older document had reported may never say it ended. The new document's own writes keep theirs, and with no way to tell whose it is, it goes, which reads as open.
+        for (const [id, b] of this.#bodies) if (b.arrivedAt !== undefined && (b.loaderId === undefined || b.loaderId !== this.#topLoader)) this.#bodies.delete(id);
       });
     }
     source.on("response", (res) => {

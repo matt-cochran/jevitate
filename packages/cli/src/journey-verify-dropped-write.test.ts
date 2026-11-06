@@ -53,7 +53,8 @@ interface Browser {
   readonly cdp: EventEmitter;
 }
 /** The browser reports a write, as a page's CDP session does, under its own request id. */
-const browserSent = ({ cdp }: Browser, requestId: string): void => void cdp.emit("Network.requestWillBeSent", { requestId, request: { method: "POST", url: SAVE } });
+const browserSent = ({ cdp }: Browser, requestId: string, loaderId?: string): void => void cdp.emit("Network.requestWillBeSent", { requestId, loaderId, request: { method: "POST", url: SAVE } });
+const browserLoads = ({ cdp }: Browser, loaderId: string, frameId = "top"): void => void cdp.emit("Network.requestWillBeSent", { requestId: loaderId, loaderId, frameId, type: "Document", request: { method: "GET", url: "http://127.0.0.1:9/" } });
 const browserAnswered = ({ cdp }: Browser, requestId: string, cacheControl = "no-store"): void => void cdp.emit("Network.responseReceived", { requestId, response: { headers: { "Cache-Control": cacheControl } } });
 const bodyArrived = ({ cdp }: Browser, requestId: string): void => void cdp.emit("Network.dataReceived", { requestId });
 const write = ({ context }: Browser): void => void context.emit("request", request("POST", SAVE));
@@ -319,6 +320,63 @@ describe("a write a new document dropped", () => {
       browserAnswered(b, "r2");
     });
     expect(report.reason).toMatch(UNANSWERED);
+  });
+
+  describe("a new document's DOMContentLoaded and the bodies it keeps", () => {
+    /** The new document sends a write, answered and reported, then its DOMContentLoaded comes. */
+    const sentByNewDocument = (b: Browser, sender: string): void => {
+      browserLoads(b, "new");
+      const save = request("POST", SAVE);
+      b.context.emit("request", request("GET", "http://127.0.0.1:9/", true));
+      b.context.emit("request", save);
+      browserSent(b, "w", sender);
+      b.context.emit("response", { request: () => save });
+      browserAnswered(b, "w");
+      bodyArrived(b, "w");
+      b.page.emit("domcontentloaded");
+    };
+
+    it("its own write keeps its body", async () => {
+      const report = await proveWith((b) => sentByNewDocument(b, "new"));
+      expect(report.reason ?? "").not.toMatch(UNANSWERED);
+      expect(report.verdict, report.reason).toBe("insensitive");
+    });
+
+    it("another document's body goes, so a held write on that line stays open", async () => {
+      const report = await proveWith((b) => sentByNewDocument(b, "old"));
+      expect(report.reason).toMatch(UNANSWERED);
+    });
+
+    it("a body with no loader goes too: with no way to tell whose it is, it reads as open", async () => {
+      const report = await proveWith((b) => {
+        browserLoads(b, "new");
+        const save = request("POST", SAVE);
+        b.context.emit("request", request("GET", "http://127.0.0.1:9/", true));
+        b.context.emit("request", save);
+        browserSent(b, "w");
+        b.context.emit("response", { request: () => save });
+        browserAnswered(b, "w");
+        bodyArrived(b, "w");
+        b.page.emit("domcontentloaded");
+      });
+      expect(report.reason).toMatch(UNANSWERED);
+    });
+
+    it("a frame's document is not the top one's: its write's body goes, which reads as open", async () => {
+      const report = await proveWith((b) => {
+        browserLoads(b, "top-doc", "top");
+        browserLoads(b, "frame-doc", "frame");
+        const save = request("POST", SAVE);
+        b.context.emit("request", request("GET", "http://127.0.0.1:9/", true));
+        b.context.emit("request", save);
+        browserSent(b, "w", "frame-doc");
+        b.context.emit("response", { request: () => save });
+        browserAnswered(b, "w");
+        bodyArrived(b, "w");
+        b.page.emit("domcontentloaded");
+      });
+      expect(report.reason).toMatch(UNANSWERED);
+    });
   });
 
   it("a redirect that turns the write into a read leaves no body to claim", async () => {

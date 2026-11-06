@@ -632,6 +632,8 @@ interface Row {
   readonly reason?: RegExp;
   /** What one mutation must have made of a site, whatever its sibling read. */
   readonly under?: readonly [mutation: string, site: string, verdict: string];
+  /** A mutation that must have passed. */
+  readonly passedUnder?: string;
 }
 
 const html = (res: ServerResponse, body: string, headers: Record<string, string> = {}): void => void res.writeHead(200, { "content-type": "text/html", ...headers }).end(`<!doctype html><html><head><title>T</title></head><body>${body}</body></html>`);
@@ -818,6 +820,8 @@ const heldSave = (opts: { readonly headers?: Record<string, string>; readonly fi
   };
 };
 const heldJourney = (site: string): Journey => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: NOCLAIM }, ...WROTE("/api/save") }], { endState: [{ kind: "page", assertion: text("#health", "OK") }] });
+/** How long after its click the limit row's timer sends its write. Long enough that a slow machine still reaches the next steps first. */
+const SLOW_WRITE_MS = 8_000;
 const STILL_OPEN = /the base replay closed with a write still unanswered/;
 const GZIP_FIRST_BLOCK = (res: ServerResponse): void => {
   const z = createGzip();
@@ -838,6 +842,20 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     headers: { "cache-control": "no-store" },
     click: "fetch('/api/save?k=a',{method:'POST'}).then(async()=>{const r=await fetch('/api/save?k=b',{method:'POST'});await r.text();said()})",
   }),
+  {
+    name: "a click navigates and the new page's no-store write is reported before its DOMContentLoaded: that document's body still answers it",
+    serve: () => (req: IncomingMessage, res: ServerResponse): void => {
+      const path = pathOfUrl(req);
+      if (path === "/api/save") return void res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end("{}");
+      // A script the parser waits for holds DOMContentLoaded back past the write's answer.
+      if (path === "/slow.js") return after(400, () => void res.writeHead(200, { "content-type": "text/javascript" }).end(""));
+      if (path === "/next") return html(res, `<p id="said"></p><script>fetch('/api/save',{method:'POST'}).then(()=>{document.getElementById('said').textContent='Saved'})</script><script src="/slow.js"></script>`);
+      html(res, `<button id="save">Save</button><script>document.getElementById('save').onclick=()=>{location.href='/next'}</script>`);
+    },
+    journey: unreadSaved,
+    verdict: "proven",
+    reading: ["step:2", "sensitive"],
+  },
   {
     name: "two no-store writes on one line, both complete and unread: both are answered",
     serve: () => (req: IncomingMessage, res: ServerResponse): void => {
@@ -1058,6 +1076,9 @@ const ROWS_EXPERIMENT: readonly Row[] = [
   // A's timer sends the write. The recording credits it to B, by time. C sends another write and is the last one, so
   // the end state is paired with C's mutations. block-write:4 aborts every write sent during C's window, the timer's
   // included, so the check fails and the re-run reproduces it, though C had nothing to do with that write. skip:4 passes.
+  // How the timing holds: C's button stays disabled until the timer has sent its write, so C's window stays open past it
+  // however slowly C runs, with no claim to pair. The last step waits on the same thing, so skip:4 reaches the end state
+  // with the write answered. What is left is a margin, not an ordering: C has to start within SLOW_WRITE_MS of A's click.
   {
     name: "stated limit, today's reading: a timer's write, recorded under the next step, is blocked in the last write's window, so that step's block proves a check it had no part in, proven",
     limit: true,
@@ -1066,12 +1087,33 @@ const ROWS_EXPERIMENT: readonly Row[] = [
         req.resume();
         return void res.writeHead(200, { "content-type": "application/json" }).end("{}");
       }
-      html(res, `<button id="a">A</button><button id="b">B</button><button id="c">C</button><p id="said"></p><script>document.getElementById('a').onclick=()=>{setTimeout(()=>fetch('/api/sync',{method:'POST'}),1200)};document.getElementById('b').onclick=()=>{document.getElementById('said').textContent='B'};document.getElementById('c').onclick=()=>fetch('/api/last',{method:'POST'})</script>`);
+      html(res, `<button id="a">A</button><button id="b">B</button><button id="c" disabled>C</button><p id="said"></p><script>const $=(id)=>document.getElementById(id);$('a').onclick=()=>{setTimeout(()=>{fetch('/api/sync',{method:'POST'}).catch(()=>{}).finally(()=>{$('c').disabled=false;$('said').insertAdjacentHTML('beforeend','<i id="synced">synced</i>')})},${SLOW_WRITE_MS})};$('b').onclick=()=>{$('said').append('B')};$('c').onclick=()=>fetch('/api/last',{method:'POST'})</script>`);
     },
-    journey: (site) => J(site, [NAV_TO("#a"), { step: { kind: "click", target: { css: "#a" }, expect: NOCLAIM } }, { step: { kind: "click", target: { css: "#b" }, expect: NOCLAIM }, ...WROTE("/api/sync") }, { step: { kind: "click", target: { css: "#c" }, expect: NOCLAIM }, ...WROTE("/api/last") }], { networkChecks: POST("/api/sync") }),
+    journey: (site) => J(site, [NAV_TO("#a"), { step: { kind: "click", target: { css: "#a" }, expect: NOCLAIM } }, { step: { kind: "click", target: { css: "#b" }, expect: NOCLAIM }, ...WROTE("/api/sync") }, { step: { kind: "click", target: { css: "#c" }, expect: NOCLAIM }, ...WROTE("/api/last") }, { step: { kind: "waitFor", target: { css: "#synced" }, state: "visible" } }], { networkChecks: POST("/api/sync") }),
     verdict: "proven",
     reading: ["end-state:0", "sensitive"],
     under: ["block-write:4", "end-state:0", "sensitive"],
+    passedUnder: "skip:4",
+  },
+  // KNOWN LIMIT, NOT DESIRED BEHAVIOUR: this row pins a reading so a change to it is seen, and does not endorse it.
+  // An unread clone makes Chromium report a no-store body's bytes as they arrive, which looks the same as a complete body. The write reads as answered after 2 s while the server works on.
+  {
+    name: "stated limit, today's reading: no-store, first bytes sent and held, the page keeps an unread clone: it reads as answered after 2 s, so a site that depends on the server's work reads proven",
+    limit: true,
+    serve: heldSave({ headers: { "cache-control": "no-store" }, first: (res) => void res.write('{"a"'), click: "fetch('/api/save',{method:'POST'}).then((r)=>{window.kept=r.clone();said()})" }),
+    journey: heldJourney,
+    verdict: "proven",
+    reading: ["end-state:0", "sensitive"],
+  },
+  // KNOWN LIMIT, NOT DESIRED BEHAVIOUR: this row pins a reading so a change to it is seen, and does not endorse it.
+  // A beacon's body reports its bytes as they arrive too, and nothing in the page reads it.
+  {
+    name: "stated limit, today's reading: no-store, first bytes sent and held, sent with sendBeacon: it reads as answered after 2 s, so a site that depends on the server's work reads proven",
+    limit: true,
+    serve: heldSave({ headers: { "cache-control": "no-store" }, first: (res) => void res.write('{"a"'), click: "navigator.sendBeacon('/api/save','x');said()" }),
+    journey: heldJourney,
+    verdict: "proven",
+    reading: ["end-state:0", "sensitive"],
   },
   {
     name: "stated limit, today's reading: a one-off slow job, no sibling to disagree, plenty of room reads proven though the claim is independent",
@@ -1159,7 +1201,7 @@ describe("[realtime] the experiment's rows", () => {
   }, 1_800_000);
 
   // Named in full, so a stated limit's row says so wherever it is listed.
-  for (const { name, verdict, reading: site, reason, under } of ROWS_EXPERIMENT) {
+  for (const { name, verdict, reading: site, reason, under, passedUnder } of ROWS_EXPERIMENT) {
     it(`${name}: ${verdict}`, () => {
       const proof = proofs.get(name);
       if (proof === undefined || proof instanceof Error) throw proof ?? new Error("no proof");
@@ -1171,6 +1213,7 @@ describe("[realtime] the experiment's rows", () => {
         const target = journeyAssertions(proof.journey).find((a) => assertionSiteKey(a) === under[1])!;
         expect(classifyMutation(target, mutation, mutation)).toBe(under[2]);
       }
+      if (passedUnder !== undefined) expect(proof.report.mutations.find((m) => m.id === passedUnder)?.outcome).toBe("passed");
     });
   }
 });
