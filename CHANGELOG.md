@@ -5,7 +5,25 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
-## [0.29.0] – 2026-11-04
+## [0.29.0] – 2026-11-07
+
+### Behaviour changes
+
+- **A promoted Journey from before 0.29 must be re-promoted for MCP (#788).** Over MCP a Journey runs
+  only when promoted with a current approval on record. Older promoted Journeys have none and are refused
+  with `E_JOURNEY_APPROVAL_UNKNOWN` until re-promoted. The CLI still runs them, with a warning.
+- **MCP-driven replays refuse unsafe writes by default (#789).** Session-ending and destructive clicks,
+  writes to origins outside the allowlist, and runs on a `production: true` target are refused before
+  anything is sent, unless the target's human-written `mcpRun` settings allow them.
+- **Every run leaves a record (#790).** `run_journey` and `journey run` write one value-free record under
+  the project's logs.
+- **Secrets never pass through the model (#809).** Over MCP a Journey that needs a secret is refused with
+  `E_SECRET_PARAM_OVER_MCP`. On the CLI, `journey run --secret-field` supplies one without the command
+  line. A secret-bound Journey can't self-heal or be annotated in 0.29.0, and `--secret` is refused on
+  the coverage and exploratory strategies. A secret in a `navigate` URL needs CLI `--param` for now (#819).
+- **A proof runs a closing replay.** It sends real writes like every replay, so a proof leaves more
+  behind on a target you can't reset. A proof's strength depends on a target you can reset.
+- **Jevitate is described as automation and testing (#791).** The docs say what does and doesn't guard a run.
 
 ### Added
 
