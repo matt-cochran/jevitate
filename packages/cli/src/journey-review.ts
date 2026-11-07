@@ -128,7 +128,7 @@ export interface JourneyReviewContext {
   readonly proofPolicy?: MutationProofPolicyMode;
   readonly proofWaiver?: ProofWaiver | null;
   /** #433: the Journey's catalog links and its pre-approval findings (the CLI loads the catalog). */
-  readonly catalog?: { readonly links: JourneyCatalogLinks; readonly findings: readonly Finding[] };
+  readonly catalog?: { readonly links: JourneyCatalogLinks; readonly findings: readonly Finding[]; readonly nativeOwnerFindings?: ReadonlySet<Finding> };
   /** #453: the pending self-heal proposal, with whether it is stale and why it cannot be accepted. */
   readonly proposal?: { readonly proposal: JourneyProposal; readonly stale: boolean; readonly problem?: string };
   /** #466: the anchor-rule problems (`journeyAnchorIssues`), computed by the caller (journey-anchor-gate imports this file). */
@@ -592,7 +592,7 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
     ...(anchors.length === 0 ? {} : { anchors }),
     contentHash: hash,
   };
-  return { ...review, attention: buildAttention(review, endStateExplained.filter((e) => e.weak).map((e) => e.text), m.goal) };
+  return { ...review, attention: buildAttention(review, endStateExplained.filter((e) => e.weak).map((e) => e.text), m.goal, ctx.catalog?.nativeOwnerFindings) };
 }
 
 /** An upload step's file in words: the recorded path, `{var}` or «redacted». */
@@ -604,10 +604,25 @@ function describeFile(step: Extract<Step, { kind: "upload" }>): string | undefin
 }
 
 /** Everything that needs the reviewer's decision, warnings first (stable within a severity). */
-function buildAttention(r: Omit<JourneyReview, "attention">, weakEndState: readonly string[], goal: string | undefined): JourneyReviewAttention[] {
+function buildAttention(r: Omit<JourneyReview, "attention">, weakEndState: readonly string[], goal: string | undefined, nativeOwnerFindings?: ReadonlySet<Finding>): JourneyReviewAttention[] {
   const out: JourneyReviewAttention[] = [];
-  const warn = (text: string, hint?: string, settledBy?: "catalog-approval"): void =>
-    void out.push({ severity: "warn", text, ...(hint === undefined ? {} : { hint }), ...(settledBy === undefined ? {} : { settledBy }) });
+  const warn = (text: string, hint?: string, settledBy?: "catalog-approval", ownerActions?: JourneyReviewAttention["ownerActions"]): void =>
+    void out.push({ severity: "warn", text, ...(hint === undefined ? {} : { hint }), ...(settledBy === undefined ? {} : { settledBy }), ...(ownerActions === undefined || ownerActions.length === 0 ? {} : { ownerActions }) });
+  const owner = [{ kind: "journey-promote" as const, id: r.id }];
+  const c = r.changeSinceApproval;
+  const changed = (c.kind === "diff" || c.kind === "snapshot-missing") && c.changed;
+  const catalogActions: NonNullable<JourneyReviewAttention["ownerActions"]> = [];
+  const linksKnown = r.catalog !== undefined && r.catalog.job !== undefined && r.catalog.persona !== undefined && r.catalog.job.status !== "unknown" && r.catalog.persona.status !== "unknown";
+  if (linksKnown) {
+    if (r.catalog!.job!.status !== "approved") catalogActions.push({ kind: "job-approve", id: r.catalog!.job!.id });
+    if (r.catalog!.persona!.status !== "approved") catalogActions.push({ kind: "persona-approve", id: r.catalog!.persona!.id });
+  }
+  const reReviewActions = linksKnown && r.promoted ? [
+    ...(changed ? owner : []),
+    ...(r.catalog!.job!.status === "stale" ? [{ kind: "job-approve" as const, id: r.catalog!.job!.id }] : []),
+    ...(r.catalog!.persona!.status === "stale" ? [{ kind: "persona-approve" as const, id: r.catalog!.persona!.id }] : []),
+  ] : [];
+  const knownReReview = reReviewActions.length > 0 && reReviewActions.length === r.catalog?.needsReReview.length ? reReviewActions : undefined;
   const info = (text: string, hint?: string): void => void out.push({ severity: "info", text, ...(hint === undefined ? {} : { hint }) });
 
   const weakSteps = [...new Set(r.proof.stepAssertions.filter((a) => a.weak).map((a) => a.step))];
@@ -631,16 +646,19 @@ function buildAttention(r: Omit<JourneyReview, "attention">, weakEndState: reado
     else info(`${text}, exempted by allowControl`);
   }
   if (r.catalog !== undefined) {
-    if (r.catalog.unvetted.length > 0) warn(`Unvetted catalog links: ${r.catalog.unvetted.join(", ")}`, `approve them, or promote with --accept-unvetted "<reason>"`, "catalog-approval");
-    if (r.catalog.needsReReview.length > 0) warn(`Catalog links need re-review: ${r.catalog.needsReReview.join("; ")}`);
+    if (r.catalog.unvetted.length > 0) warn(`Unvetted catalog links: ${r.catalog.unvetted.join(", ")}`, `approve them, or promote with --accept-unvetted "<reason>"`, "catalog-approval", catalogActions);
+    if (r.catalog.needsReReview.length > 0) warn(`Catalog links need re-review: ${r.catalog.needsReReview.join("; ")}`, undefined, undefined, knownReReview);
   }
   for (const f of r.findings ?? []) {
     if (f.analyzer === "catalog-analysis") continue;
     // #608: an unvetted link is a person's catalog approval, as the line above says.
-    if (f.severity !== "info") warn(f.message, f.fix, f.analyzer === "catalog-links" && f.code === "journey.unvetted" ? "catalog-approval" : undefined);
+    const findingActions = nativeOwnerFindings?.has(f) === true && !f.requiresAcknowledgment && f.severity === "warn" ?
+      f.analyzer === "catalog-links" && f.code === "journey.unvetted" ? catalogActions :
+      f.analyzer === "catalog-links" && f.code === "journey.needs-re-review" ? knownReReview :
+      f.analyzer === "readiness" && f.code === "readiness.links-approved" ? catalogActions : undefined : undefined;
+    if (f.severity !== "info") warn(f.message, f.fix, f.analyzer === "catalog-links" && f.code === "journey.unvetted" ? "catalog-approval" : undefined, findingActions);
     else if (f.analyzer === "readiness" || f.analyzer === "readiness-jev") info(f.message, f.fix);
   }
-  const c = r.changeSinceApproval;
   if ((c.kind === "diff" || c.kind === "snapshot-missing") && c.changed) {
     if (c.kind === "diff") {
       const bit = (sign: string, n: number, word: string, many?: string): string[] => (n === 0 ? [] : [`${sign}${plural(n, word, many)}`]);
@@ -652,9 +670,9 @@ function buildAttention(r: Omit<JourneyReview, "attention">, weakEndState: reado
         ...bit("+", c.sideEffects.added.length, "side effect"),
         ...bit("−", c.sideEffects.removed.length, "side effect"),
       ];
-      warn(`Changed since approval${parts.length === 0 ? "" : `: ${parts.join(", ")}`}${c.stepIdOnly === true ? " (step ids only)" : ""}`, "--full lists every change");
+      warn(`Changed since approval${parts.length === 0 ? "" : `: ${parts.join(", ")}`}${c.stepIdOnly === true ? " (step ids only)" : ""}`, "--full lists every change", undefined, owner);
     } else {
-      warn(`Changed since approval (its approved snapshot is missing, so only the hash differs)${c.stepIdOnly === true ? " (step ids only)" : ""}`);
+      warn(`Changed since approval (its approved snapshot is missing, so only the hash differs)${c.stepIdOnly === true ? " (step ids only)" : ""}`, undefined, undefined, owner);
     }
   }
   for (const w of r.anchorWarnings ?? []) warn(`Anchor ${w.severity} ${w.path}${w.step === undefined ? "" : ` (step ${w.step})`}: ${w.message}`, w.fix);

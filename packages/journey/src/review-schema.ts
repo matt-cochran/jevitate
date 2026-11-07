@@ -203,6 +203,8 @@ export const ReviewAttentionSchema = z
     hint: z.string().optional(),
     /** #608: a person's catalog approval settles this item — readiness lists it as awaiting-human, never as a failure. */
     settledBy: z.enum(["catalog-approval"]).optional(),
+    /** Native producer-derived pending owner actions; ordinary strict warnings remain warnings. */
+    ownerActions: z.array(z.object({ kind: z.enum(["persona-approve", "job-approve", "journey-promote"]), id: z.string().min(1) }).strict()).min(1).optional(),
   })
   .strict();
 
