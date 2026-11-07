@@ -77,3 +77,17 @@ export function currentJourneyProof(journey: Journey, record: { readonly journey
   return record.journeyId === journey.metadata.id && record.proofHash !== undefined &&
     record.proofHash === currentJourneyProofHash(journey, record.proofContext, readRequests);
 }
+
+
+/** Native executable identity only: neither a successful proof nor owner approval. */
+export interface JourneyExecutionIdentity {
+  readonly kind: "journey-execution-identity";
+  readonly version: 1;
+  readonly journeyId: string;
+  readonly proofHash: string;
+}
+
+/** Uses the same canonical source/context digest as the persisted native proof. */
+export function journeyExecutionIdentity(journey: Journey, context: JourneyProofContext | undefined): JourneyExecutionIdentity {
+  return { kind: "journey-execution-identity", version: 1, journeyId: journey.metadata.id, proofHash: journeyProofHashForContext(journey, context) };
+}

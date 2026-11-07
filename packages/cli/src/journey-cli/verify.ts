@@ -96,12 +96,22 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
         emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", "journey verify --resume continues a proof: it needs --mutate"));
         return;
       }
+      // Parsed before the plan as well: the plan reports the native execution identity they bind.
+      let browser: ReturnType<typeof browserRunFromFlags>;
+      let emulation: ReturnType<typeof emulationFromFlags>;
+      try {
+        browser = browserRunFromFlags(this.opts<BrowserLaunchFlags & DemoFlags>(), deps.explore?.env ?? process.env);
+        emulation = emulationFromFlags(emulationFlags);
+      } catch (err) {
+        emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", err instanceof Error ? err.message : String(err)));
+        return;
+      }
       if (plan === true) {
         try {
           // #763: the recorded-origin read-request policy `journey review` and the planner share.
           const planned = await loadJourneyToVerify(verifyJourneysDir, id);
           const readRequests = journeyTargetSafety(planned, targetsOpts(deps).targetsFile)?.readRequests;
-          const report = await planJourneyVerification({ dir: verifyJourneysDir, id, params: param, ...(readRequests === undefined ? {} : { readRequests }) });
+          const report = await planJourneyVerification({ dir: verifyJourneysDir, id, params: param, ...(readRequests === undefined ? {} : { readRequests }), ...(browser === undefined ? {} : { browser }), ...(emulation === undefined ? {} : { emulation }) });
           const planEnvironment = environmentFromFlags({ ...(envName === undefined ? {} : { env: envName }), ...(baseUrl === undefined ? {} : { baseUrl }) }, environmentSeams(deps));
           const noReset = resetDeclared(planned, this.opts<FixtureFlags>(), planEnvironment) ? undefined : verifyNoResetLine(report.summary);
           if (json) emitJson(program, ok(withEngine(noReset === undefined ? report : { ...report, noReset })));
@@ -144,15 +154,6 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
       const storageState = storageStateFlag ?? environment?.storageState;
       if (storageState !== undefined && !existsSync(storageState)) {
         emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", `storage state not found: ${storageState}`));
-        return;
-      }
-      let browser: ReturnType<typeof browserRunFromFlags>;
-      let emulation: ReturnType<typeof emulationFromFlags>;
-      try {
-        browser = browserRunFromFlags(this.opts<BrowserLaunchFlags & DemoFlags>(), deps.explore?.env ?? process.env);
-        emulation = emulationFromFlags(emulationFlags);
-      } catch (err) {
-        emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
       let terminal: TerminalResultHandle | undefined;

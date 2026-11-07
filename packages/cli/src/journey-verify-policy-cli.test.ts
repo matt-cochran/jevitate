@@ -7,6 +7,7 @@ import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import * as dataDir from "./data-dir.js";
 import { buildProgram } from "./program.js";
 import { planJourneyVerification } from "./journey-verify.js";
+import { journeyProofContext, journeyProofHashForContext } from "./journey-proof-context.js";
 
 const roots: string[] = [];
 afterEach(async () => { process.exitCode = undefined; await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -77,4 +78,33 @@ it("default resolver uses the existing data-dir target file", async () => {
   const seam = vi.spyOn(dataDir, "resolveDataDir").mockImplementation((segments) => join(root, ...segments));
   try { expect(journeyTargetSafety(policyJourney("http://localhost:3001"))?.readRequests).toEqual(["/default"]); }
   finally { seam.mockRestore(); }
+});
+
+
+it.each([false, true])("plan resolves native material CLI context without opening session/fixture/browser/hooks (implicit headed: %s)", async (headed) => {
+  const root = await mkdtemp(join(tmpdir(), "jev-policy-identity-")); roots.push(root);
+  const dir = join(root, "journeys"); const targets = join(root, "targets.json");
+  const store = new FsJourneyStore(dir);
+  await store.put(policyJourney("http://localhost:3001"));
+  const stored = (await store.get("policy"))!;
+  await writeFile(targets, JSON.stringify({ "http://localhost:3001": { safety: { readRequests: ["/query"] } }, "http://localhost:4001": { safety: { readRequests: ["/wrong-origin"] } } }));
+  const output: string[] = [];
+  const program = buildProgram({ profiles: new ProfileManager(join(root, "profiles")), journeysDir: dir, explore: { targetsConfigPath: targets, env: { JEVITATE_HEADED: headed ? "1" : "0", DISPLAY: ":fixture" }, browserPortFactory: () => { throw new Error("browser must not open"); } } });
+  program.configureOutput({ writeOut: (s) => output.push(s), writeErr: () => {} });
+  await program.parseAsync(["journey", "verify", "policy", "--plan", "--json", "--browser-channel", "chrome", "--browser-arg=--identity-canary", "--viewport", "390x844", "--storage-state", join(root, "session-never-readable"), "--fixtures", join(root, "fixture-never-readable"), "--before", "exit 99", "--allow-shell-hooks", "--base-url", "http://localhost:4001"], { from: "user" });
+  const expected = { kind: "journey-execution-identity", version: 1, journeyId: "policy", proofHash: journeyProofHashForContext(stored, journeyProofContext({ channel: "chrome", args: ["--identity-canary"], ...(headed ? { headed: true } : {}) }, { viewport: { width: 390, height: 844 } }, ["/query"])) };
+  expect(JSON.parse(output.join(""))).toMatchObject({ ok: true, data: { executionIdentity: expected } });
+  expect(output.join("")).not.toContain("identity-canary");
+  expect(output.join("")).not.toContain("session-never-readable");
+});
+
+it.each([["--viewport", "invalid"], ["--device", "not-a-device"], ["--viewport", "390x844", "--device", "iPhone 13"]])("plan rejects invalid native emulation: %j", async (...flags) => {
+  const root = await mkdtemp(join(tmpdir(), "jev-policy-invalid-context-")); roots.push(root);
+  const dir = join(root, "journeys");
+  await new FsJourneyStore(dir).put(policyJourney("http://fixture.test"));
+  const output: string[] = [];
+  const program = buildProgram({ profiles: new ProfileManager(join(root, "profiles")), journeysDir: dir, explore: { env: {}, browserPortFactory: () => { throw new Error("browser must not open"); } } });
+  program.configureOutput({ writeOut: (s) => output.push(s), writeErr: () => {} });
+  await program.parseAsync(["journey", "verify", "policy", "--plan", "--json", ...flags], { from: "user" });
+  expect(JSON.parse(output.join(""))).toMatchObject({ ok: false, error: { code: "E_JOURNEY_VERIFY_ARGS" } });
 });
