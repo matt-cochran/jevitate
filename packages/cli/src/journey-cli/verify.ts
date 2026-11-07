@@ -69,9 +69,18 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
         else throw err;
         return;
       }
+      let browser: ReturnType<typeof browserRunFromFlags>;
+      let emulation: ReturnType<typeof emulationFromFlags>;
+      try {
+        browser = browserRunFromFlags(this.opts<BrowserLaunchFlags & DemoFlags>(), deps.explore?.env ?? process.env);
+        emulation = emulationFromFlags(emulationFlags);
+      } catch (err) {
+        emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", err instanceof Error ? err.message : String(err)));
+        return;
+      }
       if (plan === true) {
         try {
-          const report = await planJourneyVerification({ dir: verifyJourneysDir, id, params: param, readRequests });
+          const report = await planJourneyVerification({ dir: verifyJourneysDir, id, params: param, readRequests, ...(browser === undefined ? {} : { browser }), ...(emulation === undefined ? {} : { emulation }) });
           if (json) emitJson(program, ok(withEngine(report)));
           else {
             const out = program.configureOutput().writeOut;
@@ -109,15 +118,6 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
       const storageState = storageStateFlag ?? environment?.storageState;
       if (storageState !== undefined && !existsSync(storageState)) {
         emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", `storage state not found: ${storageState}`));
-        return;
-      }
-      let browser: ReturnType<typeof browserRunFromFlags>;
-      let emulation: ReturnType<typeof emulationFromFlags>;
-      try {
-        browser = browserRunFromFlags(this.opts<BrowserLaunchFlags & DemoFlags>(), deps.explore?.env ?? process.env);
-        emulation = emulationFromFlags(emulationFlags);
-      } catch (err) {
-        emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
       try {

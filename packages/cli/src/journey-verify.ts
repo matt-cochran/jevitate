@@ -46,7 +46,7 @@ import { preflightVerifyRecord, writePreflightedVerifyRecord } from "./journey-r
 import type { StepObserver } from "@jevitate/interpreter";
 import { UnknownJourneyError, redactSecretParams, runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import type { OutcomeCheckFailure } from "./journey-network-checks.js";
-import { journeyProofContext, journeyProofHashForContext } from "./journey-proof-context.js";
+import { journeyProofContext, journeyExecutionIdentity, type JourneyExecutionIdentity } from "./journey-proof-context.js";
 
 /** `journey run`'s options a proof passes through to every replay (params, environment, auth, fixtures, browser, gate). */
 export type VerifyJourneyOptions = Omit<
@@ -104,6 +104,7 @@ export interface JourneyVerifyReport {
   readonly journeyId: string;
   /** `journeyContentHash` of the stored Journey: the proof is bound to exactly this content. */
   readonly journeyHash: string;
+  readonly executionIdentity: JourneyExecutionIdentity;
   readonly base: { readonly outcome: string; readonly reason?: string };
   readonly verdict: MutationProofVerdict;
   readonly reason?: string;
@@ -118,6 +119,7 @@ export interface JourneyVerifyPlanReport {
   readonly journeyId: string;
   /** `journeyContentHash` of the stored Journey: the preview is bound to exactly this content. */
   readonly journeyHash: string;
+  readonly executionIdentity: JourneyExecutionIdentity;
   readonly mutations: readonly Pick<JourneyMutation, "kind" | "step" | "id" | "param" | "source">[];
   readonly pairs: readonly { readonly site: string; readonly check: string; readonly mutation: string; readonly declared?: true }[];
   readonly assertions: readonly { readonly site: string; readonly check: string; readonly mutations: readonly string[] }[];
@@ -129,7 +131,7 @@ export interface JourneyVerifyPlanReport {
  * credential is opened. Values of params are used only to derive the plan and are never returned.
  */
 export async function planJourneyVerification(
-  opts: Pick<VerifyJourneyOptions, "dir" | "id" | "params" | "readRequests">,
+  opts: Pick<VerifyJourneyOptions, "dir" | "id" | "params" | "readRequests" | "browser" | "emulation">,
 ): Promise<JourneyVerifyPlanReport> {
   const journey = await new JourneyRegistry(new FsJourneyStore(opts.dir)).get(opts.id);
   if (!journey) throw new UnknownJourneyError(`unknown journey '${opts.id}'`);
@@ -147,6 +149,7 @@ export async function planJourneyVerification(
   return {
     journeyId: journey.metadata.id,
     journeyHash: journeyContentHash(journey),
+    executionIdentity: journeyExecutionIdentity(journey, journeyProofContext(opts.browser, opts.emulation, opts.readRequests)),
     mutations: plan.mutations,
     pairs,
     assertions,
@@ -227,6 +230,8 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
   const { readRequests, ...runOpts } = opts;
   const lintOpts = readRequests === undefined ? {} : { readRequests };
   const journeyHash = journeyContentHash(journey);
+  const proofContext = journeyProofContext(opts.browser, opts.emulation, opts.readRequests);
+  const executionIdentity = journeyExecutionIdentity(journey, proofContext);
 
   const stepCount = journey.recording.pages.reduce((n, page) => n + page.steps.length, 0);
   const baseline = needsFinalNetworkObservation(journey) ? finalObservation(stepCount) : undefined;
@@ -424,6 +429,7 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
   const report: JourneyVerifyReport = {
     journeyId: journey.metadata.id,
     journeyHash,
+    executionIdentity,
     base: baseFields,
     verdict,
     ...(reason === undefined ? {} : { reason }),
@@ -443,13 +449,15 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
     ...(suggested.length === 0 ? {} : { suggestedTargetedProofs: [...suggested].sort((a, b) => siteOrder(a.check) - siteOrder(b.check)) }),
   };
   // Reasons and check texts can quote what the page showed: a secret parameter never comes back.
-  const redacted = redactSecretParams(report, journey, opts.params);
-  const proofContext = journeyProofContext(opts.browser, opts.emulation, opts.readRequests);
+  // Native digest/id contain no parameter values. Do not corrupt their typed identity if a
+  // secret value happens to be a substring of a digest or protocol discriminant.
+  const { executionIdentity: identity, ...redactable } = report;
+  const redacted = { ...redactSecretParams(redactable, journey, opts.params), executionIdentity: identity };
   // #432: the verdict is kept beside the Journey (bound to its review hash) for `journey review`.
   await writePreflightedVerifyRecord(receiptDestination, {
     journeyId: journey.metadata.id,
     contentHash: journeyReviewHash(journey),
-    proofHash: journeyProofHashForContext(journey, proofContext),
+    proofHash: executionIdentity.proofHash,
     ...(proofContext === undefined ? {} : { proofContext }),
     verdict: redacted.verdict,
     ...(redacted.reason === undefined ? {} : { reason: redacted.reason }),
