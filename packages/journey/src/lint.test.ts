@@ -233,6 +233,22 @@ describe("#401 lintJourney", () => {
     expect(lintJourney(journey).some((f) => f.rule === "no-persistence-check")).toBe(true);
   });
 
+  it("does not require persistence for a relevant UI transition with only recorded reads", () => {
+    const journey = j([
+      {
+        step: { kind: "click", target: { testId: "use-template" }, expect: { kind: "textIncludes", target: { role: "heading" }, text: "Campaign Objective" } },
+        delta: {
+          verdict: "relevant-change",
+          why: "template context loaded into an unsaved draft",
+          changes: ["heading"],
+          requests: ["GET /api/v1/tool/organizations/agent-profiles → 200"],
+          overheadMs: 1,
+        },
+      },
+    ]);
+    expect(lintJourney(journey).some((f) => f.rule === "no-persistence-check")).toBe(false);
+  });
+
   it("flags no-persistence-check for a step whose expectRequests names a write request", () => {
     const journey = j([
       {
