@@ -1378,7 +1378,9 @@ draft each step's objective/expected result (and the goal/success criteria when 
 | `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
 | `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--real` | draft with the live OpenRouter generation gateway (requires keys) | `false` |  |  |  |
+| `--reviewed-hash <hash>` | apply only the exact annotation transaction returned by --status |  |  |  |  |
 | `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
+| `--status` | read-only native annotation transaction status; no replay or approval |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start the replay authenticated; must exist |  |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
 
@@ -1737,6 +1739,7 @@ a human-readable review sheet for promotion sign-off: summary, steps, side effec
 | `--json` | emit a JSON envelope (the schema-checked sheet) |  |  |  |  |
 | `--markdown` | render the sheet as Markdown |  |  |  |  |
 | `--out <file>` | write the sheet (JSON with --json, Markdown with --markdown, else text) to this file |  |  |  |  |
+| `--pre-approval` | read-only native candidate and pending owner actions; requires --json; never grants approval |  |  |  |  |
 | `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--readiness` | #434: add the Readiness section — deterministic checks with INCOSE GtWR rule findings, and (with --real and a judgment key) advisory Jev questions with probabilities |  |  |  |  |
 | `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs |  |  |  |  |

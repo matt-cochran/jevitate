@@ -310,7 +310,9 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     command: {
       path: "journey review",
       params: { id: { kind: "string", positional: true }, stale: b("--stale"), readiness: b("--readiness"), strict: b("--strict"), ...JEV_ADVICE },
-      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--markdown": OMIT.reviewRendering, "--full": OMIT.reviewRendering, "--out": OMIT.reviewRendering, ...JSON_FLAG },
+      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--markdown": OMIT.reviewRendering, "--full": OMIT.reviewRendering, "--out": OMIT.reviewRendering,
+        "--pre-approval": "CLI-only native human-owner queue preflight; a typed pending-action projection, not approval or a new MCP review capability",
+        ...JSON_FLAG },
     },
   },
   {
@@ -365,7 +367,10 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       path: "journey annotate",
       paramJourneys: (a) => [a["id"]],
       params: { ...EXTENSION, id: pos(), approve: b("--approve"), params: { kind: "params", flag: "--param" }, storageState: session("--storage-state"), fixtures: path("--fixtures"), fixtureIdentity: FIXTURE_IDENTITY, screenshots: { kind: "screenshots", flag: "--screenshots" }, actionDeltas: b("--action-deltas"), ...ENVIRONMENT, ...EMULATION, ...AI },
-      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir,
+        "--status": "CLI-only native annotation transaction status/resume protocol; no new MCP transaction capability",
+        "--reviewed-hash": "binds standalone annotation apply to the exact native terminal-reviewed transaction; MCP cannot supply human TTY approval",
+        ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
   },
   {
