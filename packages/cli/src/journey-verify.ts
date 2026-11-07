@@ -19,7 +19,6 @@ import {
   judgeAssertions,
   mutationProofVerdict,
   mutationReplay,
-  mutationWriteMatches,
   needsRelaxedReplay,
   planJourneyMutations,
   relaxedMutationReplay,
@@ -27,7 +26,6 @@ import {
   runTargetedProof,
   suggestTargetedProofPlan,
   type AssertionVerdict,
-  type AssertionProof,
   type Journey,
   type JourneyMutation,
   type JourneyTargetedProofPlan,
@@ -42,7 +40,6 @@ import { clock } from "@jevitate/domain";
 import { journeyContentHash } from "./journey-annotate-api.js";
 import { journeyReviewHash } from "./journey-review.js";
 import { preflightVerifyRecord, writePreflightedVerifyRecord } from "./journey-review-store.js";
-import type { StepObserver } from "@jevitate/interpreter";
 import { UnknownJourneyError, redactSecretParams, runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import type { OutcomeCheckFailure } from "./journey-network-checks.js";
 import { journeyProofContext, journeyProofHashForContext } from "./journey-proof-context.js";
@@ -96,7 +93,6 @@ export interface JourneyVerifyAssertion {
   readonly targetedRefusal?: string;
   /** #616: the proving targeted proof came from a declared `metadata.targetedProofs` plan. */
   readonly declaredProof?: true;
-  readonly obligations?: readonly (NonNullable<AssertionProof["obligations"]>[number] & { readonly declaredProof?: true })[];
 }
 
 export interface JourneyVerifyReport {
@@ -168,21 +164,30 @@ type Run = typeof runJourneyProgrammatically;
 
 const REQUEST_LINE = /^(\S+)\s+(\S+)/;
 
-/** Only a positively matching recorded or declared write establishes applicability. */
-function blockedOwnWrite(recorded: readonly string[], declared: NonNullable<MutationReplay["blockMatchers"]>, blocked: readonly BlockedWrite[]): boolean {
-  const observed = recorded.flatMap((line) => {
-    const m = REQUEST_LINE.exec(line.trim());
-    return m === null ? [] : [{ method: m[1]!, pathGlob: m[2]!, literal: true as const }];
-  });
-  return [...observed, ...declared].some((matcher) => blocked.some((request) => mutationWriteMatches(matcher, request)));
+function pathOf(p: string): string {
+  try {
+    return /^https?:\/\//i.test(p) ? new URL(p).pathname : p.split("?")[0]!;
+  } catch {
+    return p;
+  }
 }
 
-function failedSitesOf(result: { outcome: string; reason?: string; at?: number; failurePhase?: "action" | "postcondition" }, failures: readonly OutcomeCheckFailure[]): MutationFailedSite[] {
+/** Was the step's own recorded write among the blocked? With no recorded request, any blocked write counts. */
+function blockedOwnWrite(recorded: readonly string[], blocked: readonly BlockedWrite[]): boolean {
+  if (recorded.length === 0) return blocked.length > 0;
+  return recorded.some((line) => {
+    const m = REQUEST_LINE.exec(line.trim());
+    if (m === null) return false;
+    return blocked.some((b) => b.method.toUpperCase() === m[1]!.toUpperCase() && pathOf(b.path) === pathOf(m[2]!));
+  });
+}
+
+function failedSitesOf(result: { outcome: string; reason?: string; at?: number }, failures: readonly OutcomeCheckFailure[]): MutationFailedSite[] {
   if (result.outcome !== "quarantined") return [];
   const structured = failures.map((f): MutationFailedSite =>
-    f.where === "step-request" ? { where: "step-request", step: f.step, checkIndex: f.checkIndex, ...(f.evaluated === true ? { evaluated: true } : {}) } : f.where === "end-state" ? { where: "end-state", index: f.index } : { where: "unevaluable" },
+    f.where === "step-request" ? { where: "step-request", step: f.step, checkIndex: f.checkIndex } : f.where === "end-state" ? { where: "end-state", index: f.index } : { where: "unevaluable" },
   );
-  return result.at === undefined ? structured : [...structured, { where: "step", step: result.at + 1, postcondition: result.failurePhase === "postcondition" }];
+  return result.at === undefined ? structured : [...structured, { where: "step", step: result.at + 1, postcondition: /postcondition failed/.test(result.reason ?? "") }];
 }
 
 /**
@@ -198,9 +203,7 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
   const lintOpts = readRequests === undefined ? {} : { readRequests };
   const journeyHash = journeyContentHash(journey);
 
-  const baseStartedAt = clock.monotonicMs();
   const base = await run(runOpts, { structuredFailures: true });
-  const baseMs = clock.monotonicMs() - baseStartedAt;
   const baseFields = { outcome: base.outcome, ...(base.outcome === "quarantined" ? { reason: base.reason } : {}) };
   const sites = journeyAssertions(journey);
   const checkOf = new Map(sites.map((s) => [assertionSiteKey(s), describeCheck(s.check)]));
@@ -217,19 +220,10 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
     const replayOpts = { ...lintOpts, params: opts.params };
     // The replay is DESCRIBED, not fixed: `mutateJourney` re-describes it on the Journey the run moved
     // onto the environment (#247), so a mutated copy never drops `--env`/`--base-url`.
-    const runReplay = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay, holdMs: number | undefined): Promise<Replayed> => {
+    const runReplay = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay): Promise<Replayed> => {
       try {
         const how = describe(journey);
-        const startedAt = clock.monotonicMs();
-        const lastStep = journey.recording.pages.reduce((n, page) => n + page.steps.length, 0) - 1;
-        const hold: StepObserver = {
-          afterStep: async ({ index }) => {
-            const left = holdMs === undefined || index !== lastStep ? 0 : holdMs - (clock.monotonicMs() - startedAt);
-            if (left > 0) await clock.sleep(left);
-          },
-        };
-        const held = holdMs === undefined ? runOpts : { ...runOpts, observer: hold };
-        const r = await run(how.params === undefined ? held : { ...held, params: { ...how.params } }, {
+        const r = await run(how.params === undefined ? runOpts : { ...runOpts, params: { ...how.params } }, {
           structuredFailures: true,
           ...(how.relaxedStepRequests === undefined ? {} : { relaxedStepRequests: how.relaxedStepRequests }),
           ...(how.journey === journey ? {} : { mutateJourney: (j) => describe(j).journey }),
@@ -243,7 +237,7 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
         if (r.outcome === "quarantined" && /no-alternative/.test(r.reason)) {
           return { outcome: "not-applied", failedSites: [], ...blockedFields, reason: r.reason };
         }
-        if (how.blockIndex !== undefined && !blockedOwnWrite(how.blockRequests ?? [], how.blockMatchers ?? [], blocked)) {
+        if (how.blockIndex !== undefined && !blockedOwnWrite(how.blockRequests ?? [], blocked)) {
           return {
             outcome: "not-applied",
             failedSites: [],
@@ -262,14 +256,7 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
       }
     };
     // #402: a named mutation lowers to its `MutationReplay`; #609's targeted proof passes one directly.
-    // A skipped step may be all that gave an earlier step's timer time to send the final check's request.
-    // Its replay gets the base's time before that check is judged, so a late request is not read as a missing one.
-    const judgesRequest = (m: JourneyMutation): boolean => m.kind === "skip" && plan.pairs.some((p) => {
-      const site = p.mutation === m.id ? siteByKey.get(p.site) : undefined;
-      return site?.where === "end-state" && (site.check.kind === "requestMade" || site.check.kind === "responseStatus");
-    });
-    const holdFor = (m: JourneyMutation): number | undefined => (judgesRequest(m) ? baseMs : undefined);
-    const replay = (m: JourneyMutation, describe: typeof mutationReplay): Promise<Replayed> => runReplay(m, (j) => describe(j, m, replayOpts), holdFor(m));
+    const replay = (m: JourneyMutation, describe: typeof mutationReplay): Promise<Replayed> => runReplay(m, (j) => describe(j, m, replayOpts));
     const siteByKey = new Map(sites.map((s) => [assertionSiteKey(s), s]));
     for (const m of plan.mutations) {
       const first = await replay(m, mutationReplay);
@@ -288,8 +275,8 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
         const declared = declaredTargetedProofFor(journey, m, pair.site);
         targeted.push(
           declared === undefined
-            ? await runTargetedProof(journey, plan, m, site, initial, (describe) => runReplay(m, describe, holdFor(m)), replayOpts)
-            : await runDeclaredTargetedProof(journey, plan, m, site, declared, (describe) => runReplay(m, describe, holdFor(m)), replayOpts),
+            ? await runTargetedProof(journey, plan, m, site, initial, (describe) => runReplay(m, describe), replayOpts)
+            : await runDeclaredTargetedProof(journey, plan, m, site, declared, (describe) => runReplay(m, describe), replayOpts),
         );
         // #616: a proof the automatic bound stopped names the plan a human could declare instead.
         const suggestion = suggestTargetedProofPlan(targeted[targeted.length - 1]!, m);
@@ -331,10 +318,6 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
     ...(a.targetedRefusal === undefined ? {} : { targetedRefusal: a.targetedRefusal }),
     // #616: the proving proof was a declared plan, not the automatic relaxation search.
     ...(a.provedBy !== undefined && results.get(a.provedBy)?.targeted?.some((t) => t.site === a.site && t.declared === true) === true ? { declaredProof: true as const } : {}),
-    ...(a.obligations === undefined ? {} : { obligations: a.obligations.map((o) => ({
-      ...o,
-      ...(o.provedBy !== undefined && results.get(o.provedBy)?.targeted?.some((t) => t.site === a.site && t.declared === true) === true ? { declaredProof: true as const } : {}),
-    })) }),
   }));
   const order = new Map(journeyAssertions(journey).map((s, i) => [assertionSiteKey(s), i]));
   const siteOrder = (key: string): number => order.get(key) ?? Number.MAX_SAFE_INTEGER;
@@ -363,7 +346,7 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
   };
   // Reasons and check texts can quote what the page showed: a secret parameter never comes back.
   const redacted = redactSecretParams(report, journey, opts.params);
-  const proofContext = journeyProofContext(opts.browser, opts.emulation, opts.readRequests);
+  const proofContext = journeyProofContext(opts.browser, opts.emulation);
   // #432: the verdict is kept beside the Journey (bound to its review hash) for `journey review`.
   await writePreflightedVerifyRecord(receiptDestination, {
     journeyId: journey.metadata.id,
@@ -387,11 +370,5 @@ export function verifyAssertionLine(a: JourneyVerifyAssertion): string {
     a.relaxedSites === undefined || a.relaxedSites.length === 0 ? "" : a.declaredProof === true ? `, declared plan relaxed ${a.relaxedSites.join(", ")}` : `, relaxed ${a.relaxedSites.join(", ")}`;
   const proved = a.provedBy === undefined ? "" : `  (proved by ${a.provedBy}${relaxed})`;
   const refused = a.targetedRefusal === undefined ? "" : `  (targeted proof refused: ${a.targetedRefusal})`;
-  const obligations = a.obligations === undefined ? "" : `  [${a.obligations.map((o) => {
-    const witness = o.provedBy === undefined ? "" : ` by ${o.provedBy}`;
-    const relaxed = o.relaxedSites === undefined || o.relaxedSites.length === 0 ? "" : `, ${o.declaredProof === true ? "declared plan " : ""}relaxed ${o.relaxedSites.join(", ")}`;
-    const refusal = o.targetedRefusal === undefined ? "" : `, targeted proof refused: ${o.targetedRefusal}`;
-    return `${o.kind}: ${o.verdict}${witness}${relaxed}${refusal}`;
-  }).join("; ")}]`;
-  return `${a.verdict.padEnd(11)}  ${a.site.padEnd(18)}  ${a.check}${proved}${refused}${obligations}`;
+  return `${a.verdict.padEnd(11)}  ${a.site.padEnd(18)}  ${a.check}${proved}${refused}`;
 }

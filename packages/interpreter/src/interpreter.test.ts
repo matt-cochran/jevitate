@@ -123,21 +123,12 @@ test("run: a postcondition failure at step 1 resolves {outcome:'failed', at:1} (
       outcome: "failed",
       at: 1,
       error: expect.stringContaining("postcondition failed"),
-      failurePhase: "postcondition",
     });
     await vi.advanceTimersByTimeAsync(6000);
     await expectation;
   } finally {
     vi.useRealTimers();
   }
-});
-
-test("run: missing target text cannot masquerade as a failed postcondition", async () => {
-  const actor = actorWithPage(fakePage(fakeLocator({ count: vi.fn(async () => 0) })));
-  const rec = recording([[{ step: { kind: "click", target: { role: "button", name: "postcondition failed" }, expect: { kind: "urlIncludes", text: "/inbox" } } }]]);
-  expect(await new RecordingInterpreter({ targetTimeoutMs: 0 }).run(actor, rec)).toMatchObject({
-    outcome: "failed", at: 0, failurePhase: "action", reason: "replay-target-not-found", error: expect.stringContaining("postcondition failed"),
-  });
 });
 
 // === run: handback -> awaiting_human{at}, stops early ===
@@ -297,7 +288,7 @@ test("run: a failure after a skipped step keeps the un-renumbered flat index (#4
   const interp = new RecordingInterpreter({ skipStep: (index) => index === 1 });
   const result = await interp.run(actor as any, rec);
 
-  expect(result).toEqual({ outcome: "failed", at: 2, error: expect.stringContaining("unknown variable"), failurePhase: "action" });
+  expect(result).toEqual({ outcome: "failed", at: 2, error: expect.stringContaining("unknown variable") });
 });
 
 test("run: the observer still sees before/after for a skipped step (#402)", async () => {

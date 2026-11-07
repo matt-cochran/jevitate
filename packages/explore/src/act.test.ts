@@ -69,23 +69,6 @@ describe("act — execute + actionability gate (Task 7)", () => {
   );
 
   it(
-    "reports the actual selected value when an option label differs from its value",
-    async () => {
-      await withSession("explore-act-select-label-", async (session) => {
-        await session.page.setContent(
-          '<select aria-label="Source"><option value="all">All sources</option><option value="platform">Platform templates</option></select>',
-        );
-        const actor = CastActor.named("act").whoCan(new BrowseTheWeb(session, [ORIGIN]));
-        const snap = await snapshot(session.page);
-        const combo = snap.controls.find((c) => c.name === "Source")!;
-        const result = await act(actor, { op: "select", control: combo, value: "Platform templates" });
-        expect(result).toMatchObject({ ok: true, selectedValue: "platform" });
-      });
-    },
-    120_000,
-  );
-
-  it(
     "selects an option in a resolved combobox",
     async () => {
       await withSession("explore-act-select-", async (session) => {

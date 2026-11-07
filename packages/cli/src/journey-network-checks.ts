@@ -34,7 +34,7 @@ const SETTLE_CEILING_MS = 5_000;
  * `journeyEndState(journey)` order: `metadata.endState` first, then a legacy `metadata.networkChecks`.
  */
 export type OutcomeCheckFailure =
-  | { readonly where: "step-request"; readonly step: number; readonly checkIndex: number; readonly detail: string; readonly evaluated?: true }
+  | { readonly where: "step-request"; readonly step: number; readonly checkIndex: number; readonly detail: string }
   | { readonly where: "end-state"; readonly index: number; readonly detail: string }
   | { readonly where: "unevaluable"; readonly detail: string };
 
@@ -64,7 +64,6 @@ interface StepWindow {
 interface JudgedCheck {
   readonly result: SuccessCheckResult;
   readonly slowStep?: SlowStepFinding;
-  readonly evaluated?: true;
 }
 
 export class JourneyOutcomeChecks {
@@ -183,26 +182,21 @@ export class JourneyOutcomeChecks {
         continue;
       }
       // #486: a request still awaiting its response (a cold start) is waited for, up to the bound.
-      const judged = await evaluateNetworkCheckAwaiting(
-        c,
-        () => ({
-          requests: window
-            .sent()
-            .filter((q) => (
-              (ownCapture || since === undefined || (q.startedAt !== undefined && q.startedAt >= since)) &&
-              (until === undefined || (q.startedAt !== undefined && q.startedAt <= until))
-            )),
-          truncated: window.truncated,
-        }),
-        s.responseTimeoutMs ?? this.#responseTimeoutMs,
+      out.push(
+        await evaluateNetworkCheckAwaiting(
+          c,
+          () => ({
+            requests: window
+              .sent()
+              .filter((q) => (
+                (ownCapture || since === undefined || (q.startedAt !== undefined && q.startedAt >= since)) &&
+                (until === undefined || (q.startedAt !== undefined && q.startedAt <= until))
+              )),
+            truncated: window.truncated,
+          }),
+          s.responseTimeoutMs ?? this.#responseTimeoutMs,
+        ),
       );
-      // Dropped requests cannot establish a negative request claim. Only a real own-step window
-      // supplies the direct-evaluation evidence used alongside a failed DOM postcondition.
-      out.push({
-        ...judged,
-        ...(ownCapture && !window.truncated && judged.result.unevaluable !== true ? { evaluated: true as const } : {}),
-        ...(!judged.result.passed && window.truncated ? { result: { ...judged.result, unevaluable: true as const } } : {}),
-      });
     }
     return out;
   }
@@ -282,12 +276,10 @@ export class JourneyOutcomeChecks {
       // reported no step boundaries. A request in flight when the step began (the previous step's
       // write) finishes inside its window: only requests SENT within the window count.
       const judged = s.judged ?? (await this.#judge(s, capture));
-      for (const [checkIndex, { result: r, slowStep, evaluated }] of judged.entries()) {
+      for (const [checkIndex, { result: r, slowStep }] of judged.entries()) {
         if (slowStep !== undefined) this.#slowSteps.push({ ...slowStep, step: s.index + 1 });
         if (r.passed) continue;
-        stepFailureSites.push(r.unevaluable === true
-          ? { where: "unevaluable", detail: `${r.check} — ${r.detail}` }
-          : { where: "step-request", step: s.index + 1, checkIndex, detail: `${r.check} — ${r.detail}`, ...(evaluated === true ? { evaluated } : {}) });
+        stepFailureSites.push({ where: "step-request", step: s.index + 1, checkIndex, detail: `${r.check} — ${r.detail}` });
         stepFailureReasons.push(`step ${s.index + 1} (${s.label}): ${r.check} — ${r.detail}`);
       }
     }

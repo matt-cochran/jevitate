@@ -30,8 +30,6 @@ export type InterpretResult = (
       outcome: "failed";
       at: number;
       error: string;
-      /** Structured at the thrown-error boundary; never inferred from error/target text. */
-      failurePhase?: "action" | "postcondition";
       /**
        * Why, when it is a replay-TARGET problem: the recorded element is missing
        * (`replay-target-not-found`) or cannot be told apart from others (`ambiguous`). Absent for

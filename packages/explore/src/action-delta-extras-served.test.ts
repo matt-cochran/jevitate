@@ -30,21 +30,9 @@ const LIST = (kind: string): string => `<main><h1>Items</h1><section aria-label=
     if (r.ok) { const li = document.createElement("li"); li.textContent = "Milk"; document.getElementById("l").appendChild(li); }
   };</script>`;
 
-const EDITOR = (modal: boolean): string => `<main><h1>Campaign draft</h1>
-  <textarea aria-label="Campaign objective">Unsaved objective</textarea>
-  ${modal ? '<div role="dialog" aria-label="Review suggestion">' : '<section aria-label="Review suggestion">'}
-  <button id="accept">Accept suggestion</button><div id="result"></div>
-  ${modal ? '</div>' : '</section>'}</main><script>
-  document.getElementById("accept").onclick = async () => {
-    await fetch("/api/items/keep", { method: "POST", body: "accept suggestion" });
-    document.getElementById("result").innerHTML = '<p>Accepted suggestion ready to apply</p><button>Apply to campaign</button>';
-  };</script>`;
-
 const PAGES: Record<string, string> = {
   "/keep": LIST("keep"),
   "/lose": LIST("lose"),
-  "/editor": EDITOR(false),
-  "/editor-modal": EDITOR(true),
   "/toast": `<main><h1>Codes</h1><button id="g">Generate</button></main><script>
     document.getElementById("g").onclick = () => { const t = document.createElement("div"); t.setAttribute("role", "status"); t.textContent = "Your code is ZX4471Q";
       document.body.appendChild(t); setTimeout(() => t.remove(), 300); };</script>`,
@@ -99,27 +87,6 @@ async function addOnce(path: string) {
 }
 
 describe("#303 persistence re-check after a write (served)", () => {
-  it.each(["/editor", "/editor-modal"])("%s: accepting a suggestion never implicitly reloads an unsaved editor", async (path) => {
-    const judge = new PreferenceJudge((n) => n === 0 ? [{ op: "click", name: "Accept suggestion" }] : [{ op: "blocked" }]);
-    judge.goalMetProbability = 0.1;
-    const run = await withSession("delta-editor-", (session) => explore({
-      actor: CastActor.named("owner").whoCan(new BrowseTheWeb(session, [origin])),
-      judge,
-      gen: new FakeGenerationGateway(),
-      goal: "accept the suggestion, leaving the campaign draft unsaved",
-      allowlist: [origin],
-      startUrl: `${origin}${path}`,
-      bounds: { maxDecisions: 3 },
-      actionDeltas: { volatilityGapMs: 300 },
-    }), origin);
-    const click = run.transcript.find((e) => e.op === "click" && e.delta !== undefined);
-    expect(click?.delta?.persisted).toBe("inconclusive");
-    expect(click?.delta?.persistedWhy).toContain("automatic reload deferred");
-    expect(run.transcript.some((e) => e.strategy === "persistence-check")).toBe(false);
-    expect(run.recording.pages.flatMap((p) => p.steps).some((s) => s.step.kind === "reload")).toBe(false);
-    expect(run.actionDeltas?.notPersisted).toBeUndefined();
-  }, 120_000);
-
   it("a write the server stored: persisted yes, after a reload (a GET — never a re-post)", async () => {
     const before = items.keep!.length;
     const run = await addOnce("/keep");

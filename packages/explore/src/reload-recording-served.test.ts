@@ -16,20 +16,18 @@ useSkippingTime({ per: "all" });
  * to the query-free pathname.
  *
  * The fixture's Create button POSTs, gets a fresh server-generated id per call, and client-side-routes
- * to `?id=<id>`; a full load of `/item?id=<id>` renders the same non-editing receipt. Replaying the
- * recording therefore creates a DIFFERENT id, and the step after the reload finds that new receipt.
- * The title is readonly: automatic reloads deliberately defer around editable drafts, covered by
- * action-delta-extras-served.test.ts. This fixture tests reload URL identity without risking a draft.
+ * to `?id=<id>`; a full load of `/item?id=<id>` renders the same edit form. Replaying the recording
+ * therefore creates a DIFFERENT id, and the step after the reload still finds that new edit form.
  */
 
 const EDIT = (id: string): string =>
-  `<h1>Edit ${id}</h1><label>Title <input aria-label="Title" readonly /></label><button type="button">Save</button>`;
+  `<h1>Edit ${id}</h1><label>Title <input aria-label="Title" /></label><button type="button">Save</button>`;
 const LIST = `<!doctype html><html><head><title>Items</title></head><body><main><h1>Items</h1><button id="create">Create</button></main><script>
   document.getElementById("create").onclick = async () => {
     const r = await fetch("/api/items", { method: "POST" });
     const { id } = await r.json();
     history.pushState({}, "", "/item?id=" + id);
-    document.querySelector("main").innerHTML = '<h1>Edit ' + id + '</h1><label>Title <input aria-label="Title" readonly /></label><button type="button">Save</button>';
+    document.querySelector("main").innerHTML = '<h1>Edit ' + id + '</h1><label>Title <input aria-label="Title" /></label><button type="button">Save</button>';
   };
 </script></body></html>`;
 

@@ -292,15 +292,11 @@ export class RunRecorder {
   }
 
   /** Record a select. Same value discipline as `fill`. */
-  select(rawDescriptor: TargetDescriptor, value: string | ValueOrVar, atMs: number, durationMs = 0, selectedValue?: string): void {
+  select(rawDescriptor: TargetDescriptor, value: string | ValueOrVar, atMs: number, durationMs = 0): void {
     this.#ensureSegment("/");
     const descriptor = this.#target(rawDescriptor);
     const v = this.#value(value);
-    const selected = selectedValue === undefined ? undefined : this.#value(selectedValue);
-    const expect: Assertion = selected !== undefined && "redacted" in selected && !selected.redacted
-      ? { kind: "valueEquals", target: { ...descriptor }, value: selected.value }
-      : visible(descriptor);
-    this.#append({ kind: "select", target: { ...descriptor }, value: v, expect }, atMs, durationMs);
+    this.#append({ kind: "select", target: { ...descriptor }, value: v, expect: visible(descriptor) }, atMs, durationMs);
   }
 
   /**

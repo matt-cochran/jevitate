@@ -64,7 +64,6 @@ export function fixtureJourney(overrides: Partial<Journey["metadata"]> = {}): Jo
 const VERIFY: JourneyVerifyRecord = {
   journeyId: "buy-pro",
   contentHash: journeyReviewHash(fixtureJourney()),
-  proofHash: journeyProofHash(fixtureJourney()),
   verdict: "proven",
   summary: { sensitive: 3, insensitive: 0, cascade: 0, notApplied: 0, error: 0, unpaired: 1 },
   at: "2026-10-02T00:00:00.000Z",
@@ -181,7 +180,7 @@ describe("#432 buildJourneyReview", () => {
   });
 
   it("proof: a proof recorded for other content is stale", () => {
-    const r = buildJourneyReview(fixtureJourney(), { lastVerify: { ...VERIFY, proofHash: "0".repeat(64) } });
+    const r = buildJourneyReview(fixtureJourney(), { lastVerify: { ...VERIFY, contentHash: "0".repeat(64) } });
     expect(r.proof.verify).toMatchObject({ status: "recorded", stale: true });
   });
 
@@ -252,9 +251,8 @@ describe("#523 a mutation proof goes stale only when executable content changes"
     expect(buildJourneyReview(j, { lastVerify: PROOF }).proof.verify).toMatchObject({ stale: true });
   });
 
-  it("an old record without planner identity must be reverified even when the content is unchanged", () => {
-    const { proofHash: _proofHash, ...legacy } = VERIFY;
-    expect(buildJourneyReview(fixtureJourney(), { lastVerify: legacy }).proof.verify).toMatchObject({ stale: true });
+  it("an old record without proofHash still compares the full content hash (stale after a prose change)", () => {
+    expect(buildJourneyReview(annotated(), { lastVerify: VERIFY }).proof.verify).toMatchObject({ stale: true });
   });
 
   it("the approval still goes stale on an annotation change (journeyReviewHash)", () => {

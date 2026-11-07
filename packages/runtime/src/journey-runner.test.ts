@@ -88,11 +88,6 @@ describe("JourneyRunner invariants", () => {
   });
 });
 
-it.each(["action", "postcondition"] as const)("preserves interpreter failure phase %s without parsing the reason", async (failurePhase) => {
-  const r = new JourneyRunner(fakeActor, fakeInterpreter({ outcome: "failed", at: 0, error: "target postcondition failed", failurePhase }));
-  expect(await r.run({ journey: journeyNoVars, params: {}, policy: safeRunPolicy() })).toMatchObject({ outcome: "quarantined", at: 0, failurePhase });
-});
-
 // === #453: change-aware self-heal ===
 
 const baseMetadata = { id: "j", name: "j", promoted: true, params: [], createdAtIso: "x" };
@@ -176,12 +171,6 @@ describe("JourneyRunner change-aware self-heal (#453)", () => {
     const runner = new JourneyRunner(fakeActor, brokenAtStep1(), undefined, undefined, undefined, { scope: renameScope(), riskOf: notRisky, writeGuard: writeGuard() });
     const result = await run(runner, recording, hybrid());
     expect(result).toMatchObject({ outcome: "healed-pending-review", revision: { recording: retargetRecording(recording, 1, { ...(flattenRecording(recording)[1]!.step as Extract<Step, { kind: "click" }>), target: { role: "button", name: "Create" } }) } });
-  });
-
-  it.each(["action", "postcondition"] as const)("preserves typed phase %s when self-heal quarantines a failed step", async (failurePhase) => {
-    const interpreter = fakeInterpreter({ outcome: "failed", at: 1, error: "target postcondition failed", failurePhase });
-    const runner = new JourneyRunner(fakeActor, interpreter, undefined, undefined, undefined, { scope: EMPTY_CHANGE_SCOPE, riskOf: notRisky, writeGuard: writeGuard() });
-    expect(await run(runner, renamedButtonJourney(), hybrid())).toMatchObject({ outcome: "quarantined", at: 1, failurePhase });
   });
 
   it("leaves an unexplained break quarantined with an unexplained verdict naming the step", async () => {
