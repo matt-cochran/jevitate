@@ -16,6 +16,9 @@ import { OWNER_MARKER_SWITCH } from "@jevitate/playwright";
 
 const BIN = process.env["JEVITATE_E2E_BIN"] ?? join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "bin.js");
 const ID = "save-then-publish";
+/** #809 refuses a secret parameter over MCP, so the MCP case drives a twin Journey whose parameter is not secret-shaped. */
+const MCP_ID = "save-then-publish-mcp";
+const MCP_PARAM = "draftTitle";
 const SECRET = "hunter2-do-not-keep";
 const HOOK_MARK = "hook-text-do-not-keep";
 const PAGE = `<!doctype html><html><head><title>Editor</title></head><body><main><h1>Editor</h1><label for="t">Token</label><input id="t">
@@ -23,9 +26,9 @@ const PAGE = `<!doctype html><html><head><title>Editor</title></head><body><main
 <button type="button" onclick="fetch('/api/publish',{method:'POST'}).then(r=>{if(r.ok)document.getElementById('published').textContent='Published'})">Publish</button><p id="published"></p>
 </main></body></html>`;
 
-function journeyOn(site: string): Journey {
+function journeyOn(site: string, id: string = ID, param: string = "apiToken"): Journey {
   return {
-    metadata: { id: ID, name: "Save then publish", promoted: false, params: ["apiToken"], createdAtIso: "2026-10-07T00:00:00.000Z" },
+    metadata: { id, name: "Save then publish", promoted: false, params: [param], createdAtIso: "2026-10-07T00:00:00.000Z" },
     recording: {
       version: "1",
       site,
@@ -34,7 +37,7 @@ function journeyOn(site: string): Journey {
           url: "/editor",
           steps: [
             { step: { kind: "navigate", url: "/editor", expect: { kind: "visible", target: { role: "heading", name: "Editor" } } } },
-            { step: { kind: "fill", target: { label: "Token" }, value: { var: "apiToken" }, expect: { kind: "count", target: { label: "Token" }, min: 0 } } },
+            { step: { kind: "fill", target: { label: "Token" }, value: { var: param }, expect: { kind: "count", target: { label: "Token" }, min: 0 } } },
             {
               step: { kind: "click", target: { role: "button", name: "Save" }, expect: { kind: "visible", target: { text: "Saved" } } },
               delta: { verdict: "relevant-change", why: "saved", changes: ["saved"], requests: ["POST /api/save → 200"], overheadMs: 1 },
@@ -158,6 +161,7 @@ describe("[realtime] a mutation proof that loses its observer or its verifier", 
     await until(() => port.includes("\n"), 20_000, "the page server to listen");
     site = `http://127.0.0.1:${port.trim()}`;
     await new FsJourneyStore(join(dir, ".jevitate", "journeys")).put(journeyOn(site));
+    await new FsJourneyStore(join(dir, ".jevitate", "journeys")).put(journeyOn(site, MCP_ID, MCP_PARAM));
     env = { ...process.env, HOME: join(dir, "home"), PLAYWRIGHT_BROWSERS_PATH: process.env["PLAYWRIGHT_BROWSERS_PATH"] ?? join(homedir(), ".cache", "ms-playwright") };
     delete env["JEVITATE_PARENT_WATCHDOG"];
   });
@@ -328,15 +332,28 @@ describe("[realtime] a mutation proof that loses its observer or its verifier", 
 
   it("over a real `jevitate mcp`: no new tool, status answers during that server's own proof, and a new server resumes it after a SIGKILL", async () => {
     reset();
+    const params = { [MCP_PARAM]: "Spring launch" };
+    // The verdict a resume must match, for this Journey and these params, with no hook: MCP takes none.
+    const baseline = cli("journey", "verify", MCP_ID, "--mutate", "--json", "--param", `${MCP_PARAM}=${params[MCP_PARAM]}`);
+    const mcpWhole = reportOf(baseline.stdout);
+    reset();
     const first = mcpServer();
     expect((await first.tools()).sort()).toEqual([...ALLOWED_TOOLS].sort());
-    const params = { apiToken: SECRET };
-    void first.call("verify_journey", { id: ID, mutate: true, params }).catch(() => undefined);
+    // #809: the secret-param Journey is refused over MCP before anything runs.
+    expect(await first.call("verify_journey", { id: ID, mutate: true, params: { apiToken: SECRET } })).toMatchObject({ code: "E_SECRET_PARAM_OVER_MCP" });
+    // The proof call answers only when it ends. One that answers before a first pair was refused,
+    // so it fails here with its answer rather than as a timeout (#809 turned the old secret-param call into one).
+    let early: Record<string, unknown> | undefined;
+    void first.call("verify_journey", { id: MCP_ID, mutate: true, params }).then(
+      (r) => void (early = r),
+      (e: unknown) => void (early = { error: String(e) }),
+    );
     type Seen = { data: Status };
-    const statusOf = async (server: ReturnType<typeof mcpServer>): Promise<Status> => ((await server.call("verify_journey", { id: ID, status: true })) as unknown as Seen).data;
+    const statusOf = async (server: ReturnType<typeof mcpServer>): Promise<Status> => ((await server.call("verify_journey", { id: MCP_ID, status: true })) as unknown as Seen).data;
     let seen = await statusOf(first);
     const deadline = performance.now() + 120_000;
     while ((seen.progress?.completed ?? 0) < 1) {
+      if (early !== undefined) throw new Error(`the proof over MCP ended before a first finished pair: ${JSON.stringify(early).slice(0, 400)}`);
       if (performance.now() > deadline) throw new Error("timed out waiting for a first finished pair over MCP");
       await pause(200);
       seen = await statusOf(first);
@@ -348,9 +365,9 @@ describe("[realtime] a mutation proof that loses its observer or its verifier", 
     const second = mcpServer();
     const dead = await statusOf(second);
     expect(dead).toMatchObject({ verifier: "exited", resume: { possible: true } });
-    const resumed = (await second.call("verify_journey", { id: ID, mutate: true, resume: true, params })) as unknown as { exitCode: number; data: Report };
+    const resumed = (await second.call("verify_journey", { id: MCP_ID, mutate: true, resume: true, params })) as unknown as { exitCode: number; data: Report };
     expect(resumed.data.reusedPairs).toBeGreaterThanOrEqual(dead.progress!.completed);
-    expect({ verdict: resumed.data.verdict, summary: resumed.data.summary, assertions: resumed.data.assertions }).toEqual({ verdict: whole.verdict, summary: whole.summary, assertions: whole.assertions });
+    expect({ verdict: resumed.data.verdict, summary: resumed.data.summary, assertions: resumed.data.assertions }).toEqual({ verdict: mcpWhole.verdict, summary: mcpWhole.summary, assertions: mcpWhole.assertions });
     await second.kill();
   }, 420_000);
 
