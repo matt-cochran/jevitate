@@ -19,6 +19,7 @@ import {
   approvalsReport,
   detectAgentSignals,
   makeApprovalConfirm,
+  needsHumanMessage,
   runAsMcpInvocation,
   type ApprovalDeps,
   type ApprovalRequest,
@@ -424,5 +425,18 @@ describe("#437 init --codeowners", () => {
     const r = await repo();
     const out = await cli(["init", "--skip-keys", "--skip-skills", "--skip-mcp", "--codeowners", "@acme/qa"], NO_TTY, { init: { detection: { cwd: () => r } } });
     expect(out.out).toContain("Require review from Code Owners");
+  });
+});
+
+describe("annotation confirmation is TTY-only", () => {
+  it("offers the annotation command without advertising a noninteractive escape", () => {
+    const message = needsHumanMessage({ kind: "annotations", id: "sample", contentHash: "a".repeat(64), waivers: [] });
+    expect(message).toContain("journey annotate sample --approve");
+    expect(message).not.toContain("--non-interactive-approval");
+  });
+
+  it("rejects an attempted noninteractive annotation approval even with TTY signals", async () => {
+    const confirm = makeApprovalConfirm({ env: {}, stdinIsTTY: () => true, stdoutIsTTY: () => true, prompt: async () => { throw new Error("must not ask"); } }, { nonInteractiveReason: "not an allowed annotation escape" });
+    await expect(confirm({ kind: "annotations", id: "sample", contentHash: "a".repeat(64), waivers: [] })).rejects.toMatchObject({ code: "E_APPROVAL_NEEDS_HUMAN" });
   });
 });

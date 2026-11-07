@@ -106,7 +106,7 @@ describe("#432 buildJourneyReview", () => {
 
     const reviewed = buildJourneyReview(journey, { safety: { readRequests: ["/api/v1/tool/crm-companies/query"] } });
 
-    expect(reviewed.proof.lint.findings.some((finding) => finding.rule === "no-persistence-check")).toBe(false);
+    expect(reviewed.proof.lint.findings.find((finding) => finding.rule === "no-persistence-check")).toMatchObject({ level: "warning", message: "UI effect at step 1 has incomplete write coverage; persistence requirements are unresolved." });
     expect(reviewed.sideEffects.writeRequests).toEqual([]);
   });
 

@@ -200,6 +200,10 @@ export interface RunJourneyProgrammaticallyOptions {
  * separate argument, never a surface option: no other caller passes it.
  */
 export interface MutationReplayOptions {
+  /** Internal verification boundary, while the final capture remains open. */
+  beforeFinalNetworkCaptureClose?: () => Promise<void>;
+  /** Internal mutation classifier policy; never a CLI/MCP authority override. */
+  readRequests?: readonly string[];
   /** #708: declared proof only; original check indices/capture are preserved. Never a CLI/MCP flag. */
   relaxedStepRequests?: readonly string[];
   /**
@@ -650,6 +654,7 @@ export async function runJourneyProgrammatically(
       // fixture bindings — for the end state's checks and (#565) every step expectation's references.
       const refs = httpCheckRefs({ params, secretParams: secretParamNames(journey, params), ...(fx === undefined ? {} : { bindings: fx.bindings() }) });
       const outcomeChecks = new JourneyOutcomeChecks(session.page, journey === full ? replayed : undefined, {
+        ...(mutation.beforeFinalNetworkCaptureClose === undefined ? {} : { beforeFinalNetworkCaptureClose: mutation.beforeFinalNetworkCaptureClose }),
         ...(mutation.relaxedStepRequests === undefined ? {} : { relaxedStepRequests: mutation.relaxedStepRequests }),
         secrets,
         // #543: the end state's http checks: allowlist-bound requests.
@@ -657,7 +662,7 @@ export async function runJourneyProgrammatically(
         resolveRef: refs,
         ...(opts.stepResponseTimeoutMs === undefined ? {} : { stepResponseTimeoutMs: opts.stepResponseTimeoutMs }),
       });
-      const blocker = mutation.blockWritesAtStep === undefined ? undefined : await stepWriteBlocker(session.page, mutation.blockWritesAtStep, allowedOrigins);
+      const blocker = mutation.blockWritesAtStep === undefined ? undefined : await stepWriteBlocker(session.page, mutation.blockWritesAtStep, allowedOrigins, mutation.readRequests);
       // #453 (Q2): a guarded click/fill heal probe runs under a per-step write blocker.
       // Context-level (popups, WebSockets), no write exemptions; see heal-probe-guard.ts.
       const healGuard = opts.heal === undefined || policy.selfHeal.mode === "fail-closed" ? undefined : await installHealProbeGuard(session.page);
@@ -938,8 +943,8 @@ const BLOCK_WINDOW_SETTLE_MS = 5_000;
  * opened as it begins, closed once the network settled after it. Every held write is aborted (a
  * write navigation too: never answered with a status that could read as a success).
  */
-async function stepWriteBlocker(page: Page, index: number, allowedOrigins: readonly string[]): Promise<{ guard: ReadOnlyGuard; observer: StepObserver }> {
-  const guard = new ReadOnlyGuard(writeClassifier({}), { allowlist: [...allowedOrigins], navigationWrites: "abort" });
+async function stepWriteBlocker(page: Page, index: number, allowedOrigins: readonly string[], readRequests?: readonly string[]): Promise<{ guard: ReadOnlyGuard; observer: StepObserver }> {
+  const guard = new ReadOnlyGuard(writeClassifier(readRequests === undefined ? {} : { readRequests }), { allowlist: [...allowedOrigins], navigationWrites: "abort" });
   await guard.arm(page);
   const monitor = monitorFor(page);
   await monitor.instrument();

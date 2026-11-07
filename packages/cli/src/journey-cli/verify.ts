@@ -1,3 +1,6 @@
+import { FsJourneyStore } from "@jevitate/journey";
+import { journeyTargetSafety } from "../journey-target-policy.js";
+import { TargetConfigError } from "../target-config.js";
 import { existsSync } from "node:fs";
 import { HttpCheckOffAllowlistError } from "../http-probe.js";
 import { Command } from "commander";
@@ -55,9 +58,29 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
         emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", "journey verify needs exactly one of --plan or --mutate"));
         return;
       }
+      let readRequests: readonly string[];
+      try {
+        const stored = await new FsJourneyStore(verifyJourneysDir).get(id);
+        if (stored === null) throw new UnknownJourneyError(`unknown journey '${id}'`);
+        readRequests = journeyTargetSafety(stored, deps.explore?.targetsConfigPath)?.readRequests ?? Object.freeze([]);
+      } catch (err) {
+        if (err instanceof TargetConfigError) emitJson(program, fail(err.code, err.message));
+        else if (err instanceof UnknownJourneyError) emitJson(program, fail("E_UNKNOWN_JOURNEY", err.message));
+        else throw err;
+        return;
+      }
+      let browser: ReturnType<typeof browserRunFromFlags>;
+      let emulation: ReturnType<typeof emulationFromFlags>;
+      try {
+        browser = browserRunFromFlags(this.opts<BrowserLaunchFlags & DemoFlags>(), deps.explore?.env ?? process.env);
+        emulation = emulationFromFlags(emulationFlags);
+      } catch (err) {
+        emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", err instanceof Error ? err.message : String(err)));
+        return;
+      }
       if (plan === true) {
         try {
-          const report = await planJourneyVerification({ dir: verifyJourneysDir, id, params: param });
+          const report = await planJourneyVerification({ dir: verifyJourneysDir, id, params: param, readRequests, ...(browser === undefined ? {} : { browser }), ...(emulation === undefined ? {} : { emulation }) });
           if (json) emitJson(program, ok(withEngine(report)));
           else {
             const out = program.configureOutput().writeOut;
@@ -97,15 +120,6 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
         emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", `storage state not found: ${storageState}`));
         return;
       }
-      let browser: ReturnType<typeof browserRunFromFlags>;
-      let emulation: ReturnType<typeof emulationFromFlags>;
-      try {
-        browser = browserRunFromFlags(this.opts<BrowserLaunchFlags & DemoFlags>(), deps.explore?.env ?? process.env);
-        emulation = emulationFromFlags(emulationFlags);
-      } catch (err) {
-        emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", err instanceof Error ? err.message : String(err)));
-        return;
-      }
       try {
         // #544: no --fixtures → the Journey's recorded fixtures (a missing file is refused before any browser).
         const recorded = await withRecordedFixtures(fixtureFlags, { dir: verifyJourneysDir, id });
@@ -116,6 +130,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
             dir: verifyJourneysDir,
             id,
             params: param,
+            readRequests,
             browserPortFactory: deps.explore?.browserPortFactory,
             ...(browser === undefined ? {} : { browser }),
             ...(emulation === undefined ? {} : { emulation }),

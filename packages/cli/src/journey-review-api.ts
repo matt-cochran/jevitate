@@ -1,10 +1,10 @@
-import { FsJourneyStore, JourneyReviewSchema, type Journey, type JourneyReview } from "@jevitate/journey";
+import { FsJourneyStore, JourneyReviewSchema, type Journey, type JourneyReview, type Finding } from "@jevitate/journey";
 import { buildJourneyReview } from "./journey-review.js";
 import { readApprovedSnapshot, readVerifyRecord, readProofWaiver } from "./journey-review-store.js";
 import { UnknownJourneyError } from "./journey-api.js";
 import { loadCatalog, resolveCatalogDir } from "./catalog-api.js";
 import { catalogJourney, journeyLinks } from "./catalog.js";
-import { preApprovalFindings, type ApprovalAction } from "./pre-approval.js";
+import { catalogLinkAnalyzer, preApprovalAnalyzers, preApprovalFindings, type ApprovalAction } from "./pre-approval.js";
 import { readinessAnalyzer } from "./readiness.js";
 import { jevLayerOf, type JevSetup } from "./jev-advisor.js";
 import { checkProposal, readJourneyProposal } from "./journey-proposal-store.js";
@@ -12,8 +12,11 @@ import { journeyAnchorIssues } from "./journey-anchor-gate.js";
 import { journeyLocatorHealth, testIdAttributesOrDefault } from "./locator-health-api.js";
 import { isStepIdOnlyStale } from "./journey-stale-api.js";
 import { findProjectDir } from "./project-dir.js";
-import { loadTargetsFile, resolveTargetConfig } from "./target-config.js";
+import { journeyTargetSafety } from "./journey-target-policy.js";
+import { previewJourneyAnnotations } from "./journey-annotate-api.js";
 import { loadProjectConfig } from "./project-config.js";
+
+type ReviewOptions = { readonly targetsFile?: string; readonly catalogDir?: string | null; readonly readiness?: boolean; readonly strict?: boolean; readonly jev?: JevSetup; readonly action?: ApprovalAction };
 
 /**
  * #432: loads one Journey and everything its review sheet needs — the targets.json safety config of
@@ -24,26 +27,40 @@ import { loadProjectConfig } from "./project-config.js";
 export async function reviewJourneyById(
   journeysDir: string,
   id: string,
-  opts: { readonly targetsFile?: string; readonly catalogDir?: string | null; readonly readiness?: boolean; readonly strict?: boolean; readonly jev?: JevSetup; readonly action?: ApprovalAction } = {},
+  opts: ReviewOptions = {},
 ): Promise<{ journey: Journey; review: JourneyReview }> {
   const journey = await new FsJourneyStore(journeysDir).get(id);
   if (journey === null) throw new UnknownJourneyError(`unknown journey '${id}'`);
-  let origin: string | null = null;
-  try {
-    origin = new URL(journey.recording.site).origin;
-  } catch {
-    origin = null;
-  }
-  const safety = origin === null ? undefined : resolveTargetConfig(loadTargetsFile(opts.targetsFile), origin).safety;
+  return reviewNativeJourney(journeysDir, id, journey, opts);
+}
+
+/** Native read-only candidate only: callers cannot submit arbitrary Journey/receipt/policy JSON. */
+export async function reviewAnnotationCandidateById(journeysDir: string, id: string, opts: Pick<ReviewOptions, "targetsFile" | "catalogDir"> = {}) {
+  const preview = await previewJourneyAnnotations(journeysDir, id);
+  const result = await reviewNativeJourney(journeysDir, id, preview.candidate, { ...opts, strict: true });
+  return { ...result, annotation: preview.status };
+}
+
+async function reviewNativeJourney(journeysDir: string, id: string, journey: Journey, opts: ReviewOptions): Promise<{ journey: Journey; review: JourneyReview }> {
+  const safety = journeyTargetSafety(journey, opts.targetsFile);
   // #433: the catalog links and the shared pre-approval findings, as `journey promote` gates on them.
   const catalog = await loadCatalog(opts.catalogDir === undefined ? resolveCatalogDir(undefined) : opts.catalogDir, journeysDir);
   const links = journeyLinks(catalog, catalogJourney(journey));
+  const nativeOwnerFindings = new Set<Finding>();
+  const analyzers = preApprovalAnalyzers().map((analyzer) => analyzer !== catalogLinkAnalyzer ? analyzer : {
+    ...analyzer,
+    async analyze(...args: Parameters<typeof analyzer.analyze>) {
+      const found = (await analyzer.analyze(...args)).map((f) => structuredClone(f));
+      for (const f of found) nativeOwnerFindings.add(f);
+      return found;
+    },
+  });
   const findings = await preApprovalFindings({ kind: "journey", id: journey.metadata.id }, catalog, {
     action: opts.action ?? "review",
     journey,
     ...(opts.readiness === true ? { readiness: true } : {}),
     ...(opts.jev === undefined ? {} : { jev: opts.jev }),
-  });
+  }, analyzers);
   // #523 --strict: the code-only readiness link checks (missing job / persona) run even without --readiness,
   // so "done" matches what the owner sees; the rest of readiness (and Jev) stays opt-in and advisory.
   if (opts.strict === true && opts.readiness !== true) {
@@ -63,7 +80,7 @@ export async function reviewJourneyById(
       ? {}
       : { proposal: { proposal: pending, stale: proposalProblem?.code === "E_JOURNEY_PROPOSAL_STALE", ...(proposalProblem === null ? {} : { problem: proposalProblem.message }) } }),
     ...(safety === undefined ? {} : { safety }),
-    catalog: { links, findings },
+    catalog: { links, findings, nativeOwnerFindings },
     approvedSnapshot,
     lastVerify: await readVerifyRecord(journeysDir, id),
     proofPolicy: loadProjectConfig(opts.catalogDir ?? findProjectDir()).mutationProofPolicy ?? "advisory",

@@ -764,7 +764,9 @@
     - flags=--param <kv> required=true mandatory=false negate=false variadic=false default={} description=param as key=value (repeatable)
     - flags=--project <path> required=true mandatory=false negate=false variadic=false default=null description=the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir
     - flags=--real required=false mandatory=false negate=false variadic=false default=false description=draft with the live OpenRouter generation gateway (requires keys)
+    - flags=--reviewed-hash <hash> required=true mandatory=false negate=false variadic=false default=null description=apply only the exact annotation transaction returned by --status
     - flags=--screenshots [mode|dir] required=false mandatory=false negate=false variadic=false default=null description=masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths
+    - flags=--status required=false mandatory=false negate=false variadic=false default=null description=read-only native annotation transaction status; no replay or approval
     - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=Playwright storageState JSON to start the replay authenticated; must exist
     - flags=--viewport <WxH> required=true mandatory=false negate=false variadic=false default=null description=emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device)
 
@@ -987,6 +989,7 @@
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope (the schema-checked sheet)
     - flags=--markdown required=false mandatory=false negate=false variadic=false default=null description=render the sheet as Markdown
     - flags=--out <file> required=true mandatory=false negate=false variadic=false default=null description=write the sheet (JSON with --json, Markdown with --markdown, else text) to this file
+    - flags=--pre-approval required=false mandatory=false negate=false variadic=false default=null description=read-only native candidate and pending owner actions; requires --json; never grants approval
     - flags=--project <path> required=true mandatory=false negate=false variadic=false default=null description=the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir
     - flags=--readiness required=false mandatory=false negate=false variadic=false default=null description=#434: add the Readiness section — deterministic checks with INCOSE GtWR rule findings, and (with --real and a judgment key) advisory Jev questions with probabilities
     - flags=--real required=false mandatory=false negate=false variadic=false default=null description=#434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs

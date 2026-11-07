@@ -1,8 +1,7 @@
 import { explainCheck, expectedResultFromDelta } from "@jevitate/explore";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import {
-  AnnotationDraftMismatchError,
   AnnotationDraftSchema,
   FsJourneyStore,
   applyAnnotationDraft,
@@ -15,11 +14,16 @@ import {
   type AnnotationDraft,
   type IntentCoverage,
   type Journey,
+  type ApprovalProvenance,
 } from "@jevitate/journey";
 import { assertNoSecretInPayload, redactText, redactUrl, type GenerationPort, type GenerationProvenance } from "@jevitate/ai-core";
 import { contentHash, clock } from "@jevitate/domain";
 import type { StepObserver } from "@jevitate/interpreter";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
+import { ApprovalNeedsHumanError, approvalRefusal, makeApprovalConfirm, type ApprovalDeps, type ApprovalConfirm, type ApprovalRequest } from "./approval-provenance.js";
+import { readDemoDraft } from "./demo-aspect-api.js";
+import { journeyReviewHash } from "./journey-review.js";
+import { AnnotationTransactionError, annotationApprovalPath, annotationTransaction, parseAnnotationApproval, readAnnotationFile, removeAnnotationDraft, withAnnotationTransaction, writeAnnotationApproval, type AnnotationApproval, type AnnotationFile, type AnnotationTransaction, type AnnotationOrigin } from "./journey-annotation-approval-store.js";
 import { runJourneyProgrammatically, UnknownJourneyError, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 
 /**
@@ -363,29 +367,187 @@ export async function readAnnotationDraft(dir: string, id: string): Promise<{ dr
   return { draft: result.data, draftPath };
 }
 
-/**
- * The human approval gate (like `journey promote`): applies the reviewed draft to the Journey and
- * removes the draft. Refuses — writing nothing — when the Journey changed since the draft was made
- * (its content hash differs) or the draft names steps the Journey does not have.
- */
-export async function approveJourneyAnnotations(dir: string, id: string): Promise<ApproveAnnotationsResult> {
-  const journey = await loadJourney(dir, id);
-  const { draft, draftPath } = await readAnnotationDraft(dir, id);
-  if (journeyContentHash(journey) !== draft.journeyHash) {
-    throw new StaleAnnotationDraftError(
-      `journey '${id}' changed after this draft was made (${draftPath}) — re-run \`jevitate journey annotate ${id}\` to draft against the current Journey`,
-    );
-  }
-  let applied: { journey: Journey; changes: AnnotationChange[] };
+export type AnnotationState = "missing" | "pending-human" | "approved-pending-apply" | "applied-current" | "stale" | "invalid" | "recovery-required";
+export interface AnnotationStatus {
+  readonly kind: "journey-annotation-status";
+  readonly version: 1;
+  readonly id: string;
+  readonly state: AnnotationState;
+  readonly currentContentHash: string;
+  readonly currentReviewHash: string;
+  readonly draftPresent: boolean;
+  readonly transaction: AnnotationTransaction | null;
+  readonly approval: Pick<AnnotationApproval, "phase" | "at" | "provenance"> | null;
+  readonly changesCount: number | null;
+  readonly reason: "draft-missing" | "draft-stale" | "invalid-state" | "transaction-conflict" | "apply-incomplete" | null;
+}
+interface AnnotationPreview {
+  status: AnnotationStatus;
+  journey: Journey;
+  candidate: Journey;
+  changes: AnnotationChange[];
+  draft: AnnotationFile | null;
+  receipt: AnnotationFile | null;
+  record: AnnotationApproval | null;
+}
+
+/** Internal native candidate projection; no caller-supplied Journey, policy or receipt is accepted. */
+export async function previewJourneyAnnotations(dir: string, id: string): Promise<AnnotationPreview> {
+  const store = new FsJourneyStore(dir);
+  let journey: Journey | null;
+  try { journey = await store.getGuarded(id); } catch { throw new AnnotationTransactionError(); }
+  if (journey === null) throw new UnknownJourneyError(`unknown journey '${id}'`);
+  const currentContentHash = journeyContentHash(journey);
+  const currentReviewHash = journeyReviewHash(journey);
+  let draft: AnnotationFile | null = null;
+  let receipt: AnnotationFile | null = null;
+  let record: AnnotationApproval | null = null;
+  const base = { kind: "journey-annotation-status" as const, version: 1 as const, id, currentContentHash, currentReviewHash };
+  const result = (state: AnnotationState, reason: AnnotationStatus["reason"], transaction: AnnotationTransaction | null = record?.transaction ?? null, candidate = journey, changes: AnnotationChange[] = []): AnnotationPreview => ({
+    status: { ...base, state, reason, draftPresent: draft !== null, transaction,
+      approval: record === null || transaction?.hash !== record.transaction.hash ? null : { phase: record.phase, at: record.at, provenance: record.provenance },
+      changesCount: state === "invalid" || state === "stale" || state === "recovery-required" || state === "missing" ? null : changes.length },
+    journey, candidate, changes, draft, receipt, record,
+  });
   try {
-    applied = applyAnnotationDraft(journey, draft);
-  } catch (err) {
-    if (err instanceof AnnotationDraftMismatchError) throw new InvalidAnnotationDraftError(err.message);
-    throw err;
+    const path = annotationDraftPath(dir, id);
+    draft = await readAnnotationFile(dir, path);
+    receipt = await readAnnotationFile(dir, annotationApprovalPath(path));
+    record = parseAnnotationApproval(receipt, id);
+    const draftHash = draft === null ? null : contentHash({ domain: "jevitate.annotation-draft.v1", raw: draft.raw });
+    if (record !== null) {
+      const t = record.transaction;
+      if (currentContentHash === t.afterContentHash && currentReviewHash !== t.afterReviewHash) return result("invalid", "invalid-state");
+      const sameDraft = draft === null || draftHash === t.draftHash;
+      if (sameDraft && (currentContentHash === t.afterContentHash || (record.phase === "applied" && currentReviewHash === t.afterReviewHash))) {
+        return result(record.phase === "applied" ? "applied-current" : "approved-pending-apply", record.phase === "applied" ? null : "apply-incomplete");
+      }
+      if (record.phase === "approved" && (currentContentHash !== t.beforeContentHash || draftHash !== t.draftHash)) return result("recovery-required", "transaction-conflict");
+      if (record.phase === "applied" && (draft === null || draftHash === t.draftHash)) return result("stale", "transaction-conflict");
+    }
+    if (draft === null) return result("missing", "draft-missing");
+    const parsed = AnnotationDraftSchema.parse(JSON.parse(draft.raw));
+    if (parsed.journeyId !== id) return result("invalid", "invalid-state");
+    if (parsed.journeyHash !== currentContentHash) return result("stale", "draft-stale");
+    const applied = applyAnnotationDraft(journey, parsed);
+    const candidate = store.normalizeForWrite(applied.journey);
+    const transaction = annotationTransaction(id, { beforeContentHash: currentContentHash, draftHash: draftHash!, afterContentHash: journeyContentHash(candidate), afterReviewHash: journeyReviewHash(candidate) });
+    if (record?.phase === "approved" && record.transaction.hash !== transaction.hash) return result("recovery-required", "transaction-conflict");
+    return result(record?.phase === "approved" ? "approved-pending-apply" : "pending-human", record?.phase === "approved" ? "apply-incomplete" : null, transaction, candidate, applied.changes);
+  } catch { return result("invalid", "invalid-state"); }
+}
+
+export async function annotationStatus(dir: string, id: string): Promise<AnnotationStatus> {
+  return (await previewJourneyAnnotations(dir, id)).status;
+}
+
+export interface AnnotationApplyOptions {
+  readonly approval?: ApprovalDeps;
+  readonly reviewedHash?: string;
+  readonly showChanges?: (changes: readonly AnnotationChange[]) => void;
+  readonly demoAuthority?: AnnotationDemoAuthority;
+}
+export interface AnnotationDemoAuthority { readonly provenance: ApprovalProvenance }
+const demoAuthorities = new WeakMap<AnnotationDemoAuthority, { root: string; id: string; hash: string; provenance: ApprovalProvenance; origin: Extract<AnnotationOrigin, { kind: "demo" }>; demoFile: { path: string; identity: string } }>();
+
+/** Demo's one native confirmation seals exactly this annotation transaction. Lookalikes are rejected. */
+export async function confirmDemoAnnotations(dir: string, id: string, request: ApprovalRequest, confirm: ApprovalConfirm): Promise<AnnotationDemoAuthority> {
+  const before = await previewJourneyAnnotations(dir, id);
+  const t = before.status.transaction;
+  if (!["pending-human", "approved-pending-apply", "applied-current"].includes(before.status.state) || t === null || request.kind !== "demo" || request.id !== id || request.contentHash !== t.afterReviewHash) throw new AnnotationTransactionError();
+  const demo = await readDemoDraft(dir, id);
+  if (demo.record.journeyHash !== t.beforeContentHash) throw new AnnotationTransactionError();
+  const origin: Extract<AnnotationOrigin, { kind: "demo" }> = { kind: "demo", draftHash: demo.digest, reviewHash: t.afterReviewHash, waivers: request.waivers.map((waiver) => ({ ...waiver })) };
+  let provenance: ApprovalProvenance;
+  if (before.status.state === "pending-human") provenance = await confirm(request);
+  else {
+    if (before.record?.origin.kind !== "demo" || contentHash(before.record.origin) !== contentHash(origin)) throw new AnnotationTransactionError();
+    provenance = structuredClone(before.record.provenance);
   }
-  if (applied.changes.length > 0) await new FsJourneyStore(dir).put(applied.journey);
-  await rm(draftPath, { force: true });
-  return { id, draftPath, changes: applied.changes, coverage: intentCoverage(applied.journey) };
+  const after = await previewJourneyAnnotations(dir, id);
+  const checkedDemo = await readDemoDraft(dir, id);
+  if (after.status.state !== before.status.state || after.status.transaction?.hash !== t.hash || after.draft?.identity !== before.draft?.identity || after.receipt?.identity !== before.receipt?.identity || checkedDemo.identity !== demo.identity) throw new AnnotationTransactionError();
+  const authority: AnnotationDemoAuthority = Object.freeze({ provenance: structuredClone(provenance) });
+  demoAuthorities.set(authority, { root: resolve(dir), id, hash: t.hash, provenance: structuredClone(provenance), origin, demoFile: { path: demo.path, identity: demo.identity } });
+  return authority;
+}
+
+/** A sealed demo grant stays associated with the exact native demo record through apply/promotion. */
+export async function validateDemoAnnotations(authority: AnnotationDemoAuthority): Promise<void> {
+  const binding = demoAuthorities.get(authority);
+  if (binding === undefined) throw new AnnotationTransactionError();
+  const demo = await readDemoDraft(binding.root, binding.id);
+  if (demo.identity !== binding.demoFile.identity || demo.digest !== binding.origin.draftHash) throw new AnnotationTransactionError();
+  const preview = await previewJourneyAnnotations(binding.root, binding.id);
+  if (!["pending-human", "approved-pending-apply", "applied-current"].includes(preview.status.state) || preview.status.transaction?.hash !== binding.hash) throw new AnnotationTransactionError();
+  if (preview.record?.transaction.hash === binding.hash && (contentHash(preview.record.origin) !== contentHash(binding.origin) || contentHash(preview.record.provenance) !== contentHash(binding.provenance))) throw new AnnotationTransactionError();
+}
+
+/** Finish only the same native demo record, after render/promotion/export have succeeded. */
+export async function finalizeDemoAnnotations(authority: AnnotationDemoAuthority): Promise<void> {
+  const binding = demoAuthorities.get(authority);
+  if (binding === undefined) throw new AnnotationTransactionError();
+  await validateDemoAnnotations(authority);
+  const status = await annotationStatus(binding.root, binding.id);
+  if (status.state !== "applied-current" || status.transaction?.hash !== binding.hash || status.currentReviewHash !== binding.origin.reviewHash) throw new AnnotationTransactionError();
+  await removeAnnotationDraft(binding.root, binding.demoFile.path, binding.demoFile);
+}
+
+export type AnnotationApplyResult = Omit<AnnotationStatus, "kind" | "state"> & ApproveAnnotationsResult & { readonly kind: "journey-annotation-apply"; readonly state: "applied-current" };
+
+/** Confirm once, durably journal before mutation, then atomically apply or recover the exact native transaction. */
+export async function approveJourneyAnnotations(dir: string, id: string, opts: AnnotationApplyOptions = {}): Promise<AnnotationApplyResult> {
+  return withAnnotationTransaction<AnnotationApplyResult>(dir, id, async () => {
+    let preview = await previewJourneyAnnotations(dir, id);
+    const t = preview.status.transaction;
+    if (preview.status.state === "missing") throw new AnnotationDraftNotFoundError("No native annotation draft or applied approval exists.");
+    if (preview.status.state === "stale") throw new StaleAnnotationDraftError("The annotation draft or approval is stale; review a draft for the current Journey.");
+    if (t === null || !["pending-human", "approved-pending-apply", "applied-current"].includes(preview.status.state) || (opts.reviewedHash !== undefined && opts.reviewedHash !== t.hash)) throw new AnnotationTransactionError();
+    const demoBinding = opts.demoAuthority === undefined ? undefined : demoAuthorities.get(opts.demoAuthority);
+    if (opts.demoAuthority !== undefined && (demoBinding?.root !== resolve(dir) || demoBinding.id !== id || demoBinding.hash !== t.hash)) throw new AnnotationTransactionError();
+    if (opts.demoAuthority !== undefined) await validateDemoAnnotations(opts.demoAuthority);
+    if ((preview.status.state === "approved-pending-apply" || preview.status.state === "applied-current") && preview.record?.provenance.channel !== "tty" && opts.demoAuthority === undefined) throw new ApprovalNeedsHumanError("This saved demo approval is not a human annotation approval; resume through its native demo approval path.");
+    const draftPath = annotationDraftPath(dir, id);
+    const receiptPath = annotationApprovalPath(draftPath);
+    if (preview.status.state === "pending-human") {
+      opts.showChanges?.(preview.changes);
+      let provenance: ApprovalProvenance;
+      if (opts.demoAuthority !== undefined) {
+        provenance = structuredClone(demoBinding!.provenance);
+      } else {
+        provenance = await makeApprovalConfirm(opts.approval)({ kind: "annotations", id, contentHash: t.hash, waivers: [] });
+      }
+      if (opts.demoAuthority === undefined && provenance.channel !== "tty") throw new ApprovalNeedsHumanError("Annotation apply requires the native human terminal confirmation.");
+      const checked = await previewJourneyAnnotations(dir, id);
+      if (checked.status.state !== "pending-human" || checked.status.transaction?.hash !== t.hash || checked.draft?.identity !== preview.draft?.identity || checked.receipt?.identity !== preview.receipt?.identity) throw new AnnotationTransactionError();
+      if (opts.demoAuthority !== undefined) await validateDemoAnnotations(opts.demoAuthority);
+      const record: AnnotationApproval = { kind: "journey-annotation-approval", version: 1, id, transaction: t, phase: "approved", at: clock.nowIso(), provenance, origin: demoBinding?.origin ?? { kind: "annotations" } };
+      await writeAnnotationApproval(dir, receiptPath, record, preview.receipt);
+      preview = await previewJourneyAnnotations(dir, id);
+    }
+    const changes = preview.changes;
+    if (preview.status.state === "approved-pending-apply") {
+      if (opts.demoAuthority !== undefined) await validateDemoAnnotations(opts.demoAuthority);
+      if (preview.record === null || preview.record.transaction.hash !== t.hash) throw new AnnotationTransactionError();
+      if (preview.status.currentContentHash !== t.afterContentHash) {
+        if (preview.status.currentContentHash !== t.beforeContentHash || preview.draft === null || journeyContentHash(preview.candidate) !== t.afterContentHash) throw new AnnotationTransactionError();
+        try { await new FsJourneyStore(dir).putGuarded(preview.candidate, t.beforeContentHash); }
+        catch { throw new AnnotationTransactionError(); }
+      }
+      const after = await previewJourneyAnnotations(dir, id);
+      if (after.status.state !== "approved-pending-apply" || after.status.currentContentHash !== t.afterContentHash || after.receipt?.identity !== preview.receipt?.identity) throw new AnnotationTransactionError();
+      await writeAnnotationApproval(dir, receiptPath, { ...preview.record, phase: "applied" }, preview.receipt);
+      preview = await previewJourneyAnnotations(dir, id);
+    }
+    if (preview.status.state !== "applied-current" || preview.status.transaction?.hash !== t.hash) throw new AnnotationTransactionError();
+    if (preview.draft !== null) await removeAnnotationDraft(dir, draftPath, preview.draft);
+    const final = await annotationStatus(dir, id);
+    if (final.state !== "applied-current" || final.transaction?.hash !== t.hash) throw new AnnotationTransactionError();
+    return { ...final, kind: "journey-annotation-apply", state: "applied-current", draftPath, changes, coverage: intentCoverage(preview.journey) };
+  }).catch((error: unknown) => {
+    if (error instanceof UnknownJourneyError || error instanceof AnnotationDraftNotFoundError || error instanceof StaleAnnotationDraftError || error instanceof AnnotationTransactionError || approvalRefusal(error) !== null) throw error;
+    throw new AnnotationTransactionError();
+  });
 }
 
 /** `journey run`'s informational intent line (#246): how many steps say why. Never fails a run. */

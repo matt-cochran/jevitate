@@ -21,6 +21,7 @@ import {
   mutationReplay,
   mutationWriteMatches,
   needsRelaxedReplay,
+  needsFinalNetworkObservation,
   planJourneyMutations,
   relaxedMutationReplay,
   runDeclaredTargetedProof,
@@ -45,7 +46,7 @@ import { preflightVerifyRecord, writePreflightedVerifyRecord } from "./journey-r
 import type { StepObserver } from "@jevitate/interpreter";
 import { UnknownJourneyError, redactSecretParams, runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import type { OutcomeCheckFailure } from "./journey-network-checks.js";
-import { journeyProofContext, journeyProofHashForContext } from "./journey-proof-context.js";
+import { journeyProofContext, journeyExecutionIdentity, type JourneyExecutionIdentity } from "./journey-proof-context.js";
 
 /** `journey run`'s options a proof passes through to every replay (params, environment, auth, fixtures, browser, gate). */
 export type VerifyJourneyOptions = Omit<
@@ -103,6 +104,7 @@ export interface JourneyVerifyReport {
   readonly journeyId: string;
   /** `journeyContentHash` of the stored Journey: the proof is bound to exactly this content. */
   readonly journeyHash: string;
+  readonly executionIdentity: JourneyExecutionIdentity;
   readonly base: { readonly outcome: string; readonly reason?: string };
   readonly verdict: MutationProofVerdict;
   readonly reason?: string;
@@ -117,6 +119,7 @@ export interface JourneyVerifyPlanReport {
   readonly journeyId: string;
   /** `journeyContentHash` of the stored Journey: the preview is bound to exactly this content. */
   readonly journeyHash: string;
+  readonly executionIdentity: JourneyExecutionIdentity;
   readonly mutations: readonly Pick<JourneyMutation, "kind" | "step" | "id" | "param" | "source">[];
   readonly pairs: readonly { readonly site: string; readonly check: string; readonly mutation: string; readonly declared?: true }[];
   readonly assertions: readonly { readonly site: string; readonly check: string; readonly mutations: readonly string[] }[];
@@ -124,11 +127,11 @@ export interface JourneyVerifyPlanReport {
 }
 
 /**
- * Static preview of `journey verify --mutate`: no browser, fixtures, hooks, target, session or
+ * Static preview of `journey verify --mutate`: CLI resolves local target policy; no browser, fixtures, hooks, target network, session or
  * credential is opened. Values of params are used only to derive the plan and are never returned.
  */
 export async function planJourneyVerification(
-  opts: Pick<VerifyJourneyOptions, "dir" | "id" | "params" | "readRequests">,
+  opts: Pick<VerifyJourneyOptions, "dir" | "id" | "params" | "readRequests" | "browser" | "emulation">,
 ): Promise<JourneyVerifyPlanReport> {
   const journey = await new JourneyRegistry(new FsJourneyStore(opts.dir)).get(opts.id);
   if (!journey) throw new UnknownJourneyError(`unknown journey '${opts.id}'`);
@@ -146,6 +149,7 @@ export async function planJourneyVerification(
   return {
     journeyId: journey.metadata.id,
     journeyHash: journeyContentHash(journey),
+    executionIdentity: journeyExecutionIdentity(journey, journeyProofContext(opts.browser, opts.emulation, opts.readRequests)),
     mutations: plan.mutations,
     pairs,
     assertions,
@@ -185,6 +189,35 @@ function failedSitesOf(result: { outcome: string; reason?: string; at?: number; 
   return result.at === undefined ? structured : [...structured, { where: "step", step: result.at + 1, postcondition: result.failurePhase === "postcondition" }];
 }
 
+/** Corresponding top-level boundaries only; admission and cleanup never enter this record. */
+function finalObservation(stepCount: number): {
+  anchors: number[]; valid: boolean; finalDone: boolean; closes: number; close?: number;
+  observer: StepObserver; captureClose: () => Promise<void>;
+} {
+  const record = {
+    anchors: [] as number[], valid: true, finalDone: false, closes: 0,
+    close: undefined as number | undefined,
+    observer: {} as StepObserver,
+    captureClose: async (): Promise<void> => {
+      const now = clock.monotonicMs();
+      record.closes++;
+      if (record.closes !== 1 || !Number.isFinite(now) || now < 0 || now < (record.anchors.at(-1) ?? now)) record.valid = false;
+      record.close = now;
+    },
+  };
+  record.observer = {
+    beforeStep: async ({ index }) => {
+      const now = clock.monotonicMs();
+      if (index !== record.anchors.length || index >= stepCount || !Number.isFinite(now) || now < 0 || now < (record.anchors.at(-1) ?? now)) { record.valid = false; return; }
+      record.anchors.push(now);
+    },
+    afterStep: async ({ index, outcome }) => {
+      if (index === stepCount - 1) record.finalDone = outcome === "done";
+    },
+  };
+  return record;
+}
+
 /**
  * Runs the proof for one Journey by id. Usage errors (unknown id, bad params, an environment that
  * refuses a step, a site-gate refusal) throw exactly as `journey run`'s do, before any mutation.
@@ -197,10 +230,15 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
   const { readRequests, ...runOpts } = opts;
   const lintOpts = readRequests === undefined ? {} : { readRequests };
   const journeyHash = journeyContentHash(journey);
+  const proofContext = journeyProofContext(opts.browser, opts.emulation, opts.readRequests);
+  const executionIdentity = journeyExecutionIdentity(journey, proofContext);
 
-  const baseStartedAt = clock.monotonicMs();
-  const base = await run(runOpts, { structuredFailures: true });
-  const baseMs = clock.monotonicMs() - baseStartedAt;
+  const stepCount = journey.recording.pages.reduce((n, page) => n + page.steps.length, 0);
+  const baseline = needsFinalNetworkObservation(journey) ? finalObservation(stepCount) : undefined;
+  const base = await run(baseline === undefined ? runOpts : { ...runOpts, observer: baseline.observer }, {
+    structuredFailures: true,
+    ...(baseline === undefined ? {} : { beforeFinalNetworkCaptureClose: baseline.captureClose }),
+  });
   const baseFields = { outcome: base.outcome, ...(base.outcome === "quarantined" ? { reason: base.reason } : {}) };
   const sites = journeyAssertions(journey);
   const checkOf = new Map(sites.map((s) => [assertionSiteKey(s), describeCheck(s.check)]));
@@ -217,26 +255,74 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
     const replayOpts = { ...lintOpts, params: opts.params };
     // The replay is DESCRIBED, not fixed: `mutateJourney` re-describes it on the Journey the run moved
     // onto the environment (#247), so a mutated copy never drops `--env`/`--base-url`.
-    const runReplay = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay, holdMs: number | undefined): Promise<Replayed> => {
+    const runReplay = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay, holdRequired: boolean): Promise<Replayed> => {
       try {
         const how = describe(journey);
-        const startedAt = clock.monotonicMs();
-        const lastStep = journey.recording.pages.reduce((n, page) => n + page.steps.length, 0) - 1;
-        const hold: StepObserver = {
-          afterStep: async ({ index }) => {
-            const left = holdMs === undefined || index !== lastStep ? 0 : holdMs - (clock.monotonicMs() - startedAt);
-            if (left > 0) await clock.sleep(left);
-          },
+        const observed = holdRequired ? finalObservation(stepCount) : undefined;
+        let horizonComplete = !holdRequired;
+        let horizonSleeps = 0;
+        let horizonElapsed = 0;
+        let horizonRequired = 0;
+        let horizonCause: "missing-observer" | "sleep-failed" | "clock-no-progress" | "clock-invalid" | "wake-limit" | "incomplete" = "missing-observer";
+        const captureClose = async (): Promise<void> => {
+          if (observed === undefined || baseline === undefined) return;
+          await observed.captureClose();
+          if (!baseline.valid || !observed.valid) { horizonCause = "clock-invalid"; return; }
+          if (baseline.close !== undefined) horizonRequired = Math.max(0, ...baseline.anchors.slice(0, m.step).map((before) => baseline.close! - before));
+          if (baseline.close === undefined || baseline.closes !== 1 || !baseline.finalDone || baseline.anchors.length !== stepCount || !observed.finalDone || observed.anchors.length !== stepCount) return;
+          horizonCause = "incomplete";
+          try {
+            let now = clock.monotonicMs();
+            if (observed.close === undefined || !Number.isFinite(observed.close) || !Number.isFinite(now) || now < observed.close) {
+              horizonCause = "clock-invalid";
+              return;
+            }
+            for (;;) {
+              let remaining = 0;
+              horizonElapsed = Number.POSITIVE_INFINITY;
+              for (let index = 0; index < m.step; index++) {
+                const before = baseline.anchors[index];
+                const replayBefore = observed.anchors[index];
+                if (before === undefined || replayBefore === undefined) { horizonCause = "missing-observer"; return; }
+                const required = baseline.close - before;
+                const elapsed = now - replayBefore;
+                if (![now, required, elapsed].every(Number.isFinite) || required < 0 || elapsed < 0) { horizonCause = "clock-invalid"; return; }
+                horizonRequired = Math.max(horizonRequired, required);
+                horizonElapsed = Math.min(horizonElapsed, elapsed);
+                remaining = Math.max(remaining, required - elapsed);
+              }
+              if (remaining <= 0) { horizonComplete = true; return; }
+              if (horizonSleeps >= 8) { horizonCause = "wake-limit"; return; }
+              const previous = now;
+              horizonSleeps++;
+              try { await clock.sleep(Math.ceil(remaining)); }
+              catch { horizonCause = "sleep-failed"; return; }
+              now = clock.monotonicMs();
+              if (!Number.isFinite(now) || now < previous) { horizonElapsed = now; horizonCause = "clock-invalid"; return; }
+              if (now === previous) { horizonCause = "clock-no-progress"; return; }
+            }
+          } catch { horizonCause = "clock-invalid"; }
         };
-        const held = holdMs === undefined ? runOpts : { ...runOpts, observer: hold };
+        const held = observed === undefined ? runOpts : { ...runOpts, observer: observed.observer };
         const r = await run(how.params === undefined ? held : { ...held, params: { ...how.params } }, {
           structuredFailures: true,
+          ...(observed === undefined ? {} : { beforeFinalNetworkCaptureClose: captureClose }),
+          ...(readRequests === undefined ? {} : { readRequests }),
           ...(how.relaxedStepRequests === undefined ? {} : { relaxedStepRequests: how.relaxedStepRequests }),
           ...(how.journey === journey ? {} : { mutateJourney: (j) => describe(j).journey }),
           ...(how.skipIndex === undefined ? {} : { skipStep: (i: number) => i === how.skipIndex }),
           ...(how.swapSelectAtStep === undefined ? {} : { selectAlternativeAtStep: how.swapSelectAtStep }),
           ...(how.blockIndex === undefined ? {} : { blockWritesAtStep: how.blockIndex }),
         });
+        if (holdRequired && r.outcome === "heal-exhausted") {
+          return { outcome: "failed", failedSites: [{ where: "step", step: r.at + 1, postcondition: false }], reason: r.reason };
+        }
+        // A replay that stopped at a step retains its original failure/cascade. A result at
+        // the final-check boundary needs the completed hold, even when the observer was skipped.
+        if (holdRequired && (!horizonComplete || observed?.valid !== true || observed.closes !== 1 || !observed.finalDone) && !(r.outcome === "quarantined" && r.at !== undefined)) {
+          if (observed?.valid === false) horizonCause = "clock-invalid";
+          return { outcome: "error", failedSites: [], reason: `final-network observation horizon failed (cause=${horizonCause}, eligible=${observed?.finalDone === true}, closeObserved=${observed?.closes === 1}, baselineAnchors=${baseline?.anchors.length ?? 0}, replayAnchors=${observed?.anchors.length ?? 0}, sleeps=${horizonSleeps}, requiredMs=${Number.isFinite(horizonRequired) ? horizonRequired : "invalid"}, elapsedMs=${Number.isFinite(horizonElapsed) ? horizonElapsed : "invalid"})` };
+        }
         const blocked = r.blockedWrites ?? [];
         const blockedFields = how.blockIndex === undefined ? {} : { blockedWrites: blocked.map((b) => `${b.method} ${b.path}`) };
         // #579: a select mutation found no other enabled live option — not applied, never proof.
@@ -268,7 +354,7 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
       const site = p.mutation === m.id ? siteByKey.get(p.site) : undefined;
       return site?.where === "end-state" && (site.check.kind === "requestMade" || site.check.kind === "responseStatus");
     });
-    const holdFor = (m: JourneyMutation): number | undefined => (judgesRequest(m) ? baseMs : undefined);
+    const holdFor = (m: JourneyMutation): boolean => judgesRequest(m);
     const replay = (m: JourneyMutation, describe: typeof mutationReplay): Promise<Replayed> => runReplay(m, (j) => describe(j, m, replayOpts), holdFor(m));
     const siteByKey = new Map(sites.map((s) => [assertionSiteKey(s), s]));
     for (const m of plan.mutations) {
@@ -343,6 +429,7 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
   const report: JourneyVerifyReport = {
     journeyId: journey.metadata.id,
     journeyHash,
+    executionIdentity,
     base: baseFields,
     verdict,
     ...(reason === undefined ? {} : { reason }),
@@ -362,13 +449,15 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
     ...(suggested.length === 0 ? {} : { suggestedTargetedProofs: [...suggested].sort((a, b) => siteOrder(a.check) - siteOrder(b.check)) }),
   };
   // Reasons and check texts can quote what the page showed: a secret parameter never comes back.
-  const redacted = redactSecretParams(report, journey, opts.params);
-  const proofContext = journeyProofContext(opts.browser, opts.emulation, opts.readRequests);
+  // Native digest/id contain no parameter values. Do not corrupt their typed identity if a
+  // secret value happens to be a substring of a digest or protocol discriminant.
+  const { executionIdentity: identity, ...redactable } = report;
+  const redacted = { ...redactSecretParams(redactable, journey, opts.params), executionIdentity: identity };
   // #432: the verdict is kept beside the Journey (bound to its review hash) for `journey review`.
   await writePreflightedVerifyRecord(receiptDestination, {
     journeyId: journey.metadata.id,
     contentHash: journeyReviewHash(journey),
-    proofHash: journeyProofHashForContext(journey, proofContext),
+    proofHash: executionIdentity.proofHash,
     ...(proofContext === undefined ? {} : { proofContext }),
     verdict: redacted.verdict,
     ...(redacted.reason === undefined ? {} : { reason: redacted.reason }),
