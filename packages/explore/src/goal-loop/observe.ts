@@ -96,34 +96,18 @@ export async function captureDelta(ctx: RunContext, step: Perceived): Promise<Fl
         ctx.sideEffects.inflight().length === 0 &&
         /^https?:/i.test(ctx.page.url())
       ) {
-        // A successful request does not establish that the rest of this page is saved.
-        // Dialogs and nested editors may hide another unsaved draft from the snapshot,
-        // and a submit-like button can clear the conversational input tracker. Never
-        // navigate away implicitly while such state may remain. An explicit Journey
-        // read-back/reload assertion is still required to prove persistence.
-        const editing = await ctx.page.locator(
-          'dialog[open], [role="dialog"], [role="alertdialog"], iframe, textarea:not([readonly]):not([disabled]), select:not([disabled]), input:not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([readonly]):not([disabled]), [contenteditable]:not([contenteditable="false"])',
-        ).count().then((n) => n > 0).catch(() => true);
-        if (editing) {
-          delta = {
-            ...delta,
-            persisted: "inconclusive",
-            persistedWhy: "automatic reload deferred: an editor, dialog or frame may contain unsaved state; use explicit durable read-back evidence",
-          };
-        } else {
-          const url = ctx.page.url();
-          const ok = await ctx.page
-            .goto(url, { waitUntil: "load", timeout: 15_000 })
-            .then(() => true)
-            .catch(() => false);
-          await monitorFor(ctx.page).waitSettled({ ceilingMs: 10_000 }).catch(() => undefined);
-          const p = ok ? await ctx.deltas.persistence().catch(() => ({ persisted: "inconclusive" as const, why: "the check failed" })) : { persisted: "inconclusive" as const, why: "the reload failed" };
-          delta = { ...delta, persisted: p.persisted, persistedWhy: p.why };
-          if (p.persisted === "no") ctx.notPersisted.push({ step: d.step, action: delta.action, why: p.why });
-          reloaded = true;
-          ctx.recorder.reload(url, ctx.now());
-          ctx.history.push(`persistence check after ${delta.action}: ${p.persisted} — ${p.why}`);
-        }
+        const url = ctx.page.url();
+        const ok = await ctx.page
+          .goto(url, { waitUntil: "load", timeout: 15_000 })
+          .then(() => true)
+          .catch(() => false);
+        await monitorFor(ctx.page).waitSettled({ ceilingMs: 10_000 }).catch(() => undefined);
+        const p = ok ? await ctx.deltas.persistence().catch(() => ({ persisted: "inconclusive" as const, why: "the check failed" })) : { persisted: "inconclusive" as const, why: "the reload failed" };
+        delta = { ...delta, persisted: p.persisted, persistedWhy: p.why };
+        if (p.persisted === "no") ctx.notPersisted.push({ step: d.step, action: delta.action, why: p.why });
+        reloaded = true;
+        ctx.recorder.reload(url, ctx.now());
+        ctx.history.push(`persistence check after ${delta.action}: ${p.persisted} — ${p.why}`);
       }
       ctx.transcript.attachDelta(d.step, delta);
       ctx.recorder.attachDelta(d.recordIndex, deltaRecord(delta));

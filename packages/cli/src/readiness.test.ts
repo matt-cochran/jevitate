@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { ProfileManager } from "@jevitate/daemon";
 import { FakeClock, installClock, resetClock } from "@jevitate/domain";
 import { FAKE_CALL_USAGE, UsageTracker, type Answer, type JudgmentPort, type JudgmentState, type Question } from "@jevitate/ai-core";
-import { FsJourneyStore, journeyProofHash, type Finding, type Journey } from "@jevitate/journey";
+import { FsJourneyStore, type Finding, type Journey } from "@jevitate/journey";
 import { buildProgram } from "./program.js";
 import { writeVerifyRecord } from "./journey-review-store.js";
 import { journeyReviewHash } from "./journey-review.js";
@@ -185,7 +185,7 @@ describe("#434 deterministic readiness — Journeys", () => {
 
   it("passes when the mutation proof is current and proven", async () => {
     const j = await new FsJourneyStore(journeysDir).get("publish");
-    await writeVerifyRecord(journeysDir, { journeyId: "publish", contentHash: journeyReviewHash(j!), proofHash: journeyProofHash(j!), verdict: "proven", summary: {}, at: "2026-10-01T00:00:00Z" });
+    await writeVerifyRecord(journeysDir, { journeyId: "publish", contentHash: journeyReviewHash(j!), verdict: "proven", summary: {}, at: "2026-10-01T00:00:00Z" });
     expect(byCode(await findings(["journey", "review", "publish", "--readiness"]), "readiness.verify")?.severity).toBe("info");
   });
 });

@@ -88,7 +88,7 @@ export async function handleSelectOption(ctx: RunContext, step: ActStep, op: Dec
   }
   const r = await act(cfg.actor, { op: "select", control, value: option });
   if (r.ok) {
-    ctx.recorder.select(control.descriptor, option, at, 0, r.selectedValue);
+    ctx.recorder.select(control.descriptor, option, at);
     ctx.noteMutation(`select ${control.name}`, control.descriptor, snap.signature, at, { field: keyOf(control), value: option });
     ctx.tracker.countAction();
     ctx.fillHelper.commit();

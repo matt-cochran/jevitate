@@ -581,7 +581,9 @@ describe("hang evidence carries the host's resource pressure", () => {
  * hang finding above are marked `environment-degraded` instead — advisory, never a hang finding —
  * and the run ends `inconclusive` rather than `hang`.
  */
-const starvedHost = (): HostHealthSampler =>
+describe("a hang on a starved host is environment-degraded, never a hang finding (#203)", () => {
+  useSkippingTime({ pageClock: false }); // #304: a busy page keeps the browser's own clock
+  const starvedHost = (): HostHealthSampler =>
     new HostHealthSampler({
       probe: async () => ({ sample: null, overThreshold: null, loadPerCore: 3.5 }),
       eventLoopLagMs: () => 0,
@@ -589,9 +591,6 @@ const starvedHost = (): HostHealthSampler =>
       attribute: true,
       cores: 4,
     });
-
-describe("a hang on a starved host is environment-degraded, never a hang finding (#203)", () => {
-  useSkippingTime({ pageClock: false }); // #304: a busy page keeps the browser's own clock
 
   it(
     "adversarial: the busy-looping page is recorded as environment-degraded, with no hang finding",
@@ -624,13 +623,6 @@ describe("a hang on a starved host is environment-degraded, never a hang finding
     },
     120_000,
   );
-
-});
-
-describe("a stalled import on a starved host remains an environment failure (#203)", () => {
-  // This page has no busy loop. Its settle clock must follow Node's skipped time, or a loaded
-  // host can consume the render ceiling before the browser's real-time quiet window elapses.
-  useSkippingTime();
 
   it(
     "goal: the stalled-import ui-no-progress ends the run inconclusive (degraded-environment), not hang",

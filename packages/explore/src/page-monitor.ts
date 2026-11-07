@@ -412,10 +412,7 @@ export class RequestCapture {
     // #617: only a request this capture saw begin counts as sent; a late completion from a request
     // that began before the capture started is added to the history but not to `sent()`.
     if (finished !== null) this.add(finished, sent !== undefined);
-    else if (sent !== undefined) {
-      if (this.#unfinished.length < MAX_CAPTURED) this.#unfinished.push(sent);
-      else this.#truncated = true;
-    }
+    else if (sent !== undefined && this.#unfinished.length < MAX_CAPTURED) this.#unfinished.push(sent);
   }
 
   /** The requests captured so far, in the order they finished, including ones the capture never saw begin. */
@@ -438,7 +435,7 @@ export class RequestCapture {
     ];
   }
 
-  /** True when completed or abandoned requests were dropped beyond the capture's bounds. */
+  /** True when more requests finished than the capture keeps (the oldest were dropped). */
   get truncated(): boolean {
     return this.#truncated;
   }

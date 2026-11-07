@@ -171,7 +171,6 @@ test("BufferingSink: a redacted:true fill value that fails to resolve sinks noth
     outcome: "failed",
     at: 1,
     error: expect.stringContaining("redacted"),
-    failurePhase: "action",
   });
 
   const runRecording = sink.toRecording({ site: "https://example.test" });
