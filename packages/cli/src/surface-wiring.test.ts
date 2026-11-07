@@ -51,6 +51,15 @@ const RUNNER_KEYS: Readonly<Record<string, string>> = {
 };
 
 const SEAM = "test seam (clock / injected ports) — never a user setting";
+/** #767: what only `verify-fix`'s own command and MCP tool need; a batch re-check neither reports replays nor writes a result per finding. */
+const GUARD_TARGETS = "#789: the MCP floor reads ~/.jevitate/targets.json by default; only an MCP server built with another path passes one, and the CLI has no floor";
+const VERIFY_FIX_INVOCATION = {
+  runGuardTargetsFile: GUARD_TARGETS,
+  onReplay: "#767: progress for the CLI's terminal layer, which only the verify-fix command registers",
+  onSecrets: "#767: feeds the CLI's terminal layer, which only the verify-fix command registers",
+  resultArtifact: "#767: one result file per verify-fix invocation; a batch re-check writes none",
+  resultStamp: "#767: only the CLI shares a stamped path with its terminal layer",
+};
 const MCP_NARROW = "#255: MCP verify_fix takes the CLI's replay options, but operator-only settings (cmd: log sources, re-sending paid/destructive hang writes, redaction literals) come from targets.json, never an MCP argument";
 const QUEUE_NO_ENV_SECRETS = "a queued spec's authFrom.secret is refused at enqueue: a request never chooses which env var is sent";
 const SITE_ACCOUNT = "the site-policy account is `primary`, the `jevitate site policy` default";
@@ -61,6 +70,9 @@ const OBSERVER_INTERNAL = "#246/#248: only annotate and demo replay with an obse
 const OBSERVER_NOT_INTERPRETER = "#251: annotate/demo pass their observer (`observer`) so `--screenshots` can compose with it; never a whole interpreter";
 const EVIDENCE_PACE = "#250: the after-clip's caption pace is fixed (EVIDENCE_PACE_MS); a test seam only";
 const NO_DELTAS_HERE = "#303: --action-deltas is a per-run opt-in on explore items, journey run/annotate/demo and verify-fix; this batch/suite/candidate replay only needs its verdict";
+const MCP_RUN_GATE = "#788: run_journey's own gate; this surface has its decision (a CLI draft, a proof or readiness replay) or its own check";
+const GUARD_TARGETS_SEAM = "#789: a test seam of run_journey; everywhere else the guard reads ~/.jevitate/targets.json";
+const RUN_RECORD_ELSEWHERE = "#790: only run_journey and journey run leave a run record";
 const NO_SCREENSHOTS_HERE = "#251: this surface takes no --screenshots (a batch/queued/MCP/suite-journey run: none asked for)";
 const WHOLE_JOURNEY = "#293: only an anchored mission replays a Journey PREFIX into its own open session (journey-prefix.ts); this surface replays the whole Journey in a browser of its own";
 const PREFIX_IN_SESSION = "#293: a Journey prefix replays INTO the mission's already-open session — the mission's own browser, emulation and capture apply";
@@ -101,7 +113,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "adversarial-strategy.ts runAdversarialCliMission": { hostHealth: SEAM, nowIso: SEAM },
   "feature-strategy.ts runFeatureCliMission": { hostHealth: SEAM, nowIso: SEAM },
   "run.ts runExploreMultiRun": { nowIso: SEAM },
-  "verify-fix-cli.ts runVerifyFix": { settleCeilingMs: "verify-fix reuses the recorded run's render wait", evidencePaceMs: EVIDENCE_PACE },
+  "verify-fix-cli.ts runVerifyFix": { runGuardTargetsFile: GUARD_TARGETS, settleCeilingMs: "verify-fix reuses the recorded run's render wait", evidencePaceMs: EVIDENCE_PACE },
   "usability-strategy.ts runUsabilityMission": {
     hostHealth: SEAM,
     env: SEAM,
@@ -121,6 +133,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     fixture: "offline review: nothing to upload",
   },
   "ledger-cli.ts runLedgerVerify": {
+    ...VERIFY_FIX_INVOCATION,
     actionDeltas: NO_DELTAS_HERE,
     evidencePaceMs: EVIDENCE_PACE,
     screenshots: NO_SCREENSHOTS_HERE,
@@ -144,20 +157,30 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     approvalVerification: SEAM,
   },
   "mcp-api.ts runVerifyFix": {
+    onReplay: VERIFY_FIX_INVOCATION.onReplay,
+    onSecrets: VERIFY_FIX_INVOCATION.onSecrets,
+    resultStamp: VERIFY_FIX_INVOCATION.resultStamp,
     evidencePaceMs: EVIDENCE_PACE,
     browserPortFactory: SEAM,
     settleCeilingMs: "verify-fix reuses the recorded run's render wait",
     allowLogCmd: MCP_NARROW,
     hangReplayWrites: MCP_NARROW,
-    secrets: MCP_NARROW,
     journeyPrefix: BRANCH_RECORDED,
   },
 
   // ── Journeys ────────────────────────────────────────────────────────────────────────────────
   // #497: the labels backfill replays with its own label-reading observer, never a whole interpreter.
   "journey-labels-migrate-api.ts runJourneyProgrammatically": { interpreter: OBSERVER_NOT_INTERPRETER },
-  "run.ts runJourneyProgrammatically": { fixtureBaseDir: FIXTURE_BASE_DIR, account: SITE_ACCOUNT, interpreter: ANNOTATE_OBSERVER, mask: MASK_INTERNAL, observer: OBSERVER_INTERNAL, session: WHOLE_JOURNEY, stopAfterStep: WHOLE_JOURNEY },
+  "run.ts runJourneyProgrammatically": {
+    onRawOutput: "only `journey chain` hands a run's output on to a page",
+    assertRunnable: MCP_RUN_GATE,
+    runGuardTargetsFile: GUARD_TARGETS_SEAM, fixtureBaseDir: FIXTURE_BASE_DIR, account: SITE_ACCOUNT, interpreter: ANNOTATE_OBSERVER, mask: MASK_INTERNAL, observer: OBSERVER_INTERNAL, session: WHOLE_JOURNEY, stopAfterStep: WHOLE_JOURNEY },
   "journey-prefix.ts runJourneyProgrammatically": {
+    onRawOutput: "only `journey chain` hands a run's output on to a page",
+    boundSecretParams: "only `journey run` resolves a secret from an operator binding; this path takes values through params",
+    assertRunnable: MCP_RUN_GATE,
+    runGuardTargetsFile: GUARD_TARGETS_SEAM,
+    runRecorder: RUN_RECORD_ELSEWHERE,
     allow: REPLAY_ALLOW,
     fixtureBaseDir: FIXTURE_BASE_DIR,
     stepResponseTimeoutMs: STEP_RESPONSE_DEFAULT,
@@ -186,6 +209,11 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     selfHealer: "a demo never self-heals: a Journey that no longer replays is a stale demo (exit 1)",
   },
   "demo-aspect-api.ts runJourneyProgrammatically": {
+    onRawOutput: "only `journey chain` hands a run's output on to a page",
+    boundSecretParams: "only `journey run` resolves a secret from an operator binding; this path takes values through params",
+    assertRunnable: MCP_RUN_GATE,
+    runGuardTargetsFile: GUARD_TARGETS_SEAM,
+    runRecorder: RUN_RECORD_ELSEWHERE,
     allow: REPLAY_ALLOW,
     fixtureBaseDir: FIXTURE_BASE_DIR,
     stepResponseTimeoutMs: STEP_RESPONSE_DEFAULT,
@@ -203,6 +231,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
   "load-cli.ts runJourneyLoadTest": { policy: "a load run replays with the fail-closed safeRunPolicy()" },
   "mcp-api.ts runJourneyProgrammatically": {
+    onRawOutput: "only `journey chain` hands a run's output on to a page",
+    boundSecretParams: "a Journey that needs a secret doesn't run over MCP",
     allow: REPLAY_ALLOW,
     fixtureBaseDir: FIXTURE_BASE_DIR,
     mask: MASK_INTERNAL,
@@ -214,6 +244,11 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     stopAfterStep: WHOLE_JOURNEY,
   },
   "check-execute.ts runJourneyProgrammatically": {
+    onRawOutput: "only `journey chain` hands a run's output on to a page",
+    boundSecretParams: "only `journey run` resolves a secret from an operator binding; this path takes values through params",
+    assertRunnable: MCP_RUN_GATE,
+    runGuardTargetsFile: GUARD_TARGETS_SEAM,
+    runRecorder: RUN_RECORD_ELSEWHERE,
     allow: REPLAY_ALLOW,
     fixtureBaseDir: FIXTURE_BASE_DIR,
     stepResponseTimeoutMs: STEP_RESPONSE_DEFAULT,
@@ -278,6 +313,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     journeyPrefix: NO_ANCHORED_HERE,
   },
   "mission-queue-runner.ts runFeatureCliMission": {
+    secrets: "a queued feature mission declares no --secret: a request never chooses one",
     blockOffAllowlistNavigation: QUEUE_NARROW,
     hostHealth: SEAM,
     stallTimeoutMs: QUEUE_NARROW,
@@ -309,6 +345,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     nowIso: SEAM,
   },
   "check-execute.ts runFeatureCliMission": {
+    secrets: "a suite's feature mission declares no secret: `secret` applies to goals, usability and adversarial",
     hostHealth: SEAM,
     nowIso: SEAM,
   },
@@ -326,6 +363,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     invariantAuthTokens: "usability refuses declared invariants (#150)",
   },
   "check-execute.ts runVerifyFix": {
+    ...VERIFY_FIX_INVOCATION,
     ...STORED_ALLOWLIST,
     actionDeltas: NO_DELTAS_HERE,
     evidencePaceMs: EVIDENCE_PACE,

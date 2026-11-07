@@ -142,6 +142,7 @@ describe("#488 journeyFixtureBaseDir", () => {
   it("is undefined inside a git repo with no .jevitate directory", async () => {
     const root = await mkdtemp(join(tmpdir(), "jev-base-"));
     await mkdir(join(root, ".git"));
+    await writeFile(join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
     const nested = join(root, "a", "b");
     await mkdir(nested, { recursive: true });
     expect(journeyFixtureBaseDir({ cwd: () => nested })).toBeUndefined();
@@ -352,6 +353,9 @@ describe("#399: a fixture output used as a secret param never comes back in the 
       setup: vi.fn(async () => {}),
       restore: vi.fn(async () => {}),
       bindings: () => ({ values: { inviteToken: token }, secretNames: new Set<string>() }),
+      secrets: () => [],
+      declaredOutputs: () => new Set(["inviteToken"]),
+      declaredSecretOutputs: () => new Set<string>(),
       record: () => ({ identity: "h", specHash: "s", outputs: { inviteToken: token }, secretOutputs: [], cycles: 1, log: [{ ok: true, url: `/api/invite -> ${token}` }] }),
     };
     const opens: OpenOptions[] = [];

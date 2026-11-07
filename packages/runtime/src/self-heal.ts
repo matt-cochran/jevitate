@@ -190,11 +190,6 @@ export interface HealerRequest {
   /** Candidates already tried for this step (sanitised), so the healer proposes something new. */
   readonly tried: readonly Step[];
   readonly allowedOrigins?: readonly string[];
-  /**
-   * #399: the run's secret parameter values (e.g. a token a navigate URL carried — the live page
-   * URL may still hold it). The healer redacts them from everything it sends a model.
-   */
-  readonly secrets?: readonly string[];
   /** `clock.now()` instant by which the healer must return. */
   readonly deadlineAtMs: number;
   /** The most model calls this request may make. */

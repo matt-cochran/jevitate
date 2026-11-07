@@ -12,7 +12,7 @@ export function cliTools(ctx: McpToolCtx, wired: McpToolGroup): void {
       description: spec.description,
       inputSchema: cliToolInputSchema(spec),
       handler: async (args) => {
-        const { isError, body } = await runCliTool(spec, args, { runCli: deps.runCli, roots: pathRoots, redact: (text) => redactCredentials(text, credentialStore) });
+        const { isError, body } = await runCliTool(spec, args, { runCli: deps.runCli, roots: pathRoots, journeysDir: deps.journeysDir, redact: (text) => redactCredentials(text, credentialStore) });
         return isError ? errorResult(body) : jsonResult(body);
       },
     };

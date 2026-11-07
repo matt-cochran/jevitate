@@ -1,3 +1,4 @@
+import { secretParamNamesArgvWarning } from "./secret-params.js";
 import { redactCredentialShapes, redactText, redactUrl } from "@jevitate/ai-core";
 import { clock } from "@jevitate/domain";
 import {
@@ -22,6 +23,10 @@ import type { BrowserSession } from "@jevitate/playwright";
 import { SiteGateRefusedError } from "@jevitate/runtime";
 import { applyJourneyEnvironment, environmentFromFlags, type ResolvedJourneyEnvironment } from "./environments.js";
 import { JourneyRequiresAuthError, UnknownJourneyError, prefixParams, runJourneyProgrammatically } from "./journey-api.js";
+import { JourneyRunRefusedError } from "@jevitate/mcp-facade";
+import { inMcpInvocation } from "./approval-provenance.js";
+import { assertMcpRunnable } from "./journey-stale-api.js";
+import { RunGuardRefusedError } from "./mcp-run-guard.js";
 import type { BrowserRunOptions } from "./browser-run-options.js";
 import { withSiteGate } from "./site-gate-cli.js";
 import { parseDescriptorSpec } from "./explore-specs.js";
@@ -189,6 +194,15 @@ export async function resolveJourneyPrefix(opts: ResolveJourneyPrefixOptions): P
       `journey '${opts.id}' is not promoted — missions branch only off promoted Journeys (a person promotes it: jevitate journey promote ${opts.id})`,
     );
   }
+  // #788: over MCP a stale approval refuses as run_journey's does: a mission does not branch off content nobody approved.
+  if (inMcpInvocation()) {
+    try {
+      await assertMcpRunnable(stored, opts.dir);
+    } catch (err) {
+      if (err instanceof JourneyRunRefusedError) throw new JourneyPrefixArgsError(`${err.code}: ${err.message}`);
+      throw err;
+    }
+  }
   const full = applyJourneyEnvironment(stored, opts.environment);
   let resolved: ReturnType<typeof resolveJourneyStep>;
   try {
@@ -257,7 +271,7 @@ export async function resolveJourneyPrefix(opts: ResolveJourneyPrefixOptions): P
       } catch (err) {
         // The site policy's own refusal keeps its code; anything else that stopped the replay means
         // the Journey did not reach its anchor — typed, never a restart from a URL.
-        if (err instanceof SiteGateRefusedError) throw err;
+        if (err instanceof SiteGateRefusedError || err instanceof RunGuardRefusedError) throw err;
         const message = err instanceof Error ? (err.message.split("\n")[0] ?? err.message) : String(err);
         throw new JourneyPrefixStaleError(`journey '${opts.id}' did not replay to ${where}: ${message}`, branch, undefined, await stalePageEvidence(session.page, secretValues));
       }
@@ -377,6 +391,8 @@ export class BranchReplayInputError extends Error {
 }
 
 export interface PrefixFromBranchOptions {
+  /** Told when a secret parameter came from `--param`, on the command line. */
+  readonly warn?: (line: string) => void;
   /** `--param` values: the branch's secret params (by name), or overrides of its recorded ones. */
   readonly params?: Readonly<Record<string, string>>;
   readonly storageState?: string;
@@ -393,6 +409,8 @@ export async function prefixFromBranch(branch: RecordedBranch, opts: PrefixFromB
   const info = branch.replay;
   if (info === undefined) throw new BranchReplayInputError(`the finding branched from journey '${branch.journeyId}' step ${branch.step}, but its result records no replay info — re-run the anchored mission`);
   const params = { ...info.params, ...(opts.params ?? {}) };
+  const onArgv = info.secretParams.filter((n) => opts.params?.[n] !== undefined);
+  if (onArgv.length > 0) opts.warn?.(secretParamNamesArgvWarning(onArgv));
   const missing = info.secretParams.filter((n) => !(n in params));
   if (missing.length > 0) {
     throw new BranchReplayInputError(`the finding's Journey prefix types secret param(s) ${missing.join(", ")}: give them again with --param <name>=<value>`);

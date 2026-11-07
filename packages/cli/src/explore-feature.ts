@@ -1,4 +1,5 @@
 /** The feature strategy runner behind `jevitate explore --strategy feature`. */
+import { redactSecretValues } from "./journey-api.js";
 import { writeFile } from "node:fs/promises";
 import { logsDirFor } from "./project-dir.js";
 import { join, resolve as resolvePath } from "node:path";
@@ -60,6 +61,8 @@ import { triageOf,
  * opened — an unauthorized origin never launches Chromium.
  */
 export interface RunFeatureCliMissionOptions {
+  /** `--secret`: kept out of the transcript, the Recordings, the result and captures. */
+  readonly secrets?: readonly string[];
   /** Test seam (#203): the run's host-health sampler (a deterministic fake host). Default: this host's. */
   readonly hostHealth?: HostHealthSampler;
   readonly seedUrl: string;
@@ -182,6 +185,8 @@ export const NO_MODEL_USAGE: UsageCounts = {
 };
 
 export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): Promise<FeatureCliMissionResult> {
+  // The mission records controls' names and URLs as they are, for replay: `--secret` is masked where they are written.
+  const scrub = <T>(v: T): T => redactSecretValues(v, opts.secrets ?? []);
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.seedUrl, opts.allowlist);
   assertSaveStorageStateOutsideProject(opts.saveStorageState);
@@ -196,7 +201,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   const capture = runCaptureFor({
     recordsVideo: opts.browser?.recordVideo !== undefined,
     screenshots: opts.screenshots,
-    secrets: [],
+    secrets: opts.secrets ?? [],
     artifactPath: () => journal.recordingPath,
     title: `feature: ${opts.capability}`,
   });
@@ -238,8 +243,8 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
   const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
   const serverLog = openServerLogRuntime({
     ...serverLogRuntimeOptions(opts.serverLog),
-    secrets: [],
-    onTranscriptEntry: journal.onTranscriptEntry,
+    secrets: opts.secrets ?? [],
+    onTranscriptEntry: (entry, all) => journal.onTranscriptEntry(entry, scrub(all)),
   });
   // #204: every request's correlation ids, from before the first navigation.
   serverLog?.observe(session.page);
@@ -247,7 +252,8 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     capture.noteEntry(session.page, entry);
     health.noteStep(entry);
     http5xx.noteStep(entry);
-    (serverLog?.onTranscriptEntry ?? journal.onTranscriptEntry)(entry, all);
+    if (serverLog !== undefined) serverLog.onTranscriptEntry(entry, all);
+    else journal.onTranscriptEntry(entry, scrub(all));
     snapshotter.noteSettledStep(currentUrlSafe(session));
   };
   // #159/#245: persisted and closed once — early (before the result is written) when recording video.
@@ -266,6 +272,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       scope,
       bounds: opts.bounds,
       onTranscriptEntry,
+      ...(opts.secrets === undefined ? {} : { secrets: opts.secrets }),
       ...(opts.invariants === undefined ? {} : { invariants: opts.invariants }),
       ...(opts.invariantAuthTokens === undefined ? {} : { invariantAuthTokens: opts.invariantAuthTokens }),
       ...(opts.stallTimeoutMs === undefined ? {} : { stallTimeoutMs: opts.stallTimeoutMs }),
@@ -278,10 +285,10 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     const recordingPaths: string[] = [];
     for (let i = 0; i < result.recordings.length; i++) {
       const p = join(outDir, `feature-${stamp}-path-${i}.json`);
-      await writeFile(p, `${JSON.stringify(result.recordings[i], null, 2)}\n`, "utf8");
+      await writeFile(p, `${JSON.stringify(scrub(result.recordings[i]), null, 2)}\n`, "utf8");
       recordingPaths.push(p);
     }
-    journal.writeTranscript(serverLogRun?.transcript ?? result.transcript);
+    journal.writeTranscript(scrub(serverLogRun?.transcript ?? result.transcript));
 
     // Honest outcome (ticket #78): a run that exercised nothing in-scope and
     // non-chrome proved nothing about the named capability — `inconclusive`,
@@ -337,7 +344,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
     // #245: every context closed (videos finalized) before the result naming them is written.
     const shotFields = await capture.finish();
     const videos = await finalizeVideos(videoDir, closeSession);
-    const typed = {
+    const typed = scrub({
       ...result,
       // #209: one name — a frontier that emptied having proved nothing about the feature is not
       // `exhausted` ("fully covered"): it is `insufficient-coverage`, the same word as its failure.kind.
@@ -370,7 +377,7 @@ export async function runFeatureCliMission(opts: RunFeatureCliMissionOptions): P
       resultPath: resultPathFor(journal.recordingPath),
       usage: NO_MODEL_USAGE,
       ...host.fields,
-    };
+    });
     return await withRunEvidence({ ...typed, resultPath: writeMissionResult(journal.recordingPath, missionOutcome, exitCode, typed) }, evidenceOf(opts, []), triageOf(opts, serverLogRun, []));
   } finally {
     disarmKillSwitch();

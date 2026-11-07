@@ -10,7 +10,9 @@ import { readVerifyRecord, writeProofWaiver, ReviewSidecarError } from "./journe
 import { evaluateMutationProofPolicy, mutationReceiptDigest, type ProofWaiver } from "./mutation-proof-policy.js";
 import { emitJsonOrRefusal } from "./cli-refusal.js";
 import { fail } from "./envelope.js";
-import { journeyProofHashForContext } from "./journey-proof-context.js";
+import { currentJourneyProofHash } from "./journey-proof-context.js";
+import { journeyReadRequests } from "./target-config.js";
+import { targetsOpts } from "./journey-cli/shared.js";
 
 class ProofWaiverInputError extends Error {
   readonly code = "E_PROOF_WAIVER_ARGS";
@@ -41,7 +43,8 @@ export function registerJourneyProofWaiver(journey: Command, program: Command, d
         if (stored === null) throw new ProofWaiverInputError(`unknown Journey '${id}'`);
         const record = await readVerifyRecord(layout.journeysDir, id);
         const contentHash = journeyReviewHash(stored);
-        const policy = evaluateMutationProofPolicy({ journey: stored, contentHash, record, mode: "require-attempt" });
+        const readRequests = journeyReadRequests(stored, targetsOpts(deps));
+        const policy = evaluateMutationProofPolicy({ journey: stored, contentHash, record, mode: "require-attempt", readRequests });
         if (!policy.waiverRequired || record === null) throw new ProofWaiverInputError("only a fresh inconclusive mutation attempt can be waived; run journey verify --mutate first");
         const provenance = await makeApprovalConfirm(deps.approval)({ kind: "journey", id, contentHash, waivers: [{ flag: "waive-proof", reason, detail: policy.reason }] });
         if (provenance.channel !== "tty") throw new ReviewSidecarError("proof waiver requires typed terminal confirmation");
@@ -49,7 +52,7 @@ export function registerJourneyProofWaiver(journey: Command, program: Command, d
         const latest = await new FsJourneyStore(layout.journeysDir).get(id);
         const latestRecord = await readVerifyRecord(layout.journeysDir, id);
         if (latest === null || latestRecord === null || journeyReviewHash(latest) !== contentHash || mutationReceiptDigest(latestRecord) !== mutationReceiptDigest(record)) throw new ProofWaiverInputError("Journey or proof changed during confirmation; review and retry");
-        const waiver: ProofWaiver = { v: 1, journeyId: id, contentHash, proofHash: journeyProofHashForContext(stored, record.proofContext), receiptDigest: mutationReceiptDigest(record), reason, at: clock.nowIso(), provenance: { channel: "tty", agentSignals: [...provenance.agentSignals], ...(provenance.user === undefined ? {} : { user: provenance.user }) } };
+        const waiver: ProofWaiver = { v: 1, journeyId: id, contentHash, proofHash: currentJourneyProofHash(stored, record.proofContext, readRequests), receiptDigest: mutationReceiptDigest(record), reason, at: clock.nowIso(), provenance: { channel: "tty", agentSignals: [...provenance.agentSignals], ...(provenance.user === undefined ? {} : { user: provenance.user }) } };
         await writeProofWaiver(layout.journeysDir, waiver);
         program.configureOutput().writeOut?.(`waived this inconclusive proof for '${id}': ${reason}\n`);
         process.exitCode = 0;

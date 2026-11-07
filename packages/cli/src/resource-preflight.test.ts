@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
@@ -87,6 +87,13 @@ describe("the startup sweep", () => {
 });
 
 describe("jevitate doctor", () => {
+  it("names a slot's non-regular file by its path", async () => {
+    mkdirSync(join(dir, "slot-0.json"));
+    const slots = new MachineBrowserSlots({ dir, host: "h" });
+    const g = new ResourceGovernor({ config: { enabled: true, maxBrowsers: 3, memoryCeilingBytes: null }, slots, sampleHost: async () => ({}), measureMemory: () => undefined });
+    expect(formatDoctor(await doctorReport({ governor: g }))).toContain(`${join(dir, "slot-0.json")} is not a regular file`);
+  });
+
   it("reports governance, the host, the slots and the jevitate browsers; suggests --cleanup for stale state", async () => {
     const { writeFileSync } = await import("node:fs");
     writeFileSync(join(dir, "slot-0.json"), JSON.stringify({ pid: 2 ** 22 + 9, host: "h", token: "dead", acquiredAt: "x" }));

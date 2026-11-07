@@ -1,6 +1,7 @@
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { existsSync } from "node:fs";
 import { Command } from "commander";
+import { SecretParamOverMcpError } from "./secret-params.js";
 import { ParamValidationError } from "@jevitate/journey";
 import { journeyExitCode } from "@jevitate/domain";
 import { ok, fail } from "./envelope.js";
@@ -248,6 +249,7 @@ export function registerSourceCommands(program: Command, deps: CliDeps): void {
           sourceName: name,
           journeyId,
           params: param,
+          ...(program.configureOutput().writeErr === undefined ? {} : { warn: program.configureOutput().writeErr }),
           ...(sourceRunEmulation === undefined ? {} : { emulation: sourceRunEmulation }),
           ...(storageState !== undefined ? { storageState } : {}),
           ...browserOption(this.opts<BrowserLaunchFlags>()),
@@ -264,7 +266,7 @@ export function registerSourceCommands(program: Command, deps: CliDeps): void {
       } catch (err) {
         // Each run-gate refusal maps to a distinct E_SOURCE_RUN* code so a
         // caller can tell WHY the run was refused without string-matching.
-        if (err instanceof SiteGateRefusedError) {
+        if (err instanceof SiteGateRefusedError || err instanceof SecretParamOverMcpError) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof UnknownSourceError) {
           emitJson(program, fail("E_SOURCE_RUN_UNKNOWN", err.message));

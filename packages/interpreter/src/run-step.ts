@@ -1,11 +1,12 @@
 import { isAbsolute } from "node:path";
-import type { Locator, Page } from "playwright";
+import type { ElementHandle, Locator, Page } from "playwright";
 import type { Assertion, OutcomeWait, RecordedStep, Step, TargetDescriptor, ValueOrVar } from "@jevitate/recording";
 import type { AssertionRefLookup } from "@jevitate/recording";
-import { FixturePathError, SECRET_PARAM_NAME_RE, confineFixture, describeNavigateUrl, encodeUrlParamValue, literalOperand, navigateUrlParams, resolveAssertionRefs, resolveNavigateUrl } from "@jevitate/recording";
+import { FixturePathError, isLoadRefusedName, confineFixture, describeNavigateUrl, encodeUrlParamValue, literalOperand, navigateUrlParams, resolveAssertionRefs, resolveNavigateUrl } from "@jevitate/recording";
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, Click, Enter, Navigate, Target } from "@jevitate/screenplay";
-import { resolveTarget, type ResolveTargetOptions } from "./resolve-target.js";
+import { anchorLocator, resolveTarget, type ResolveTargetOptions } from "./resolve-target.js";
+import type { ReplayActionGuard } from "./replay-guard.js";
 import { applyTextEdit } from "./rich-text.js";
 import { evaluateVisual, isVisualAssertion } from "./visual-state.js";
 
@@ -80,10 +81,19 @@ async function selectAlternativeValue(locator: Locator, avoid: string): Promise<
  * outside a variable binding is a Poka-Yoke guardrail failure, not a
  * postcondition failure: it always throws.
  */
+/** What a redactor writes in place of a value (`@jevitate/ai-core`'s REDACTION_MASK). */
+const REDACTION_MASK = "«redacted»";
+
+/** Redaction is for what a person or a model reads. Masked text is never what the page should get. */
+function assertNotMasked(name: string, value: string): void {
+  if (value.includes(REDACTION_MASK)) throw new Error(`E_REDACTED_VALUE: ${name} holds a redacted value, and a run never sends one to a page; the value was lost on the way here`);
+}
+
 export function resolveValue(value: ValueOrVar, vars: Map<string, string>): string {
   if ("var" in value) {
     const v = vars.get(value.var);
     if (v === undefined) throw new Error(`unknown variable: ${value.var}`);
+    assertNotMasked(value.var, v);
     return v;
   }
   if (value.redacted) {
@@ -91,6 +101,7 @@ export function resolveValue(value: ValueOrVar, vars: Map<string, string>): stri
       "cannot fill with a redacted constant value; use a variable or an unredacted value",
     );
   }
+  assertNotMasked("a recorded value", value.value);
   return value.value;
 }
 
@@ -131,6 +142,57 @@ export interface StepRefOptions {
 }
 
 /**
+ * A secret code resolved for this run (an operator's binding, never a request's) is only ever typed
+ * on the origins it is bound to. The allowlist check on steps is static, and a redirect is not a
+ * step: this reads the page the value is about to reach. Fails closed, naming only the origins.
+ */
+function assertBoundSecretOrigin(actor: Actor, value: ValueOrVar, bound: ReadonlyMap<string, readonly string[]> | undefined): void {
+  if (!isBoundSecret(value, bound)) return;
+  const origins = bound?.get(value.var) ?? [];
+  const url = actor.ability(BrowseTheWebToken).session.page.url();
+  let origin: string;
+  try {
+    origin = new URL(url).origin;
+  } catch {
+    origin = "an unreadable page";
+  }
+  if (!origins.includes(origin)) {
+    throw new Error(
+      `E_SECRET_ORIGIN_REFUSED: secret parameter ${value.var} was not typed: the page is on ${origin}, and its binding is for ${origins.join(", ")}. ` +
+        `If that page should get it (a sign-in on another origin), run it on the CLI with journey run --secret-field and --allow ${origin}; targets.json binds a secret to its own origin only. Otherwise find out why the page went there`,
+    );
+  }
+}
+
+function isBoundSecret(value: ValueOrVar, bound: ReadonlyMap<string, readonly string[]> | undefined): value is Extract<ValueOrVar, { var: string }> {
+  return bound !== undefined && "var" in value && bound.has(value.var);
+}
+
+/**
+ * Types through an element handle, which dies with its document: a locator re-resolves while it
+ * waits for the field, on whatever page is there by then. The origin is read with the handle held.
+ * A field that left its document is looked for again, and the origin read again, so a re-render on
+ * the same page still types and a move to another origin refuses. A failure's text drops
+ * Playwright's call log, which quotes the value.
+ */
+async function typeBoundSecret(actor: Actor, value: ValueOrVar, bound: ReadonlyMap<string, readonly string[]> | undefined, locator: Locator, type: (handle: ElementHandle<Node>) => Promise<void>): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    const handle = await locator.elementHandle();
+    assertBoundSecretOrigin(actor, value, bound);
+    if (handle === null) throw new Error("the field to type a secret parameter into is gone");
+    try {
+      await type(handle);
+      return;
+    } catch (err) {
+      const message = (err instanceof Error ? err.message : String(err)).split("\nCall log")[0] ?? "";
+      if (attempt >= 3 || !message.includes("not attached")) throw new Error(`typing a secret parameter failed: ${message}`);
+    } finally {
+      await handle.dispose().catch(() => undefined);
+    }
+  }
+}
+
+/**
  * #565: the references a step's expectation may use — the run's `vars` (its params, and every
  * earlier `extract` output) first, then `refLookup`; a name `refLookup` marks secret stays secret.
  */
@@ -139,9 +201,27 @@ function stepRefs(vars: Map<string, string>, lookup: AssertionRefLookup | undefi
     const other = lookup?.(name);
     const v = vars.get(name);
     // #564: a binding whose name reads as a credential (`extract as: "apiKey"`) is a secret too.
-    if (v !== undefined) return { value: v, secret: other?.secret === true || SECRET_PARAM_NAME_RE.test(name) };
+    if (v !== undefined) return { value: v, secret: other?.secret === true || isLoadRefusedName(name) };
     return other;
   };
+}
+
+/**
+ * Why a `visible` check failed when its element is still there by its recorded anchor: a step acts
+ * through the anchor and this check matches the descriptor exactly, so the action works and the check
+ * does not. It stays strict on purpose. Names from the recording only, never page text. One read: a
+ * page that can't answer gives no reason.
+ */
+async function anchoredElementReason(actor: Actor, a: Assertion): Promise<string | undefined> {
+  if (a.kind !== "visible") return undefined;
+  try {
+    const anchor = anchorLocator(actor.ability(BrowseTheWebToken).session.page, a.target.anchor);
+    if (anchor === null || (await anchor.count()) !== 1 || !(await anchor.isVisible())) return undefined;
+  } catch {
+    return undefined;
+  }
+  const by = a.target.anchor?.id !== undefined ? `id=${a.target.anchor.id}` : `name=${a.target.anchor?.name}`;
+  return `the element is still there by its recorded anchor (${by}), but nothing matches the recorded name exactly, so the app's text for it probably changed; a step's action uses the anchor and this check does not. If the new text is right, update the text in both the step's target and its expect, or re-record the step`;
 }
 
 /**
@@ -158,12 +238,15 @@ async function postcondition(
   hooks: StepWaitHooks,
 ): Promise<void> {
   if (wait === undefined) {
-    if (!(await checkAssertion(actor, a))) throw new PostconditionFailed(a, context);
+    if (!(await checkAssertion(actor, a))) throw new PostconditionFailed(a, context, await anchoredElementReason(actor, a));
     return;
   }
   const waited = await waitForOutcome(actor, a, wait, index + 1);
   hooks.onWait?.(waited);
-  if (waited.ending !== "held") throw new PostconditionFailed(a, context, waited.detail);
+  if (waited.ending !== "held") {
+    const reason = await anchoredElementReason(actor, a);
+    throw new PostconditionFailed(a, context, reason === undefined ? waited.detail : `${waited.detail}; ${reason}`);
+  }
 }
 
 /**
@@ -198,7 +281,7 @@ export async function runStep(
   rec: RecordedStep,
   vars: Map<string, string>,
   index = 0,
-  targetOpts: ResolveTargetOptions & StepWaitHooks & StepRefOptions & { readonly fixtureBaseDir?: string; readonly selectAlternative?: (index: number) => SelectAlternative | undefined } = {},
+  targetOpts: ResolveTargetOptions & StepWaitHooks & StepRefOptions & { readonly fixtureBaseDir?: string; readonly boundSecretParams?: ReadonlyMap<string, readonly string[]>; readonly selectAlternative?: (index: number) => SelectAlternative | undefined; readonly actionGuard?: ReplayActionGuard; readonly onExtracted?: (value: string, name?: string) => void | Promise<void> } = {},
 ): Promise<StepOutcome> {
   const step = rec.step;
   // #562/#565: an expectation's `${name}` / `{ var }` operands resolve as it is checked — after this
@@ -213,6 +296,7 @@ export async function runStep(
     case "navigate": {
       // #399: `${param}` placeholders resolve from the vars (strictly encoded, origin kept); a
       // navigation error never echoes a substituted value, and the postcondition names the template.
+      for (const name of navigateUrlParams(step.url)) assertNotMasked(name, vars.get(name) ?? "");
       const url = resolveNavigateUrl(step.url, vars);
       try {
         await Navigate.to(url).performAs(actor);
@@ -231,13 +315,21 @@ export async function runStep(
       return { kind: "done" };
     }
     case "click": {
-      await Click.on(await strictTarget(actor, step.target, targetOpts)).performAs(actor);
+      const clicked = await strictTarget(actor, step.target, targetOpts);
+      // #789: checked on the element that resolved, right before the click can send anything.
+      await targetOpts.actionGuard?.beforeAction({ index, recorded: rec, locator: clicked.resolve(actor.ability(BrowseTheWebToken).session.page) });
+      await Click.on(clicked).performAs(actor);
       await postcondition(actor, expected(step.expect), step.waitFor, "click", index, targetOpts);
       return { kind: "done" };
     }
     case "fill": {
       const text = resolveValue(step.value, vars);
-      await Enter.theText(text).into(await strictTarget(actor, step.target, targetOpts)).performAs(actor);
+      const field = await strictTarget(actor, step.target, targetOpts);
+      if (isBoundSecret(step.value, targetOpts.boundSecretParams)) {
+        await typeBoundSecret(actor, step.value, targetOpts.boundSecretParams, await resolveTarget(actor.ability(BrowseTheWebToken).session.page, step.target, targetOpts), (handle) => handle.fill(text));
+      } else {
+        await Enter.theText(text).into(field).performAs(actor);
+      }
       await postcondition(actor, expected(step.expect), step.waitFor, "fill", index, targetOpts);
       return { kind: "done" };
     }
@@ -258,6 +350,8 @@ export async function runStep(
         throw new Error(`extract: attribute "${step.attr}" not found on target`);
       }
       vars.set(step.as, value);
+      await targetOpts.onExtracted?.(value, step.as);
+      targetOpts.actionGuard?.noteExtracted?.(value);
       await postcondition(actor, expected(step.expect), step.waitFor, "extract", index, targetOpts);
       return { kind: "done" };
     }
@@ -269,7 +363,11 @@ export async function runStep(
       const page = actor.ability(BrowseTheWebToken).session.page;
       const locator = await resolveTarget(page, step.target, targetOpts);
       const value = chosen ?? (await selectAlternativeValue(locator, alternative!.avoid));
-      await locator.selectOption(value);
+      if (isBoundSecret(step.value, targetOpts.boundSecretParams)) {
+        await typeBoundSecret(actor, step.value, targetOpts.boundSecretParams, locator, (handle) => handle.selectOption(value).then(() => undefined));
+      } else {
+        await locator.selectOption(value);
+      }
       await postcondition(actor, expected(step.expect), step.waitFor, "select", index, targetOpts);
       return { kind: "done" };
     }
@@ -304,6 +402,7 @@ export async function runStep(
     }
     case "press": {
       const page = actor.ability(BrowseTheWebToken).session.page;
+      await targetOpts.actionGuard?.beforeAction({ index, recorded: rec, locator: page.locator(":focus"), key: step.key });
       await page.keyboard.press(step.key);
       await postcondition(actor, expected(step.expect), step.waitFor, "press", index, targetOpts);
       return { kind: "done" };
@@ -318,6 +417,7 @@ export async function runStep(
         action: step.action,
         ...(value === undefined ? {} : { value }),
         ...(step.format === undefined ? {} : { format: step.format }),
+        ...(step.value === undefined ? {} : { beforeType: () => assertBoundSecretOrigin(actor, step.value!, targetOpts.boundSecretParams), boundSecret: isBoundSecret(step.value, targetOpts.boundSecretParams) }),
       });
       await postcondition(actor, expected(step.expect), step.waitFor, "editText", index, targetOpts);
       return { kind: "done" };
@@ -347,7 +447,7 @@ export async function runStep(
         const rowLocator = itemsLocator.nth(i);
         vars.set(`${step.as}.__index`, String(i));
         for (const childStep of step.steps) {
-          await runRowScopedChildStep(actor, childStep, rowLocator, vars, expected);
+          await runRowScopedChildStep(actor, childStep, rowLocator, vars, expected, index, rec, targetOpts);
           // #580: an `extract` inside a `forEach` also publishes its value under the row's indexed
           // binding (`<as>.<i>.<field>`), alongside the row-scoped `<field>` (last row wins) it has
           // always bound. Copied per row, while `<field>` still holds THIS row's value.
@@ -391,10 +491,16 @@ async function runRowScopedChildStep(
   rowLocator: Locator,
   vars: Map<string, string>,
   expected: (a: Assertion) => Assertion,
+  index: number,
+  parent: RecordedStep,
+  hooks: { readonly actionGuard?: ReplayActionGuard; readonly onExtracted?: (value: string, name?: string) => void | Promise<void> },
 ): Promise<void> {
   switch (childStep.kind) {
     case "click": {
-      await resolveInRoot(rowLocator, childStep.target).click();
+      const clicked = resolveInRoot(rowLocator, childStep.target);
+      // #789: as a plain click's, judged as the child it is, at the `forEach`'s own step number.
+      await hooks.actionGuard?.beforeAction({ index, recorded: { ...parent, step: childStep }, locator: clicked });
+      await clicked.click();
       const expect = expected(childStep.expect);
       if (!(await checkAssertionInRow(actor, expect, rowLocator))) {
         throw new PostconditionFailed(expect, "forEach click");
@@ -408,6 +514,8 @@ async function runRowScopedChildStep(
         throw new Error(`extract: attribute "${childStep.attr}" not found on target`);
       }
       vars.set(childStep.as, value);
+      await hooks.onExtracted?.(value, childStep.as);
+      hooks.actionGuard?.noteExtracted?.(value);
       const expect = expected(childStep.expect);
       if (!(await checkAssertionInRow(actor, expect, rowLocator))) {
         throw new PostconditionFailed(expect, "forEach extract");

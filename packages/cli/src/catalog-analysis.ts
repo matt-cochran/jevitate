@@ -14,7 +14,8 @@ import { catalogJourney, findJob, findPersona, journeyLinks, personaLinkId, type
 import { buildCatalogStatus, renderAnalysisGroups } from "./catalog-review.js";
 import { catalogRefIssues, journeyRefIssues, refIssueFindings } from "./catalog-refs.js";
 import { buildJourneyReview } from "./journey-review.js";
-import { journeyProofHashForContext } from "./journey-proof-context.js";
+import { currentJourneyProofHash } from "./journey-proof-context.js";
+import { advisoryReadRequests } from "./target-config.js";
 import { readVerifyRecord } from "./journey-review-store.js";
 import { JEV_SKIPPED_PASS_REAL, jevLayerOf, type JevSetup } from "./jev-advisor.js";
 import type { ApprovalSubject, PreApprovalAnalyzer } from "./pre-approval.js";
@@ -400,7 +401,7 @@ async function updateAdvice(catalog: Catalog, subjectRef: ItemRef | undefined): 
     if (rec === null || rec.verdict === "proven") continue;
     // #523: a proof is on the current version unless the EXECUTABLE content changed (its proofHash);
     // a record from before 0.14.0 has none and falls back to the whole-Journey review hash.
-    const current = rec.proofHash !== undefined ? rec.proofHash === journeyProofHashForContext(j.journey, rec.proofContext) : rec.contentHash === j.contentHash;
+    const current = rec.proofHash !== undefined ? rec.proofHash === currentJourneyProofHash(j.journey, rec.proofContext, advisoryReadRequests(j.journey)) : rec.contentHash === j.contentHash;
     out.push(
       f(
         `update.proof:${j.id}`,

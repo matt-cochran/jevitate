@@ -148,6 +148,7 @@ describe(".jevitate/environments.json", () => {
   it("`init` scaffolds a valid, documented example once and never overwrites it", () => {
     const repo = join(root, "app");
     mkdirSync(join(repo, ".git"), { recursive: true });
+    writeFileSync(join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
     const first = initProjectDir(repo);
     const file = join(repo, ".jevitate", "environments.json");
     expect(first.created).toContain(file);
@@ -162,6 +163,7 @@ describe(".jevitate/environments.json", () => {
     // --dry-run reports it and writes nothing.
     const other = join(root, "other");
     mkdirSync(join(other, ".git"), { recursive: true });
+    writeFileSync(join(other, ".git", "HEAD"), "ref: refs/heads/main\n");
     expect(initProjectDir(other, { dryRun: true }).created).toContain(join(other, ".jevitate", "environments.json"));
     expect(existsSync(join(other, ".jevitate"))).toBe(false);
   });

@@ -14,6 +14,7 @@ import { withEngine } from "./engine.js";
 import { positiveIntArg } from "./cli-args.js";
 import { formatRegressionCaptureHuman, formatRegressionRunHuman } from "./cli-output.js";
 import { type EmulationSpec } from "@jevitate/playwright";
+import { prepareMcpRunGuard } from "./mcp-run-guard.js";
 import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "./environments.js";
 import {
   type CliDeps,
@@ -48,7 +49,7 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
   /** #293: the prefix a branch-point failure replays through; `null` after refusing (exit 64). */
   const branchPrefixOrRefuse = async (branch: RecordedBranch, params: Record<string, string>, storageState: string | undefined): Promise<JourneyPrefix | null> => {
     try {
-      return await prefixFromBranch(branch, { params, ...(storageState === undefined ? {} : { storageState }), dbPath: resolveDbPath(deps), environmentSeams: environmentSeams(deps) });
+      return await prefixFromBranch(branch, { params, warn: (line) => program.configureOutput().writeErr?.(line), ...(storageState === undefined ? {} : { storageState }), dbPath: resolveDbPath(deps), environmentSeams: environmentSeams(deps) });
     } catch (err) {
       if (!(err instanceof BranchReplayInputError)) throw err;
       emitJson(program, fail("E_REGRESSION_ARGS", err.message));
@@ -142,6 +143,8 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
             : recording.emulation.device !== undefined
               ? { device: recording.emulation.device }
               : { viewport: recording.emulation.viewport });
+        // #789: the MCP floor, decided before a fixture or a browser. Undefined on the CLI.
+        const runGuard = prepareMcpRunGuard({ site: recording.site, allowedOrigins: [recording.site], ...environmentSeams(deps) });
         // #144: every reproduce/minimize replay restores the fixture state the Recording started from.
         fx = regressionFixtures(
           flags,
@@ -165,17 +168,21 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
           resultPath,
           fingerprint,
           force,
+          ...(runGuard === undefined ? {} : { actionGuard: runGuard }),
           makeActor: async () => {
             await replayFixture?.reset();
             const { actor, close } = await makeRealBrowserActor(recording.site, storageState, captureEmulation, browser, deps.explore?.browserPortFactory);
             opened.push(close);
             if (prefix !== undefined) await prefix.replay(actor.ability(BrowseTheWebToken).session, browser);
+            // After the prefix, which has its own guard: Playwright calls only the socket route added last.
+            await runGuard?.arm(actor.ability(BrowseTheWebToken).session, param);
             if (replayFixture !== undefined) {
               rebindReplayNavigation(actor.ability(BrowseTheWebToken).session.page, recording.fixture?.outputs ?? {}, replayFixture.publicOutputs());
             }
             return actor;
           },
         }).then((r) => withEngine(r));
+        runGuard?.check();
         await fx?.restore();
         // #293: the committed regression remembers its branch point, so `regression run` replays through it.
         if (branch !== undefined && "metaPath" in result) {
@@ -287,9 +294,12 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
             : recording.emulation.device !== undefined
               ? { device: recording.emulation.device }
               : { viewport: recording.emulation.viewport });
+        // #789: the MCP floor, decided before a browser. Undefined on the CLI.
+        const runGuard = prepareMcpRunGuard({ site: environment?.baseUrl ?? recording.site, allowedOrigins: environment?.allowedOrigins ?? [recording.site], environment, ...environmentSeams(deps) });
         const report = await runRegressionRun({
           id,
           regressionsDir,
+          ...(runGuard === undefined ? {} : { actionGuard: runGuard }),
           ...(attempts !== undefined ? { attempts: Number(attempts) } : {}),
           ...(environment === undefined ? {} : { environment }),
           makeActor: async () => {
@@ -303,9 +313,12 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
             );
             opened.push(close);
             if (prefix !== undefined) await prefix.replay(actor.ability(BrowseTheWebToken).session, browser);
+            // After the prefix, which has its own guard: Playwright calls only the socket route added last.
+            await runGuard?.arm(actor.ability(BrowseTheWebToken).session, param);
             return actor;
           },
         });
+        runGuard?.check();
         const envelope = ok(withEngine(report));
         if (json) {
           emitJson(program, envelope);

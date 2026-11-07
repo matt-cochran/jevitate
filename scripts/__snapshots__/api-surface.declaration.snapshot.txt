@@ -1,6 +1,6 @@
 === DECLARATION (src/index.ts, TS compiler API) ===
 
-# @jevitate/ai-core (177 exports)
+# @jevitate/ai-core (181 exports)
   aggregateOf: function
   AI_CORE: variable
   ALL_CREDENTIAL_KEYS: variable
@@ -101,10 +101,12 @@
   ModelConstraints: type-alias
   ModelConstraintsSchema: variable
   ModelPrice: interface
+  ModelSecretsFullError: class
   NO_PLAINTEXT_CREDENTIAL_KEYS: variable
   NoEligibleModelError: class
   NoulAnswer: interface
   NoulQuestion: interface
+  openModelSecretScope: function
   OPENROUTER_JEV_BASE_URL: variable
   OPENROUTER_JEV_MODEL: variable
   OpenRouterCall: interface
@@ -119,6 +121,7 @@
   redactContext: function
   redactCredentialShapes: function
   REDACTION_MASK: variable
+  redactModelPayload: function
   redactText: function
   redactUrl: function
   requireKeys: function
@@ -177,6 +180,7 @@
   UxSpecificsOutput: variable
   VerifyFetch: type-alias
   verifyKey: function
+  withModelSecrets: function
   withPreflight: function
 
 # @jevitate/application (5 exports)
@@ -353,7 +357,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (719 exports)
+# @jevitate/explore (720 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -857,6 +861,7 @@
   quoteSpans: function
   RawChange: interface
   READ_ONLY_NOTE: variable
+  readControlIdentity: function
   ReadOnlyGuard: class
   ReadOnlyMode: type-alias
   recordCoverageHang: function
@@ -1164,7 +1169,7 @@
   withIdLock: function
   writeFileAtomic: function
 
-# @jevitate/interpreter (58 exports)
+# @jevitate/interpreter (60 exports)
   anchorLocator: other
   applyTextEdit: other
   attrOf: other
@@ -1197,6 +1202,8 @@
   readFlashes: other
   RecordingInterpreter: other
   RecordingSink: other
+  ReplayActionGuard: other
+  ReplayRefusal: other
   ReplayTargetError: other
   ReplayTargetFailure: other
   ResolvedRung: other
@@ -1224,7 +1231,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (282 exports)
+# @jevitate/journey (308 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1271,6 +1278,7 @@
   assertionRefsBound: function
   assertionSiteKey: function
   AssertionVerdict: type-alias
+  BaseTimedRun: interface
   bindParams: function
   CAMPAIGN_LIMITS: variable
   CampaignSpec: type-alias
@@ -1296,6 +1304,9 @@
   checkStatement: function
   classifyHandback: function
   classifyMutation: function
+  classifyReplay: function
+  controlCanChangeVerdict: function
+  declaredNonSecretParams: function
   declaredTargetedProofFor: function
   deriveParamSchema: function
   describeStep: function
@@ -1339,10 +1350,13 @@
   HandoffValueError: interface
   HEAL_REJECTION_CODES: variable
   HealAttemptSchema: variable
+  heldSites: function
   intentCoverage: function
   IntentCoverage: interface
+  isLoadRefusedName: other
   isNoClaimExpect: function
   isOwnTargetVisible: function
+  isSecretName: other
   isSweepMode: function
   JevLayer: type-alias
   JevLayerSchema: variable
@@ -1363,6 +1377,7 @@
   JourneyAnchor: interface
   JourneyAnchorListing: interface
   JourneyApproval: interface
+  journeyApprovalMatches: function
   JourneyApprovalWaiver: interface
   journeyAssertions: function
   JourneyAssertionSite: type-alias
@@ -1372,6 +1387,7 @@
   JourneyCatalogLinksSchema: variable
   journeyEndState: function
   JourneyInputsSchema: variable
+  journeyLegacyReviewHash: function
   JourneyLintFinding: interface
   JourneyLintOptions: interface
   JourneyLintRule: type-alias
@@ -1392,6 +1408,7 @@
   JourneyReviewAnchorWarning: type-alias
   JourneyReviewAttention: type-alias
   JourneyReviewChange: type-alias
+  journeyReviewHash: function
   JourneyReviewLocatorHealth: type-alias
   JourneyReviewProposal: type-alias
   JourneyReviewRiskyControl: type-alias
@@ -1414,12 +1431,14 @@
   lintJourney: function
   lintUploadFixtures: function
   listJourneyAnchors: function
+  loadRefusedParamNames: function
   MAX_DECLARED_RELAXATIONS: variable
   MAX_TARGETED_RELAXATIONS: variable
   Metric: type-alias
   METRIC_KINDS: variable
   MetricKind: type-alias
   MetricSchema: variable
+  mutationErrored: function
   MutationFailedSite: type-alias
   MutationKind: type-alias
   MutationPair: interface
@@ -1444,6 +1463,13 @@
   OutcomeTargetSchema: variable
   outputKeyFields: function
   ownAssertions: function
+  paceBeforeMutationMs: function
+  pacedReplay: function
+  paceEndStateFloorMs: function
+  paceFloorMs: function
+  paceMarginBoundMs: function
+  paceMarginOf: function
+  paceTailMs: function
   PAIR_RELATIONS: variable
   PairRelation: type-alias
   ParamSchema: interface
@@ -1466,6 +1492,8 @@
   relaxedMutationReplay: function
   removeAnchor: function
   renderJobStory: function
+  ReplayHolds: interface
+  ReplayPace: interface
   resolveAnchorStep: function
   resolveJourneyStep: function
   ReviewAnchorWarningSchema: variable
@@ -1480,11 +1508,15 @@
   ReviewWriteRequestSchema: variable
   runDeclaredTargetedProof: function
   runTargetedProof: function
-  SECRET_PARAM_NAME_RE: variable
   secretNamedValues: function
   secretParamNames: function
   secretParamValues: function
   SecretRef: interface
+  SiblingDisagreement: interface
+  siblingDisagreements: function
+  SiteArrivals: interface
+  sitesReachedEarly: function
+  sitesUnmatchedBy: function
   splitBudget: function
   stampAnchorStepIds: function
   StampedAnchor: interface
@@ -1503,6 +1535,7 @@
   targetedMutationReplay: function
   TargetedProof: interface
   targetedProofPlanIssues: function
+  thinSites: function
   validateFieldValue: function
   validateParams: function
   validateRecords: function
@@ -1526,11 +1559,12 @@
   RunModeledCapacityConfig: interface
   UnauthorizedLoadTargetError: class
 
-# @jevitate/mcp-facade (34 exports)
+# @jevitate/mcp-facade (38 exports)
   aiGenerateText: function
   AiGenerateTextArgs: interface
   AiGenerateTextResult: interface
   ALLOWED_TOOLS: variable
+  assertJourneyRunnable: function
   Capability: interface
   facadeApproveAction: function
   facadeCancelCommand: function
@@ -1548,6 +1582,9 @@
   InvalidArgsError: interface
   isMissionResultId: function
   isQueuedMissionId: function
+  JourneyApprovalState: type-alias
+  JourneyRunRefusalCode: type-alias
+  JourneyRunRefusedError: class
   listNamedJourneyTools: function
   listToolNames: function
   McpMissionStatus: interface
@@ -1809,7 +1846,7 @@
   targetDisplay: function
   validateCandidates: function
 
-# @jevitate/recording (202 exports)
+# @jevitate/recording (203 exports)
   ACTION_OPS: variable
   ActionDeltaRecord: interface
   ActionOp: type-alias
@@ -1902,6 +1939,8 @@
   InvariantSpecSchema: variable
   InvariantWhen: interface
   isInsideRoot: function
+  isLoadRefusedName: function
+  isSecretName: function
   isWriteRequest: function
   JSON_PATH_EACH: variable
   jsonPathHasEach: function
@@ -1967,7 +2006,6 @@
   resolveHttpUrl: function
   resolveNavigateUrl: function
   rpcMethodOf: function
-  SECRET_PARAM_NAME_RE: variable
   SecretMaterializationError: class
   selectJsonValues: function
   SpliceAt: interface

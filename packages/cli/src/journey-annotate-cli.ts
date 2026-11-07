@@ -1,3 +1,5 @@
+import { SecretBoundJourneyError } from "./journey-annotate-api.js";
+import { warnSecretParamsOnArgv } from "./secret-params.js";
 import { existsSync } from "node:fs";
 import type { Command } from "commander";
 import { ParamValidationError, formatAnnotationChanges } from "@jevitate/journey";
@@ -80,6 +82,7 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
       const layout = journeyLayout(program, deps, { project, journeysDir: journeysDirFlag, dir });
       if (layout === null) return;
       const journeysDir = layout.journeysDir;
+      await warnSecretParamsOnArgv(program.configureOutput().writeErr, journeysDir, [id], param);
 
       if (approve === true) {
         if (
@@ -209,7 +212,7 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
         }
         process.exitCode = exit;
       } catch (err) {
-        if (err instanceof SiteGateRefusedError || isEnvironmentError(err)) emitJson(program, fail(err.code, err.message));
+        if (err instanceof SiteGateRefusedError || err instanceof SecretBoundJourneyError || isEnvironmentError(err)) emitJson(program, fail(err.code, err.message));
         else if (err instanceof UnknownJourneyError) emitJson(program, fail("E_UNKNOWN_JOURNEY", err.message));
         else if (err instanceof JourneyRequiresAuthError) emitJson(program, fail("E_JOURNEY_REQUIRES_AUTH", err.message));
         else if (err instanceof ParamValidationError) emitJson(program, fail("E_INVALID_PARAMS", err.message));

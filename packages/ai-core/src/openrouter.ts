@@ -3,6 +3,7 @@ import { contentHash } from "@jevitate/domain";
 import { GEN_TASKS, taskTemperature, type GenTaskKind, type GenInput, type GenOutput, type GenerationPort, type GenerationResult } from "./generation.js";
 import { type CredentialStore, requireKeys } from "./credentials.js";
 import { assertNoOutboundCredential } from "./credential-guard.js";
+import { redactModelPayload } from "./redaction.js";
 import { type CatalogModel, type ModelConstraints, selectModel } from "./model-policy.js";
 
 /** The one injectable seam. Production wires the AI SDK's generateText with an
@@ -37,7 +38,7 @@ export class OpenRouterGenerationGateway implements GenerationPort {
     const task = GEN_TASKS[kind];
     const parsed = task.input.parse(input);                        // untrusted-in re-validated
     const model = selectModel(this.cfg.catalog, this.cfg.constraints); // deterministic pick
-    const body = { model, task: kind, promptVersion: task.promptVersion, input: parsed };
+    const body = { model, task: kind, promptVersion: task.promptVersion, input: redactModelPayload(parsed) };
 
     // FLOOR #6 CHOKE POINT: nothing with a key value may leave.
     assertNoOutboundCredential(body, this.cfg.store);

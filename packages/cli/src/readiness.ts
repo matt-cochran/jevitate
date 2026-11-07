@@ -1,5 +1,6 @@
 import { GTWR_RULES, checkJobStory, checkPersona, type Finding, type JourneyReview, type QualityFinding } from "@jevitate/journey";
 import type { Answer, JudgmentState, Question } from "@jevitate/ai-core";
+import { advisoryReadRequests } from "./target-config.js";
 import { catalogJourney, findJob, findPersona, journeyLinks, type Catalog, type CatalogJob, type CatalogJourney, type CatalogPersona } from "./catalog.js";
 import { buildJourneyReview } from "./journey-review.js";
 import { readVerifyRecord, readProofWaiver } from "./journey-review-store.js";
@@ -136,7 +137,8 @@ async function journeyChecks(j: CatalogJourney, catalog: Catalog): Promise<Findi
   const lastVerify = catalog.journeysDir === undefined ? null : await readVerifyRecord(catalog.journeysDir, id);
   const catalogFile = catalog.personasFile ?? catalog.jobsFile;
   const project = catalogFile === null ? findProjectDir() : dirname(catalogFile);
-  const review = buildJourneyReview(j.journey, { lastVerify, proofPolicy: loadProjectConfig(project).mutationProofPolicy ?? "advisory", proofWaiver: catalog.journeysDir === undefined ? null : await readProofWaiver(catalog.journeysDir, id) });
+  const readRequests = advisoryReadRequests(j.journey);
+  const review = buildJourneyReview(j.journey, { lastVerify, ...(readRequests === undefined ? {} : { safety: { readRequests } }), proofPolicy: loadProjectConfig(project).mutationProofPolicy ?? "advisory", proofWaiver: catalog.journeysDir === undefined ? null : await readProofWaiver(catalog.journeysDir, id) });
   // 3. the intent is complete: goal, success criteria, each step's objective and expected result
   const noExpected = review.steps.filter((s) => s.expectedResult === undefined).map((s) => s.number);
   const gaps = [...review.summary.missingIntent, ...(noExpected.length === 0 ? [] : [`${noExpected.length} of ${review.steps.length} step(s) have no expected result (step ${noExpected.join(", ")})`])];

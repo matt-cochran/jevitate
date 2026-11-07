@@ -94,10 +94,59 @@ describe("#609 nextTargetedRelaxation", () => {
     expect(nextTargetedRelaxation(threadJourney(), plan(), swapMutation(), "end-state:0", sensitiveRun, [])).toBeNull();
   });
 
+  describe("a refusal says what to do", () => {
+    // The FileIssue shape: the write's step claims little, a later assert fails first, the end state is never read.
+    const filing = (): Journey =>
+      JourneySchema.parse({
+        metadata: { id: "file", name: "File", promoted: false, params: [], createdAtIso: "2026-11-05T00:00:00Z", networkChecks: [{ kind: "responseStatus", method: "POST", pathGlob: "/api/file", status: { class: 2 } }] },
+        recording: {
+          version: "1",
+          site: "http://127.0.0.1:1",
+          pages: [
+            {
+              url: "/",
+              steps: [
+                { step: { kind: "navigate", url: "/", expect: { kind: "urlIncludes", text: "/" } } },
+                { step: { kind: "click", target: { css: "#file" }, expect: { kind: "urlIncludes", text: "/clusters" } }, delta: { verdict: "relevant-change", why: "w", changes: [], requests: ["POST /api/file → 200"], overheadMs: 1 } },
+                { step: { kind: "assert", check: { kind: "visible", target: { text: "#1" } } } },
+              ],
+            },
+          ],
+        },
+      });
+    const skip: JourneyMutation = { kind: "skip", step: 2, id: "skip:2" };
+    const failedLater = { outcome: "failed" as const, failedSites: [{ where: "step" as const, step: 3, postcondition: true }] };
+
+    it("a later failure says the target held, and how to make it answer for the write", () => {
+      const j = filing();
+      const next = nextTargetedRelaxation(j, planJourneyMutations(j), skip, "step:2", failedLater, []);
+      expect(next).toEqual({
+        refuse:
+          "step:3 is not before the target step:2: the replay got past step:2 and failed at step:3, so step:2 held under skip:2 and cannot show what it changes; make step:2's own check read what skip:2 removes (for example, move step:3's check onto it), or remove step:2's claim",
+      });
+    });
+
+    it("an unpaired blocker names the exact pair to add", () => {
+      const j = filing();
+      const next = nextTargetedRelaxation(j, planJourneyMutations(j), skip, "end-state:0", failedLater, []);
+      expect(next).toEqual({
+        refuse: 'step:3 is not paired with skip:2: if it depends on skip:2, add {"check":"step:3","mustFailWhen":"skip:2"} to metadata.mutationPairs, and the proof can relax it to reach end-state:0',
+      });
+    });
+
+    it("another end-state check failing says the target held", () => {
+      const j = filing();
+      const next = nextTargetedRelaxation(j, planJourneyMutations(j), skip, "step:2", { outcome: "failed", failedSites: [{ where: "end-state", index: 0 }] }, []);
+      expect(next).toEqual({
+        refuse: "end-state:0 is not an earlier step assertion: only end-state:0 failed, so step:2 held under skip:2 and cannot show what it changes; make step:2's own check read what skip:2 removes, or remove step:2's claim",
+      });
+    });
+  });
+
   it("refuses a blocking step that is not paired with the mutation", () => {
     const journey = threadJourney();
     const m = swapMutation();
-    expect(nextTargetedRelaxation(journey, unpairedPlan(m), m, "end-state:0", relaxedRun, [])).toEqual({ refuse: "step:2 is not paired with swap-param:threadId" });
+    expect(nextTargetedRelaxation(journey, unpairedPlan(m), m, "end-state:0", relaxedRun, [])).toEqual({ refuse: 'step:2 is not paired with swap-param:threadId: if it depends on swap-param:threadId, add {"check":"step:2","mustFailWhen":"swap-param:threadId"} to metadata.mutationPairs, and the proof can relax it to reach end-state:0' });
   });
 
   it("refuses a blocking action failure rather than a postcondition", () => {
@@ -216,7 +265,7 @@ describe("#609 runTargetedProof", () => {
     const proof = await run({ outcome: "failed", failedSites: [] }, unpairedPlan(m));
     const result: MutationRunResult = { ...relaxedBlockedAtStep2, targeted: [proof] };
     const judged = judgeAssertions(threadJourney(), unpairedPlan(m), new Map([[m.id, result]])).find((a) => a.site === "end-state:0");
-    expect(judged).toMatchObject({ verdict: "cascade", targetedRefusal: "step:2 is not paired with swap-param:threadId" });
+    expect(judged).toMatchObject({ verdict: "cascade", targetedRefusal: 'step:2 is not paired with swap-param:threadId: if it depends on swap-param:threadId, add {"check":"step:2","mustFailWhen":"swap-param:threadId"} to metadata.mutationPairs, and the proof can relax it to reach end-state:0' });
   });
 });
 

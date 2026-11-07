@@ -283,7 +283,8 @@ export async function captureAria(
     reason = /timeout/i.test(String(e)) ? "the accessibility snapshot timed out" : "the accessibility snapshot failed";
   }
   if (raw !== null && raw.length > SNAPSHOT_MAX_CHARS) {
-    raw = raw.slice(0, SNAPSHOT_MAX_CHARS);
+    // Whole lines: redaction is by line, below, and a cut through one could split a secret.
+    raw = raw.slice(0, Math.max(0, raw.lastIndexOf("\n", SNAPSHOT_MAX_CHARS)));
     reason = "the page is too large to snapshot whole";
   }
   // Redaction happens HERE, line by line, before anything else reads the snapshot; the raw text is

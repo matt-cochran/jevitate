@@ -129,6 +129,7 @@ const reverify = (pr: PrReview = RECORDED) => reverifyPrReview(entry, pr, CI_ENV
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "jev-469-"));
   await mkdir(join(root, ".git"));
+  await writeFile(join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
   forge = new FakeForge();
   entry = catalogItemEntry("job", join(root, ".jevitate", "jobs.json"), "checkout", hashOf("v1"));
   installClock(new FakeClock({ startMs: Date.parse("2026-10-09T12:00:00.000Z") }));

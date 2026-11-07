@@ -1,6 +1,6 @@
 # Jevitate
 
-**Autonomous browser testing that turns discovered bugs into deterministic regression tests.**
+**Browser automation and testing in one tool: parameterized Journeys that do real work in your app, and autonomous exploration that turns discovered bugs into deterministic regression tests.**
 
 [![CI](https://github.com/matt-cochran/jevitate/actions/workflows/ci.yml/badge.svg)](https://github.com/matt-cochran/jevitate/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@jevitate/cli.svg)](https://www.npmjs.com/package/@jevitate/cli)
@@ -8,7 +8,12 @@
 
 [Website](https://jevitate.com) · [Docs](./docs/README.md) · [Demo](./docs/demo.md) · [Changelog](./CHANGELOG.md)
 
-Jevitate explores your web app in a real browser, tries to break it, and reports only what the
+Jevitate is an automation platform that also works as a testing tool. A Journey is a parameterized
+flow you can run by id with values: it does real work in a real browser (types, clicks, sends
+requests) and returns what it extracted. Its purpose is to prove that users can meet their objectives
+in your application. Both uses are first-class.
+
+For testing, Jevitate explores your web app in a real browser, tries to break it, and reports only what the
 browser can prove: HTTP 5xx responses, uncaught exceptions, hangs, failed success checks, broken
 rules you declare. Each defect comes with a Recording that reproduces it. Jevitate replays it to
 confirm a fix and commits it as a regression you can run in CI.
@@ -176,8 +181,9 @@ never written). See [operations: evidence and screenshots](./docs/operations.md#
 ## Journeys, environments and demos
 
 A **Journey** is a replayable, typed flow you author from a goal, record by demonstration, or get
-from `explore`. It runs the same on every machine, self-heals under policy and loads as a test in
-CI ([Journeys](./docs/journeys.md)).
+from `explore`. It runs the same on every machine, takes parameters (`--param k=v`, or MCP
+`run_journey`), self-heals under policy, and runs as an automation or as a test in CI
+([Journeys](./docs/journeys.md)).
 
 ```bash
 # Intent: why, not only what. Drafts goals, success criteria and per-step objectives on playback;
@@ -320,6 +326,11 @@ jevitate inbox list                                                     # also: 
 - **Secrets never reach a model**: a redaction guard that fails closed, and bound secrets typed
   by code.
 - **Page text is data, never instructions**: model prompts carry a prompt-injection guard.
+- **Journey runs differ by surface.** Over MCP, `run_journey` refuses an unpromoted or stale Journey,
+  a click on a destructive or paid control, a write to an origin outside the allowlist, and a
+  `production: true` environment (`E_JOURNEY_*` and `E_RUN_REFUSED_*` codes). `jevitate journey run`
+  on the CLI applies none of those; it warns about an unpromoted Journey and runs. Nothing asks for
+  approval before a write yet. See [what guards a Journey run](./docs/safety.md).
 
 Details: [safety model](./docs/safety.md) · [SECURITY.md](./SECURITY.md).
 

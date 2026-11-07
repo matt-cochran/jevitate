@@ -1,7 +1,7 @@
 import { z, ZodType } from "zod";
 import { navigateTemplateProblem } from "./navigate-params.js";
 import { jsonPathProblem } from "./json-path.js";
-import { SECRET_PARAM_NAME_RE } from "./assertion-refs.js";
+import { isLoadRefusedName } from "./assertion-refs.js";
 
 // === Interfaces - TypeScript types matching the brief exactly ===
 
@@ -978,7 +978,7 @@ const RequestBodyShapeSchema = z
   .strict()
   .superRefine((shape, ctx) => {
     shape.fields.forEach((field, index) => {
-      if (SECRET_PARAM_NAME_RE.test(field.name)) {
+      if (isLoadRefusedName(field.name)) {
         ctx.addIssue({
           code: "custom",
           message: `bodyShape field ${JSON.stringify(field.name)} names a credential — a body shape declares field names only`,

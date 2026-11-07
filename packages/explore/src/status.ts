@@ -1,5 +1,6 @@
 import type { Locator, Page } from "playwright";
-import { visibleBusyIndicator } from "./hang.js";
+import { visibleBusyIndicator, visibleBusyIndicatorContainer, visibleBusyIndicatorText } from "./hang.js";
+import { redactText } from "./redact.js";
 
 /**
  * The page's STATUS TEXT — what a user reads to learn why nothing happened, which is not a control
@@ -34,6 +35,28 @@ export const EMPTY_STATUS: PageStatus = { alerts: [], notices: [], invalid: [] }
 const STATUS_CHARS = 200;
 /** Cap on how many alerts / invalid fields are kept. */
 const STATUS_ITEMS = 5;
+
+/** Read past each cap: the cap is made in Node, after the mask, so a secret across it leaves nothing. */
+const READ_PAST = 1024;
+/** The run's secrets for each page, as `perceive` was told them: these reads have no other way to know. */
+const pageSecrets = new WeakMap<Page, readonly string[]>();
+
+export function maskPageReads(page: Page, secrets: readonly string[]): void {
+  pageSecrets.set(page, secrets);
+}
+
+function maskFor(page: Page, text: string): string {
+  return redactText(text, pageSecrets.get(page) ?? []);
+}
+
+/** Masked, then cut. A quoted description keeps its label and closing quote out of the count. */
+function bounded(page: Page, text: string, chars: number): string {
+  const masked = maskFor(page, text);
+  const quoted = /^([^"]*")(.*)"$/s.exec(masked);
+  const inner = quoted?.[2] ?? masked;
+  const cut = inner.length > chars ? `${inner.slice(0, chars)}…` : inner;
+  return quoted === null ? cut : `${quoted[1]}${cut}"`;
+}
 
 /** BROWSER CODE — serialized by `page.evaluate`: no imports, no closure over module scope. */
 function readStatusInPage(limits: { chars: number; items: number }): PageStatus {
@@ -112,9 +135,9 @@ function readStatusInPage(limits: { chars: number; items: number }): PageStatus 
 
 /** Reads the page's status text. A page that cannot be read (navigating, closed) has none. */
 export async function readPageStatus(page: Page): Promise<PageStatus> {
-  return page
-    .evaluate(readStatusInPage, { chars: STATUS_CHARS, items: STATUS_ITEMS })
-    .catch(() => EMPTY_STATUS);
+  const raw = await page.evaluate(readStatusInPage, { chars: STATUS_CHARS + READ_PAST, items: STATUS_ITEMS }).catch(() => EMPTY_STATUS);
+  const b = (t: string): string => bounded(page, t, STATUS_CHARS);
+  return { alerts: raw.alerts.map(b), notices: raw.notices.map(b), invalid: raw.invalid.map((f) => ({ name: b(f.name), message: b(f.message) })) };
 }
 
 /**
@@ -166,9 +189,8 @@ const FORM_TEXT_ITEMS = 40;
  * container, or the target is gone). Untrusted page text — the caller redacts before any prompt.
  */
 export async function readFormText(target: Locator): Promise<string[] | null> {
-  return target
-    .evaluate(readFormTextInPage, { chars: STATUS_CHARS, items: FORM_TEXT_ITEMS }, { timeout: 500 })
-    .catch(() => null);
+  const lines = await target.evaluate(readFormTextInPage, { chars: STATUS_CHARS + READ_PAST, items: FORM_TEXT_ITEMS }, { timeout: 500 }).catch(() => null);
+  return lines === null ? null : lines.map((l) => bounded(target.page(), l, STATUS_CHARS));
 }
 
 /** What appeared in `now` that `before` did not show: new alert texts, new / changed invalid fields. */
@@ -209,7 +231,7 @@ export const IN_PROGRESS_WORDS =
 /** BROWSER CODE — serialized by `page.evaluate`: no imports, no closure over module scope. */
 function inProgressInPage(words: string): string | null {
   const norm = (s: string | null | undefined): string => (s ?? "").replace(/\s+/g, " ").trim();
-  const cut = (s: string): string => (s.length > 80 ? `${s.slice(0, 80)}…` : s);
+  const cut = (s: string): string => s.slice(0, 1104); // 80 + READ_PAST; `readInProgressStatus` makes the cut
   const shown = (el: Element): boolean => {
     const h = el as HTMLElement;
     if (h.closest("[hidden],[aria-hidden=true]") !== null) return false;
@@ -244,7 +266,33 @@ function inProgressInPage(words: string): string | null {
 
 /** The in-progress status the page shows, or null (a page that cannot be read shows none). */
 export async function readInProgressStatus(page: Page): Promise<string | null> {
-  return page.evaluate(inProgressInPage, IN_PROGRESS_WORDS).catch(() => null);
+  const status = await page.evaluate(inProgressInPage, IN_PROGRESS_WORDS).catch(() => null);
+  return status === null ? null : bounded(page, status, 80);
+}
+
+/** A busy indicator's `role=x "name"`, masked and then its name cut, unmarked: the description is the element's identity (#87). */
+function boundedBusyName(page: Page, description: string): string {
+  const text = maskFor(page, description);
+  const quoted = /^(role=[^"]*")(.*)"$/s.exec(text);
+  return quoted === null ? text : `${quoted[1]}${(quoted[2] ?? "").slice(0, 60)}"`;
+}
+
+/** `visibleBusyIndicator`'s description, masked then cut; null when none shows or the page can't be read. */
+export async function readBusyIndicator(page: Page): Promise<string | null> {
+  const busy = await page.evaluate(visibleBusyIndicator).catch(() => null);
+  return busy === null ? null : boundedBusyName(page, busy);
+}
+
+/** `visibleBusyIndicatorContainer`'s description, masked then cut. */
+export async function readBusyContainer(page: Page): Promise<string | null> {
+  const box = await page.evaluate(visibleBusyIndicatorContainer).catch(() => null);
+  return box === null ? null : boundedBusyName(page, box);
+}
+
+/** `visibleBusyIndicatorText`'s words, masked then cut. */
+export async function readBusyText(page: Page): Promise<string | null> {
+  const words = await page.evaluate(visibleBusyIndicatorText).catch(() => null);
+  return words === null ? null : maskFor(page, words).slice(0, 200);
 }
 
 /**
@@ -252,15 +300,15 @@ export async function readInProgressStatus(page: Page): Promise<string | null> {
  * `role=progressbar`, a spinner) or an in-progress status ("Preparing…") — described, or null.
  */
 export async function busyOverlay(page: Page): Promise<string | null> {
-  const busy = await page.evaluate(visibleBusyIndicator).catch(() => null);
-  return busy ?? (await readInProgressStatus(page));
+  return (await readBusyIndicator(page)) ?? (await readInProgressStatus(page));
 }
 
 /**
  * BROWSER CODE — does the page ACKNOWLEDGE work it is doing (#153)? A visible, enabled Cancel /
  * Stop / Abort control (the app offers to cancel the job), a disabled control whose label is a
  * progress phrase ("Analyzing...", the button the user pressed, now busy), or a determinate
- * progress bar. Returns what it saw. Serialized by `page.evaluate`: self-contained.
+ * progress bar. Returns what it saw, the labels read past their cut, which `readWorkingStatus` makes
+ * once it has masked. Serialized by `page.evaluate`: self-contained.
  */
 function workAcknowledgedInPage(words: string): { busyControl: string | null; cancel: string | null; bar: string | null } {
   const norm = (s: string | null | undefined): string => (s ?? "").replace(/\s+/g, " ").trim();
@@ -280,8 +328,8 @@ function workAcknowledgedInPage(words: string): { busyControl: string | null; ca
   let busyControl: string | null = null;
   for (const el of controls) {
     const n = label(el);
-    if (cancel === null && !disabled(el) && /^\W*(?:cancel|stop|abort)\b/i.test(n)) cancel = `an enabled "${n.slice(0, 40)}" control`;
-    if (busyControl === null && disabled(el) && n !== "" && progress.test(n)) busyControl = `a disabled "${n.slice(0, 40)}" control`;
+    if (cancel === null && !disabled(el) && /^\W*(?:cancel|stop|abort)\b/i.test(n)) cancel = n.slice(0, 1064);
+    if (busyControl === null && disabled(el) && n !== "" && progress.test(n)) busyControl = n.slice(0, 1064);
   }
   let bar: string | null = null;
   for (const el of Array.from(document.querySelectorAll("[role=progressbar][aria-valuenow],progress[value]"))) {
@@ -307,8 +355,12 @@ function workAcknowledgedInPage(words: string): { busyControl: string | null; ca
 export async function readWorkingStatus(page: Page): Promise<string | null> {
   const ack = await page.evaluate(workAcknowledgedInPage, IN_PROGRESS_WORDS).catch(() => null);
   if (ack === null) return null;
-  if (ack.busyControl !== null) return ack.cancel === null ? ack.busyControl : `${ack.busyControl} and ${ack.cancel}`;
-  const extra = ack.cancel ?? ack.bar;
+  const cancel = ack.cancel === null ? null : `an enabled "${maskFor(page, ack.cancel).slice(0, 40)}" control`;
+  if (ack.busyControl !== null) {
+    const busyControl = `a disabled "${maskFor(page, ack.busyControl).slice(0, 40)}" control`;
+    return cancel === null ? busyControl : `${busyControl} and ${cancel}`;
+  }
+  const extra = cancel ?? ack.bar;
   if (extra === null) return null;
   const status = await readInProgressStatus(page);
   return status === null ? null : `${status} with ${extra}`;
@@ -374,7 +426,7 @@ export async function readDocumentedWait(page: Page): Promise<{ readonly text: s
   const lines = await page.evaluate(durationLinesInPage).catch(() => [] as string[]);
   for (const line of lines) {
     const ms = documentedWaitMs(line);
-    if (ms !== null) return { text: line.length > 120 ? `${line.slice(0, 120)}…` : line, ms };
+    if (ms !== null) return { text: bounded(page, line, 120), ms };
   }
   return null;
 }

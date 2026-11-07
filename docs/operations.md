@@ -27,12 +27,16 @@ moment the run starts, while the browser is still launching (0 steps) included.
 
 SIGHUP (a closed terminal, or one forwarded by the `jevitate` alias) is handled the same way and
 exits 129. So is the death of the CLI's parent: if the process that started jevitate is killed
-without forwarding a signal, jevitate notices within about a second and exits 129 with
-`signal: "SIGHUP"`. Set `JEVITATE_PARENT_WATCHDOG=off` for a run you leave behind on purpose
+without forwarding a signal, jevitate notices within about a second and exits 129. A mission's result
+has `signal: "SIGHUP"` and `parentGone: true`; `journey verify` and `verify-fix` report
+`E_TERMINAL_PARENT_GONE`. Set `JEVITATE_PARENT_WATCHDOG=off` for a run you leave behind on purpose
 (`nohup jevitate explore … &`). Before any of these exits, jevitate closes every browser it
 launched. It sends each browser's process tree SIGTERM, waits up to 1 s, then sends SIGKILL, so a
 signal sent only to the CLI's pid (Node's `spawnSync(…, { timeout })`, `kill <pid>`) leaves no
 Chromium running.
+
+`journey verify --mutate` and `verify-fix` print one progress line to stderr per replay, so a caller's own
+time limit or a SIGKILL, which jevitate cannot catch, still leaves evidence of how far the run got.
 
 ## Usage accounting
 
@@ -207,6 +211,11 @@ than the admission timeout (`JEVITATE_ADMISSION_TIMEOUT_MS`, default 5 min) fail
 naming the processes that hold the slots. Within one process, the browser pool's own context cap
 (`JEVITATE_BROWSER_MAX_CONTEXTS`) still applies.
 
+A `journey verify --mutate` proof keeps its slot between replays unless another run is waiting for one; it
+then yields and competes again, also while a hook runs between replays. Waiters announce themselves with
+`waiter-*.json` beside the slots; a dead or stale one is ignored. A run from a build older than 0.29.0 announces
+nothing, so a proof does not yield to it.
+
 **Memory ceiling.** The memory of the browsers a run launched (browser, renderers and helper
 processes, summed as Linux PSS, or RSS on macOS) is sampled every 2 s. Past the ceiling, the
 session's page is closed with a reason, and the run ends `inconclusive` (exit 2) with
@@ -257,6 +266,12 @@ operator's call and is not an MCP argument.
 
 `jevitate init` creates the app repo's own `.jevitate/` at the git root. Commands find it by
 walking up from the working directory.
+
+With `HOME` moved, the account's own home (its passwd entry) counts as a project only if its
+`.jevitate/` holds an `environments.json`, or the home is the working directory's git root, or, outside
+any repo, it holds no per-user files. So a project at that home with no repo and no `environments.json`
+stops being found once `.jevitate/` holds `db.sqlite` (which `site policy set` creates), `profiles/` or
+`targets.json`, with no message. Add an `environments.json` or a `git init` there to keep it.
 
 | In the repo's `.jevitate/` (committed) | In `~/.jevitate/` (per user, never in a repo) |
 | --- | --- |
@@ -319,7 +334,7 @@ recorded the same way.
 
 - **Videos.** A run's videos go in its own folder, `<run>.videos/`, next to the run's result (or
   under `--record-video <dir>`): `explore-<stamp>.videos/`, `usability-<stamp>.videos/`,
-  `verify-fix-<stamp>.videos/` beside the mission result, `journey-<id>-<stamp>.videos/` in the logs
+  `verify-fix-<stamp>.videos/` beside its result file (in the logs dir for a run from the ledger), `journey-<id>-<stamp>.videos/` in the logs
   dir. The run closes its browser contexts before it writes its result, so every listed video is
   complete. The paths are in the result as `videoPaths` (an additive field of the unified result
   schema, `schemaVersion` 1) and in the human summary as `VIDEO` lines. A run killed by

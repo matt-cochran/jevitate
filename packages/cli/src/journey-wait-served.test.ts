@@ -21,10 +21,16 @@ useSkippingTime({ per: "all" });
  * role=status "Generating variations…" while it runs and, two minutes (page time) later, renders
  * three previews. A Journey's waited `expect` on that click polls until the previews are there, and
  * the run result records the actual wait. Under `verify --mutate`, the skipped (or blocked) job step
- * fails its waited claim at the hang threshold, never after the whole `maxMs`.
+ * fails its waited claim once it has waited past what the base replay took, never after the whole
+ * `maxMs`. Its progress signal cannot end that wait: the action that brings the signal may be what was
+ * mutated, and a wait cut short would read a job an earlier step started as sensitivity.
  */
 
 const JOB_MS = 120_000;
+/** The first test's loose bound on what a replay of the job reads under skipping time. */
+const BASE_READS_AT_MOST_MS = JOB_MS + 60_000;
+/** The base, the independence replay, the two mutations, one control and the closing replay. */
+const ALL_REPLAYS = 6;
 
 const html = `<!doctype html><html><head><title>Designs</title></head><body><main>
   <h1>Designs</h1>
@@ -150,7 +156,19 @@ describe("#409 waitFor — a per-step outcome wait for a long-running job (serve
     expect(r.exitCode).toBe(0);
   }, 240_000);
 
-  it("verify --mutate: skip and block-write of the job step make the waited claim fail at the hang threshold (sensitive), not after maxMs", async () => {
+  it("a progress signal that stalls ends the wait as a hang that names the signal, long before maxMs", async () => {
+    const stalled = { kind: "textIncludes" as const, target: { css: "[role=status]" }, text: "Step 99 of 99" };
+    const j = journey("generate-stalled", { maxMs: 240_000, progress: stalled, stallMs: 5_000 });
+    const r = await cli(await stored(j), ["journey", "run", "generate-stalled", "--json"]);
+    const data = (JSON.parse(r.out) as { data: { outcome: string; reason?: string; waits?: Wait[] } }).data;
+    expect(data.outcome).toBe("quarantined");
+    expect(data.reason).toMatch(/hang: the progress signal \(.*\) was absent and unchanged for [0-9.]+s \(stallMs 5000\)/);
+    expect(data.waits![0]).toMatchObject({ step: 2, ending: "hang", maxMs: 240_000 });
+    expect(data.waits![0]!.waitedMs).toBeGreaterThanOrEqual(5_000);
+    expect(data.waits![0]!.waitedMs).toBeLessThan(JOB_MS);
+  }, 240_000);
+
+  it("verify --mutate: skip and block-write of the job step make the waited claim fail past the base replay's time (sensitive), not after maxMs", async () => {
     const j = journey("generate-proof", { maxMs: 1_200_000, progress });
     const started = clock.monotonicMs();
     const r = await cli(await stored(j), ["journey", "verify", "generate-proof", "--mutate", "--json"]);
@@ -160,11 +178,19 @@ describe("#409 waitFor — a per-step outcome wait for a long-running job (serve
     }).data;
     expect(report.base.outcome).toBe("ok");
     expect(report.mutations.map((m) => `${m.id}=${m.outcome}`)).toEqual(["skip:2=failed", "block-write:2=failed"]);
-    for (const m of report.mutations) expect(m.reason).toMatch(/step 2 failed: .*postcondition failed: kind=count .* — hang: the progress signal \(kind=visible target=\{"css":"\[role=status\]"\}\)/);
+    for (const m of report.mutations) {
+      // This replay's bound and the Journey's own, both: the proof sets the first.
+      const wait = /step 2 failed: .*postcondition failed: kind=count .* — waited [0-9.]+s \(this replay's waitFor maxMs ([0-9]+); the Journey's is 1200000\); it never held/.exec(m.reason ?? "");
+      expect(wait, m.reason).not.toBeNull();
+      // Past the base's 2 minutes by a quarter and a second; the base can read long here, as the page clock trails Node's under skipping time.
+      expect(Number(wait![1])).toBeGreaterThan(JOB_MS);
+      expect(Number(wait![1])).toBeLessThan(BASE_READS_AT_MOST_MS * 1.25 + 1_000);
+    }
     expect(report.assertions.find((a) => a.site === "step:2")).toEqual(expect.objectContaining({ verdict: "sensitive", provedBy: "skip:2" }));
     expect(report.verdict).toBe("proven");
     expect(r.exitCode).toBe(0);
-    // The base replay waits out the 2-minute job; each mutation at most the 30 s hang threshold — never 20 min.
-    expect(elapsed).toBeLessThan(JOB_MS + 2 * 30_000 + 120_000);
-  }, 300_000);
+    // The base, independence, closing and any control replays wait out the 2-minute job, and each mutation a little past it: never the 20 min of `maxMs`, each.
+    expect(elapsed).toBeLessThan(ALL_REPLAYS * BASE_READS_AT_MOST_MS * 1.25);
+    expect(elapsed).toBeLessThan(1_200_000);
+  }, 480_000);
 });
