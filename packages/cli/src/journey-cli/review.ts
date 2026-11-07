@@ -10,6 +10,7 @@ import { ok, fail } from "../envelope.js";
 import { UnknownJourneyError } from "../journey-api.js";
 import { reviewRenderOptions } from "../review-render-options.js";
 import { renderReviewMarkdown, renderReviewText } from "../journey-review.js";
+import { journeyPreApproval } from "../journey-pre-approval.js";
 import { reviewJourneyById } from "../journey-review-api.js";
 import { listStaleJourneys, renderStaleJourneys } from "../journey-stale-api.js";
 import { ReviewSidecarError } from "../journey-review-store.js";
@@ -51,6 +52,7 @@ export function registerJourneyReview(journey: Command, program: Command, deps: 
     .option("--readiness", READINESS_FLAG_HELP)
     .option("--real", REAL_JEV_FLAG_HELP)
     .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
+    .option("--pre-approval", "read-only native candidate and pending owner actions; requires --json; never grants approval")
     .option("--strict", "#523: exit 1 (defects) when the sheet has any ⚠ attention item, and run the code-only readiness link checks (missing job / persona) even without --readiness; advisory ○ items and Jev never fail it. With --json the envelope also carries strict: { passed, warnings }")
     .option("--stale", "#467: instead of one sheet, list every promoted Journey whose approval is stale (needs re-approval), labelling the ones whose only change is minted step ids")
     .option("--json", "emit a JSON envelope (the schema-checked sheet)")
@@ -59,9 +61,23 @@ export function registerJourneyReview(journey: Command, program: Command, deps: 
       const layout = journeyLayout(program, deps, { dir: locationFlags.dir, project: locationFlags.project, journeysDir: locationFlags.journeysDir });
       if (layout === null) return;
       const reviewJourneysDir = layout.journeysDir;
-      const { json, markdown, full, out: outFile, readiness, real, jevProvider, stale, strict } = this.opts<{ dir?: string; json?: boolean; full?: boolean; markdown?: boolean; out?: string; readiness?: boolean; real?: boolean; jevProvider?: string; stale?: boolean; strict?: boolean }>();
+      const { json, markdown, full, out: outFile, readiness, real, jevProvider, stale, strict, preApproval } = this.opts<{ dir?: string; json?: boolean; full?: boolean; markdown?: boolean; out?: string; readiness?: boolean; real?: boolean; jevProvider?: string; stale?: boolean; strict?: boolean; preApproval?: boolean }>();
       if (json === true && markdown === true) {
         emitJson(program, fail("E_JOURNEY_REVIEW_ARGS", "--json and --markdown are exclusive: pick one rendering"));
+        return;
+      }
+      if (preApproval === true) {
+        if (id === undefined || json !== true || stale === true || markdown === true || full === true || outFile !== undefined || readiness === true || real === true || jevProvider !== undefined || strict === true) {
+          emitJson(program, fail("E_JOURNEY_REVIEW_ARGS", "--pre-approval requires <id> --json and accepts no other review mode, output, or model flags"));
+          return;
+        }
+        try {
+          const result = await journeyPreApproval(reviewJourneysDir, id, { ...targetsOpts(deps), catalogDir: resolveCatalogDir(deps.catalogDir, flaggedCatalogDir(layout)) });
+          emitJson(program, ok(result));
+          process.exitCode = result.readyForOwnerReview ? EXIT_CODES.ok : EXIT_CODES.defects;
+        } catch {
+          emitJson(program, fail("E_JOURNEY_PRE_APPROVAL", "Native pre-approval inputs are invalid, unavailable, or changed during review."));
+        }
         return;
       }
       if (stale === true) {

@@ -13,6 +13,7 @@ import { ALLOWED_TOOLS } from "@jevitate/mcp-facade";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { FsMissionTargetStore, MissionTargetRegistry } from "@jevitate/missions";
 import { buildProgram } from "./program.js";
+import { approveJourneyAnnotations } from "./journey-annotate-api.js";
 import { buildMcpTools, type McpApiDeps, type McpTool } from "./mcp-api.js";
 import { makeInProcessCliRunner } from "./mcp-cli-runner.js";
 import { CLI_TOOL_SPECS } from "./mcp-cli-tools.js";
@@ -183,8 +184,13 @@ describe("#255 the Journey lifecycle over MCP", () => {
       const draft = await tool("annotate_journey").handler({ id: "save-name", env: "staging", fakeAi: true }) // 0.30.0: a draft replays over MCP on a test-mode target (staging declares trust test);
       expect(draft.isError, JSON.stringify(body(draft))).toBeUndefined();
       expect(readFileSync(join(dirs.journeys, "save-name.json"), "utf8")).toBe(before);
-      const approved = await tool("annotate_journey").handler({ id: "save-name", approve: true });
-      expect(approved.isError, JSON.stringify(body(approved))).toBeUndefined();
+      // #821: an annotation approval needs a person at a terminal; MCP has no approval authority.
+      const annotateRefused = await tool("annotate_journey").handler({ id: "save-name", approve: true });
+      expect(annotateRefused.isError).toBe(true);
+      expect(body(annotateRefused)).toMatchObject({ code: "E_APPROVAL_NEEDS_HUMAN" });
+      expect(readFileSync(join(dirs.journeys, "save-name.json"), "utf8")).toBe(before);
+      // A person approves it at a terminal, typing the Journey id.
+      await approveJourneyAnnotations(dirs.journeys, "save-name", { approval: { stdinIsTTY: () => true, stdoutIsTTY: () => true, prompt: async () => "save-name", env: {} } });
       const annotated = await new FsJourneyStore(dirs.journeys).get("save-name");
       expect(flatJourneySteps(annotated!).every((s) => (s.recorded.objective ?? "") !== "")).toBe(true);
 
