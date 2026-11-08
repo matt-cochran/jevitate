@@ -17,7 +17,13 @@ import { loadTargetsFile, TargetConfigError } from "./target-config.js";
 import { confineMcpPath, McpPathError } from "./mcp-paths.js";
 import { homeDataRoot } from "./project-dir.js";
 import { runAsMcpInvocation } from "./approval-provenance.js";
-import { allowedOriginSet, offAllowlistWriteOrigin, prepareMcpRunGuard } from "./mcp-run-guard.js";
+import { allowedOriginSet, E_POLICY_LOOSEN_OVER_MCP, E_TARGET_PROMOTE_OVER_MCP, offAllowlistWriteOrigin, policyLoosenings, prepareMcpRunGuard } from "./mcp-run-guard.js";
+import { ProfileManager } from "@jevitate/daemon";
+import { FsMissionTargetStore } from "@jevitate/missions";
+import type { SitePolicy } from "@jevitate/domain";
+import { makeInProcessCliRunner } from "./mcp-cli-runner.js";
+import { buildProgram } from "./program.js";
+import { withSitePolicyRepository, type CliDeps } from "./cli-shared.js";
 import { canonicalOrigin, resolveTargetConfig } from "./target-config.js";
 
 /** #789: an MCP-driven replay refuses destructive clicks and off-allowlist writes before anything leaves the browser. */
@@ -43,7 +49,7 @@ function journey(id: string, steps: RecordedStep[], parameters: Journey["metadat
     metadata: { id, name: id, promoted: true, params: [], parameters, createdAtIso: "2026-11-05T00:00:00.000Z" },
     recording: { version: "1", site: appOrigin, pages: [{ url: "/", steps: [{ step: { kind: "navigate", url: "/", expect: { kind: "visible", target: { testId: "ready" } } } }, ...steps] }] },
   } as unknown as Journey;
-  j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z" };
+  j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z", provenance: { channel: "tty", agentSignals: [] } };
   return j;
 }
 
@@ -180,7 +186,7 @@ describe("#789 destructive controls over MCP", () => {
       const again = structuredClone(j);
       again.recording.pages[0]!.url = "/rows";
       (again.recording.pages[0]!.steps[0]!.step as { url: string }).url = "/rows";
-      again.metadata.approval = { contentHash: journeyReviewHash({ ...again, metadata: { ...again.metadata, approval: undefined } } as Journey), at: "2026-11-05T00:00:00.000Z" };
+      again.metadata.approval = { contentHash: journeyReviewHash({ ...again, metadata: { ...again.metadata, approval: undefined } } as Journey), at: "2026-11-05T00:00:00.000Z", provenance: { channel: "tty", agentSignals: [] } };
       return again;
     };
 
@@ -590,7 +596,7 @@ describe("every spelling of a key that activates", () => {
     const again = structuredClone(j);
     again.recording.pages[0]!.url = "/frame";
     (again.recording.pages[0]!.steps[0]!.step as { url: string }).url = "/frame";
-    again.metadata.approval = { contentHash: journeyReviewHash({ ...again, metadata: { ...again.metadata, approval: undefined } } as Journey), at: "2026-11-05T00:00:00.000Z" };
+    again.metadata.approval = { contentHash: journeyReviewHash({ ...again, metadata: { ...again.metadata, approval: undefined } } as Journey), at: "2026-11-05T00:00:00.000Z", provenance: { channel: "tty", agentSignals: [] } };
     seed(again);
     const r = await run("key-frame");
     expect(r.body.code, r.text).toBe("E_RUN_REFUSED_DESTRUCTIVE");
@@ -601,5 +607,75 @@ describe("every spelling of a key that activates", () => {
     seed(fillThenPress("key-plain", "enter-del-field", "a"));
     expect((await run("key-plain")).body).toMatchObject({ outcome: "ok" });
     expect(hits.delete).toBe(0);
+  });
+});
+
+describe("0.30.0 §5.4 the ratchet: over MCP a site policy only tightens, and a mission target is never promoted", () => {
+  const SITE = "https://shop.example.test";
+  let dir: string;
+  let db: string;
+  let targetsDir: string;
+  const policy = (minIntervalSeconds: number, extra: Partial<SitePolicy> = {}): SitePolicy => ({ version: `v${minIntervalSeconds}`, throttles: { write: { minIntervalSeconds, hourlyLimit: 10 } }, ...extra });
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "jev-ratchet-"));
+    db = join(dir, "site.sqlite");
+    targetsDir = join(dir, "targets");
+  });
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  function tool(name: string) {
+    const cliDeps = { profiles: new ProfileManager(join(dir, "profiles")), journeysDir: join(dir, "journeys"), dbPath: db, missionTargetsDir: targetsDir } as unknown as CliDeps;
+    return buildMcpTools({ journeysDir: join(dir, "journeys"), pathRoots: [dir], sitePolicyDbPath: db, missionTargetsDir: targetsDir, runCli: makeInProcessCliRunner(() => buildProgram(cliDeps)) }).find((t) => t.name === name)!;
+  }
+  async function setOverMcp(p: SitePolicy): Promise<{ isError: boolean; body: Record<string, unknown> }> {
+    const file = join(dir, `policy-${p.version}.json`);
+    writeFileSync(file, JSON.stringify(p));
+    const r = await tool("site_policy").handler({ action: "set", site: SITE, file });
+    return { isError: r.isError === true, body: JSON.parse(r.content[0]!.text) as Record<string, unknown> };
+  }
+  const stored = (): Promise<SitePolicy | null> => withSitePolicyRepository(db, (repo) => repo.get(SITE, "primary"));
+
+  it("site_policy set with a shorter minimum interval than the effective policy returns E_POLICY_LOOSEN_OVER_MCP; equal or longer is accepted", async () => {
+    await withSitePolicyRepository(db, (repo) => repo.set(SITE, "primary", policy(30)));
+    const looser = await setOverMcp(policy(10));
+    expect(looser.isError).toBe(true);
+    expect(looser.body).toMatchObject({ error: "refused", outcome: "refused", code: E_POLICY_LOOSEN_OVER_MCP, axes: ["throttles.write.minIntervalSeconds"], retryable: false, exitCode: 2 });
+    expect((await stored())?.version).toBe("v30");
+
+    const equal = await setOverMcp({ ...policy(30), version: "v30b" });
+    expect(equal.isError, JSON.stringify(equal.body)).toBe(false);
+    expect((await stored())?.version).toBe("v30b");
+    const stricter = await setOverMcp(policy(60));
+    expect(stricter.isError, JSON.stringify(stricter.body)).toBe(false);
+    expect((await stored())?.version).toBe("v60");
+  });
+
+  it("refuses a policy looser on any axis: budget, quiet hours, pacing, or one that drops an axis", async () => {
+    const quiet = { timezone: "UTC", windows: [{ start: "22:00", end: "06:00" }] };
+    const pace = { thinkBeforeActionMs: { mean: 800, sd: 100, min: 300 }, typing: { charsPerSecond: 8, perKeyJitter: 0.2 } };
+    const effective = policy(30, { quietHours: quiet, interaction: pace });
+    expect(policyLoosenings(effective, effective)).toEqual([]);
+    expect(policyLoosenings(null, policy(0))).toEqual([]);
+    expect(policyLoosenings(effective, { ...effective, throttles: { write: { minIntervalSeconds: 30, hourlyLimit: 11 } } })).toEqual(["throttles.write.hourlyLimit"]);
+    expect(policyLoosenings(effective, { ...effective, throttles: {} })).toEqual(["throttles.write.minIntervalSeconds", "throttles.write.hourlyLimit"]);
+    expect(policyLoosenings(effective, { ...effective, quietHours: { timezone: "UTC", windows: [{ start: "23:00", end: "06:00" }] } })).toEqual(["quietHours.windows"]);
+    expect(policyLoosenings(effective, { ...effective, quietHours: { timezone: "UTC", windows: [{ start: "21:00", end: "07:00" }] } })).toEqual([]);
+    expect(policyLoosenings(effective, { ...effective, quietHours: { timezone: "Europe/Paris", windows: quiet.windows } })).toEqual(["quietHours"]);
+    expect(policyLoosenings(effective, { ...effective, interaction: { ...pace, typing: { charsPerSecond: 20, perKeyJitter: 0.2 } } })).toEqual(["interaction.typing.charsPerSecond"]);
+    expect(policyLoosenings(effective, { ...effective, interaction: { ...pace, thinkBeforeActionMs: { mean: 800, sd: 100 } } })).toEqual(["interaction.thinkBeforeActionMs.min"]);
+    const { interaction: _dropped, ...noPace } = effective;
+    expect(policyLoosenings(effective, noPace)).toEqual(["interaction"]);
+  });
+
+  it("mission_targets promote returns E_TARGET_PROMOTE_OVER_MCP and promotes nothing", async () => {
+    const add = await tool("mission_targets").handler({ action: "add", id: "shop", name: "Shop", authorizedOrigin: SITE, baseUrl: SITE });
+    expect(add.isError, add.content[0]!.text).toBeUndefined();
+    const r = await tool("mission_targets").handler({ action: "promote", id: "shop" });
+    expect(r.isError).toBe(true);
+    expect(JSON.parse(r.content[0]!.text)).toMatchObject({ error: "refused", code: E_TARGET_PROMOTE_OVER_MCP, retryable: false, exitCode: 2 });
+    const target = await new FsMissionTargetStore(targetsDir).get("shop");
+    expect(target).not.toBeNull();
+    expect(target?.promoted).not.toBe(true);
   });
 });

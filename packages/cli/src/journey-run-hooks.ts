@@ -4,6 +4,7 @@ import type { RunEvidence } from "@jevitate/adjudicator";
 import type { JourneyRunResult } from "@jevitate/runtime";
 import type { Locator, Page } from "playwright";
 import type { EvidenceChannel, JourneyRunEvidenceWriter } from "./journey-run-evidence.js";
+import type { ResolvedJourneyEnvironment } from "./environments.js";
 
 /**
  * 0.30.0 (docs/design/0.30.0-evidence-and-trust.md §3–§5): the points in `runJourneyProgrammatically`
@@ -29,6 +30,17 @@ export interface RunHookContext {
   readonly mode: RunMode | undefined;
   /** The run's evidence writer, when the run writes evidence. */
   readonly evidence: JourneyRunEvidenceWriter | undefined;
+  /** Where the run goes: the origin, the named environment (if any) and the operator's targets file seam. Absent for a caller that does not say. */
+  readonly target?: RunHookTarget;
+}
+
+/** The target a run goes to, as `runJourneyProgrammatically` resolved it (§5: what the run mode is decided from). */
+export interface RunHookTarget {
+  /** The origin the replay runs on (the environment's `baseUrl`, else the recorded site). */
+  readonly origin: string;
+  readonly environment?: ResolvedJourneyEnvironment | undefined;
+  /** `targets.json` (default: `~/.jevitate/targets.json`). */
+  readonly targetsFile?: string | undefined;
 }
 
 /** The action a step is about to take: a click or a key press, which may send a write. */
@@ -105,6 +117,11 @@ export function registerRunHooks(owner: string, hooks: RunHooks): () => void {
   return () => {
     registered = registered.filter((r) => r !== entry);
   };
+}
+
+/** Whether `owner` has a registration (so a central registrar can register once). */
+export function hasRunHookOwner(owner: string): boolean {
+  return registered.some((r) => r.owner === owner);
 }
 
 /** Test-only: forget every registration. */

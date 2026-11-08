@@ -72,7 +72,7 @@ function journey(id: string, secretName = "secret1", extra: Array<{ name: string
       ],
     },
   } as unknown as Journey;
-  j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z" } as never;
+  j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z", provenance: { channel: "tty", agentSignals: [] } } as never;
   return j;
 }
 
@@ -84,7 +84,7 @@ function plainJourney(id: string): Journey {
     { step: { kind: "navigate", url: "/", expect: { kind: "visible", target: { testId: "who" } } } },
     { step: { kind: "fill", target: { testId: "who" }, value: { var: "who" }, expect: { kind: "visible", target: { testId: "who" } } } },
   ] as never;
-  j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z" } as never;
+  j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z", provenance: { channel: "tty", agentSignals: [] } } as never;
   return j;
 }
 
@@ -215,7 +215,7 @@ beforeAll(async () => {
   // Not declared secret, but its name reads as a credential: the repo treats it as secret everywhere.
   const named = journey("named", "password");
   named.metadata.parameters = [{ name: "password" }];
-  named.metadata.approval = { contentHash: journeyReviewHash(named), at: "2026-11-05T00:00:00.000Z" } as never;
+  named.metadata.approval = { contentHash: journeyReviewHash(named), at: "2026-11-05T00:00:00.000Z", provenance: { channel: "tty", agentSignals: [] } } as never;
   write(named);
   writeFileSync(join(root, "environments.json"), JSON.stringify({ local: { baseUrl: origin } }));
   writeFileSync(join(root, "targets.json"), JSON.stringify({ [origin]: { secretFields: [`label=Password=env:${VAR}`] } }));
@@ -287,8 +287,19 @@ describe("MCP: a secret parameter's value is refused on every served path", { ti
     expect(r.body["outcome"]).toBe("ok");
   });
 
-  it.each([[{ env: "local" }], [{}]])("a Journey that needs a secret doesn't run, even with none in the request and targets.json binding it (%j)", async (extra) => {
+  // 0.30.0 §5.3 (owner decision 6), changed by design: on an automation-mode target, a Journey a person
+  // approved takes the secret from the operator's targets.json binding; the value goes to the browser only.
+  it.each([[{ env: "local" }], [{}]])("a person-approved Journey that needs a secret runs with targets.json binding it, the value nowhere but the browser (%j)", async (extra) => {
     const r = await call("run_journey", { id: "login", ...extra });
+    expect(r.body["outcome"], r.text).toBe("ok");
+    expect(pageLoads).toBe(1);
+    expect(r.text).not.toContain(VALUE);
+    expect(filesHoldingValue()).toEqual([]);
+  });
+
+  it.each([[{ env: "local" }], [{}]])("a Journey an agent approved that needs a secret doesn't run, even with targets.json binding it (%j)", async (extra) => {
+    writeFileSync(join(journeysDir, "login-agent.json"), JSON.stringify(approved(journey("login-agent"), "mcp")));
+    const r = await call("run_journey", { id: "login-agent", ...extra });
     expect(r.body).toMatchObject({ code: SECRET_PARAM_OVER_MCP, params: ["secret1"] });
     expect(String(r.body["message"])).toContain("--secret-field");
     expect(pageLoads).toBe(0);
@@ -391,7 +402,8 @@ describe("which names count (H3, R5, M3)", { timeout: 120_000 }, () => {
   });
 
   it.each(["author", "authorName", "shipping_method", "sku", "orderId"])("%s runs without declaring anything", async (name) => {
-    fillNamed(name);
+    // 0.30.0: approved at a terminal, as an automation-mode run over MCP needs (§5.1).
+    fillNamed(name, undefined, "tty");
     const r = await call("run_journey", { id: `named-${name}`, params: { [name]: "3" } });
     expect(r.body["outcome"], r.text).toBe("ok");
   });
@@ -516,7 +528,7 @@ describe("a bound secret is typed only on its own origin (M1)", { timeout: 120_0
     redirectTo = `${otherOrigin}/login`;
     const j = journey("redirected");
     (j.recording.pages[0]!.steps[0] as { step: { url: string } }).step.url = "/go";
-    j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z" } as never;
+    j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z", provenance: { channel: "tty", agentSignals: [] } } as never;
     writeFileSync(join(journeysDir, "redirected.json"), JSON.stringify(j));
   });
   afterAll(() => {
@@ -682,7 +694,7 @@ describe("one label, two secret parameters (M2)", { timeout: 120_000 }, () => {
     j.metadata.parameters = [{ name: "secret1", secret: true }, { name: "secret2", secret: true }];
     const steps = j.recording.pages[0]!.steps as unknown as Array<{ step: Record<string, unknown> }>;
     steps.splice(2, 0, { step: { kind: "fill", target: { label: "Password" }, value: { var: "secret2" }, expect: { kind: "visible", target: { testId: "pw" } } } });
-    j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z" } as never;
+    j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z", provenance: { channel: "tty", agentSignals: [] } } as never;
     writeFileSync(join(journeysDir, "two-on-one.json"), JSON.stringify(j));
   });
 

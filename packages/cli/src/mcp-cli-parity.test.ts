@@ -47,6 +47,8 @@ const EXCLUDED: Readonly<Record<string, string>> = {
   "hint journeeze enable": "#677: enabling local product hints is a person's interactive terminal preference; the command refuses MCP and CI before writing preferences",
   "acceptance audit": "a local, read-only release-evidence audit over operator-selected files; it produces CI artifacts but does not drive an authorized target or offer an agent capability",
   mcp: "the MCP server itself (it owns stdin/stdout); an MCP client is already connected to it",
+  "inbox resume":
+    "#793: continues a held run only on a person's terminal approval (`inbox approve` at a TTY): the approval is human-only like approve_action, and the resume acts on it; an agent sees the held outcome, never drives the approved action",
   ui: "the local human dashboard (loopback HTTP, opens a browser): where a person approves/cancels inbox items — human-only by design",
   where: "#585: reports where this shell's project, catalog and Journeys resolve; over MCP the stores are the server's (--dir/--project/--journeys-dir are never MCP arguments)",
   init: "local machine setup: writes the harness MCP config, installs skills and collects API keys interactively — the operator's, run once",

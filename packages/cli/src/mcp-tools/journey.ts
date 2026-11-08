@@ -1,6 +1,6 @@
 import { SiteGateRefusedError } from "@jevitate/runtime";
 import { findCapabilities, JourneyRunRefusedError } from "@jevitate/mcp-facade";
-import { FsJourneyStore, JourneyRegistry } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, type Journey } from "@jevitate/journey";
 import { type GenerationPort } from "@jevitate/ai-core";
 import { existsSync } from "node:fs";
 import { ParamValidationError } from "@jevitate/journey";
@@ -14,7 +14,11 @@ import { ExtensionMismatchError, type BrowserRunOptions } from "../browser-run-o
 import { browserRunFromFlags, emulationFromFlags } from "../cli-shared.js";
 import { environmentFromFlags, isEnvironmentError } from "../environments.js";
 import { buildMissionFixtures, checkSetupRefs } from "../fixture-cli.js";
-import { secretParamRefusalBody, secretParamsCarried } from "../secret-params.js";
+import { BoundSecretOutsideFieldError, SecretFieldAmbiguousError, secretParamRefusalBody, secretParamsCarried, withSecretParams } from "../secret-params.js";
+import { approvalAuthorisesAutomation, resolveRunTarget, RunModeRefusedError, runModeRefusalBody } from "../journey-run-mode-gate.js";
+import { ParamTypeError, paramTypeRefusalBody } from "../journey-param-types.js";
+import { journeyApprovalState } from "../journey-stale-api.js";
+import { heldOutcomeOf } from "../journey-hold.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError, type MissionFixtures } from "../mission-fixtures.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "../run-screenshots.js";
 import { makeEvidenceSelfHealer } from "../self-heal-adapter.js";
@@ -181,6 +185,45 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
     };
   };
 
+  /**
+   * 0.30.0 §5.3, owner decision 6: the secret parameters a run needs and the request leaves out, from
+   * the operator's `targets.json` `secretFields` for the run's origin, only when the run is in automation
+   * mode and its Journey carries a current approval a person made (decision 5). The values come from the
+   * server's environment and go to the browser, bound to that origin; never to the result or the evidence.
+   * Anything else answers as 0.29.0 did: `E_SECRET_PARAM_OVER_MCP` by name.
+   */
+  const secretsFromTargets = async (
+    id: string,
+    needed: readonly string[],
+    resolved: { params: Record<string, string>; options: McpJourneyRunOptions },
+  ): Promise<{ readonly refusal: Record<string, unknown> } | { readonly params: Record<string, string>; readonly options: McpJourneyRunOptions }> => {
+    const refuse = { refusal: secretParamRefusalBody(needed) };
+    let stored: Journey | null;
+    try {
+      stored = await new FsJourneyStore(deps.journeysDir).get(id);
+    } catch {
+      return refuse;
+    }
+    if (stored === null || !approvalAuthorisesAutomation(stored)) return refuse;
+    // Rule 5 holds only for an approval that still binds this content.
+    const state = await journeyApprovalState(stored, { journeysDir: deps.journeysDir, catalogDir: resolveCatalogDir(undefined) });
+    if (!state.promoted || state.approval !== "current") return refuse;
+    const environment = resolved.options.environment;
+    const target = resolveRunTarget({ origin: environment?.baseUrl ?? stored.recording.site, environment, environmentsFile: deps.environmentsFile, targetsFile: deps.targetsConfigPath });
+    const fields = target.targetConfig?.secretFields ?? [];
+    if (target.mode !== "automation" || fields.length === 0) return refuse;
+    let bound: Awaited<ReturnType<typeof withSecretParams>>;
+    try {
+      bound = await withSecretParams({ dir: deps.journeysDir, id, params: resolved.params, flags: [], targetFields: fields, targetOrigin: target.origin, env: deps.secretEnv ?? process.env });
+    } catch (err) {
+      if (err instanceof SecretFieldAmbiguousError || err instanceof BoundSecretOutsideFieldError) return { refusal: { error: "invalid_args", code: err.code, message: err.message } };
+      throw err;
+    }
+    const missing = needed.filter((n) => !(n in bound.params));
+    if (missing.length > 0 || bound.bound === undefined) return { refusal: secretParamRefusalBody(missing.length > 0 ? missing : needed) };
+    return { params: bound.params, options: { ...resolved.options, boundSecretParams: bound.bound } };
+  };
+
   return {
     find_capabilities: {
       description: "Find promoted Journeys (capabilities) whose metadata matches a query.",
@@ -190,7 +233,8 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
     run_journey: {
       description:
         "Run a PUBLISHED Journey by id with string params (fail-closed policy) — `jevitate journey run`. Never accepts inline steps. " +
-        "A Journey that needs a secret parameter is refused ({error: invalid_args, code: E_SECRET_PARAM_OVER_MCP, params}): never send a value. A person runs it on the CLI (`journey run --secret-field`), or the Journey uses a stored session ('storageState'). " +
+        "A secret parameter's value in 'params' is always refused ({error: invalid_args, code: E_SECRET_PARAM_OVER_MCP, params}): never send a value. A Journey that needs one runs only when the target's operator file (~/.jevitate/targets.json secretFields) supplies it, on an automation-mode target, for a Journey a person approved (tty or pr-review); the value goes to the browser, never to the result. Otherwise the same refusal: a person runs it on the CLI (`journey run --secret-field`), or the Journey uses a stored session ('storageState'). " +
+        "0.30.0 run modes: the mode comes from the target's declared trust (environments.json / targets.json), never an argument; an undeclared origin is automation mode, which runs only a Journey a person approved ({error: refused, code: E_APPROVAL_CHANNEL_FOR_MODE}: an approval over MCP authorises test-mode runs only), and a test-mode target never waits for a person (a handback step: E_HUMAN_STEP_IN_TEST_MODE). " +
         "#788: an unpromoted Journey, or one changed since its approval, is refused before any browser ({error: refused, code: E_JOURNEY_NOT_PROMOTED | E_JOURNEY_APPROVAL_STALE | E_JOURNEY_APPROVAL_UNKNOWN, fix}): promote it with promote_journey, or try a draft on the CLI (`jevitate journey run`). " +
         "#789: a click on a session-ending, destructive or paid control, a write to an origin outside the run's allowlist and a production environment are refused before anything is sent ({error: refused, outcome: refused, code: E_RUN_REFUSED_DESTRUCTIVE | E_RUN_REFUSED_OFF_ALLOWLIST_WRITE | E_RUN_REFUSED_PRODUCTION, setting, retryable: false}): do not retry; only a person lifts it, in the target's mcpRun section of ~/.jevitate/targets.json. " +
         "Optional 'storageState': a PATH (on the machine running this MCP server; inside the project or ~/.jevitate, never a repo's .jevitate/) to a Playwright storageState " +
@@ -244,8 +288,10 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
         const tagged = tagsArg(args);
         if ("error" in tagged) return errorResult(tagged.error);
         // Before the value reaches anything: a secret parameter's value never travels through a request.
-        const carried = await secretParamsCarried(deps.journeysDir, [args.id], args.params, { needed: true });
+        const carried = await secretParamsCarried(deps.journeysDir, [args.id], args.params);
         if (carried.length > 0) return errorResult(secretParamRefusalBody(carried));
+        // A secret the request leaves out: refused below unless the operator's targets.json supplies it (§5.3).
+        const needed = await secretParamsCarried(deps.journeysDir, [args.id], args.params, { needed: true });
         // Invariant #5: only id + params (+ a storageState PATH and the run options below) are
         // threaded through — any inline `steps`/`recording` in the arguments is deliberately ignored.
         let resolved: { params: Record<string, string>; storageState?: string; options: McpJourneyRunOptions; usage?: UsageTracker };
@@ -259,6 +305,11 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
           }
           if (err instanceof SetupRequired) return errorResult({ error: "setup_required", message: err.message });
           throw err;
+        }
+        if (needed.length > 0) {
+          const supplied = await secretsFromTargets(args.id, needed, resolved);
+          if ("refusal" in supplied) return errorResult(supplied.refusal);
+          resolved = { ...resolved, params: supplied.params, options: supplied.options };
         }
         // #205: the same pre-run checks as `jevitate journey run` (orphan sweep, starved-host refusal).
         const starved = await resourcePreflight({});
@@ -279,6 +330,13 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
             return failed({ error: "throttled", reason: err.reason, retryAfter: err.retryAfter, message: err.message });
           }
           if (err instanceof RunGuardRefusedError) return failed(runGuardRefusalBody(err));
+          // 0.30.0 §5.4: the run is held for a person (`jevitate inbox approve <holdId>` at a terminal); it proves nothing yet.
+          const held = heldOutcomeOf(err);
+          if (held !== undefined) return failed({ ...held, retryable: false, exitCode: 2 });
+          // 0.30.0 §5: the run mode refused it (an approval no person made on an automation target; a human step in test mode).
+          if (err instanceof RunModeRefusedError) return failed(runModeRefusalBody(err));
+          // #796: a parameter not of its declared type (names and expected types, never a value).
+          if (err instanceof ParamTypeError) return failed(paramTypeRefusalBody(err));
           if (err instanceof JourneyRunRefusedError) return failed({ error: "refused", outcome: "refused", code: err.code, id: args.id, message: err.message, fix: err.fix, tryDraft: err.tryDraft, retryable: false });
           if (err instanceof UnknownJourneyError) return failed({ error: "not_found", id: args.id, message: err.message });
           if (err instanceof JourneyRequiresAuthError) return failed({ error: "invalid_args", code: "E_JOURNEY_REQUIRES_AUTH", message: err.message });

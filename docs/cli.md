@@ -888,7 +888,7 @@ the HITL inbox from the CLI — the same tools `jevitate mcp` serves (approve/ca
 jevitate inbox approve [options] <id>
 ```
 
-always refused (MCP approve_action): only a human can approve an inbox item, in `jevitate ui`
+a person at a terminal approves a held run (#793): shows what is held and asks for its id typed back; anything else is refused as MCP approve_action refuses — other inbox items are answered in `jevitate ui`
 
 **Arguments**
 
@@ -900,8 +900,10 @@ always refused (MCP approve_action): only a human can approve an inbox item, in 
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--holds-dir <path>` | the holds directory (default: .jevitate/logs/holds) |  |  |  |  |
 | `--inbox-dir <path>` | inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--reject` | answer the held run with a rejection instead (it then never resumes) |  |  |  |  |
 
 ### inbox cancel
 
@@ -1022,6 +1024,34 @@ ask a human to provide something back to the agent — a 'handback' item; only q
 | `--run <id>` | the run this item belongs to (required) |  |  |  |  |
 | `--step <step>` | the step it stopped at (required) |  |  |  |  |
 | `--target-url <url>` | the page it concerns |  |  |  |  |
+
+### inbox resume
+
+```
+jevitate inbox resume [options] <id>
+```
+
+continue a held run a person approved (#793), from the step it was held at — the steps before it are not run again; refused unless the Journey, the parameters, the target and the pending action all match the hold (E_HOLD_BINDING)
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
+| `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
+| `--headed` | show the browser |  |  |  |  |
+| `--holds-dir <path>` | the holds directory (default: .jevitate/logs/holds) |  |  |  |  |
+| `--inbox-dir <path>` | inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use) |  |  |  |  |
+| `--journeys-dir <path>` | where the Journey is (default: the project's journeys) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--param <name=value>` | a parameter the run was held with (repeatable): the same set, or the hold refuses | `{}` |  |  |  |
+| `--storage-state <file>` | seed the resumed session from this Playwright storageState file |  |  |  |  |
 
 ### inbox show
 

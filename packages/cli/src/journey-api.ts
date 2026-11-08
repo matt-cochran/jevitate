@@ -704,7 +704,8 @@ async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutatio
   evidence?.ran(journey);
   // 0.30.0 run hooks (journey-run-hooks.ts): what every hook is told; the mode once `resolveMode` decided it.
   let mode: RunMode | undefined;
-  const hookCtx = (): RunHookContext => ({ journey: stored, params: opts.params, channel: opts.runRecorder?.channel, mode, evidence: evidence?.writer });
+  const target = { origin: opts.environment?.baseUrl ?? stored.recording.site, environment: opts.environment, targetsFile: opts.runGuardTargetsFile };
+  const hookCtx = (): RunHookContext => ({ journey: stored, params: opts.params, channel: opts.runRecorder?.channel, mode, evidence: evidence?.writer, target });
   const allowedOrigins = effectiveAllowedOrigins(journey, opts.environment, opts.allow);
   // #543: an http end-state check reads only an origin the replay allows — refused before any
   // fixture or browser (the probe re-checks every request after substitution).
@@ -731,7 +732,8 @@ async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutatio
   const replayed = mutation.mutateJourney === undefined || journey !== full ? journey : mutation.mutateJourney(journey);
 
   // #789: under an MCP invocation, this run's guard: a production target is refused here, before anything opens.
-  const runGuard = prepareMcpRunGuard({ site: journey.recording.site, allowedOrigins, environment: opts.environment, targetsFile: opts.runGuardTargetsFile });
+  // 0.30.0 §5.4: the mode decides whether the Journey's own `allowedOrigins` join the write allowlist (test mode only).
+  const runGuard = prepareMcpRunGuard({ site: journey.recording.site, allowedOrigins, environment: opts.environment, targetsFile: opts.runGuardTargetsFile, ...(mode === undefined ? {} : { mode }), authoredOrigins: journey.metadata.allowedOrigins ?? [] });
 
   const policy = opts.policy ?? safeRunPolicy();
   // #583 §3: a prepare-only boundary never self-heals — refused before any fixture or browser opens.

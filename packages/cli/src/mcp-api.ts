@@ -11,6 +11,9 @@ import type { ChangeScope, SelfHealer } from "@jevitate/runtime";
 import type { EmulationSpec } from "@jevitate/playwright";
 import { safeRunPolicy as defaultRunPolicy, type RunPolicy } from "@jevitate/domain";
 import { runJourneyProgrammatically } from "./journey-api.js";
+import { registerRunSurfaceHooks } from "./run-surface-hooks.js";
+import type { BrowserPort } from "@jevitate/playwright";
+import type { BoundSecretParams } from "./secret-params.js";
 import { assertMcpRunnable } from "./journey-stale-api.js";
 import { runAsMcpInvocation } from "./approval-provenance.js";
 import { withJourneyRunRecord } from "./journey-run-record.js";
@@ -72,6 +75,12 @@ export interface McpJourneyRunOptions {
   readonly actionDeltas?: boolean;
   /** #486: the in-flight response bound of a step's responseStatus check (`--step-response-timeout`). */
   readonly stepResponseTimeoutMs?: number;
+  /**
+   * 0.30.0 §5.3 (owner decision 6): the secret parameters the operator's `targets.json` `secretFields`
+   * supplied for an automation-mode run of a person-approved Journey, and the origins each may be typed on.
+   * Set only by `run_journey`'s handler, never from an argument; the value goes to the browser only.
+   */
+  readonly boundSecretParams?: BoundSecretParams;
 }
 
 /**
@@ -114,6 +123,13 @@ export interface McpApiDeps {
   targetsConfigPath?: string;
   /** #790: test seam for the logs root run records go under (default: the project's `.jevitate/logs`). */
   runRecordLogsRoot?: string;
+  /** Test seam: the browser port `run_journey`'s default runner opens (default: Playwright). */
+  browserPortFactory?: () => BrowserPort;
+  /**
+   * Where the operator's `targets.json` `secretFields` (`env:VAR`) read their values (default
+   * `process.env`): the server's own environment, never a tool argument. Test seam.
+   */
+  secretEnv?: Readonly<Record<string, string | undefined>>;
   /**
    * #255 (`run_journey {selfHeal: hybrid|full}`): builds the self-heal gateways exactly as the CLI's
    * `--real`/`--fake-ai` do (`buildExploreGateways`). Absent: a heal mode is refused (setup_required).
@@ -228,6 +244,8 @@ function assertAllowlisted(name: string): void {
  * No handler ever fabricates a success.
  */
 export function buildMcpTools(deps: McpApiDeps): McpTool[] {
+  // 0.30.0: the run-mode and typed-parameter run hooks (once per process; cli-shared.ts).
+  registerRunSurfaceHooks({ inboxDir: deps.inboxDir });
   const runJourney =
     deps.runJourney ??
     ((id: string, params: Record<string, string>, storageState?: string, o?: McpJourneyRunOptions) =>
@@ -253,6 +271,8 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           ...(o?.fixtures === undefined ? {} : { fixtures: o.fixtures }),
           ...(o?.actionDeltas === true ? { actionDeltas: true } : {}),
           ...(o?.stepResponseTimeoutMs === undefined ? {} : { stepResponseTimeoutMs: o.stepResponseTimeoutMs }),
+          ...(o?.boundSecretParams === undefined ? {} : { boundSecretParams: o.boundSecretParams }),
+          ...(deps.browserPortFactory === undefined ? {} : { browserPortFactory: deps.browserPortFactory }),
         }),
       ))));
   const pathRoots = deps.pathRoots ?? defaultMcpPathRoots();

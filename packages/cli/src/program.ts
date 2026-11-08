@@ -21,7 +21,9 @@ import {
   browserLaunchFromFlags,
   buildExploreGateways,
   fakeDoneJudge,
+  resolveInboxDir,
 } from "./cli-shared.js";
+import { registerRunSurfaceHooks } from "./run-surface-hooks.js";
 import { registerInitCommands } from "./init-cli.js";
 import { registerProfileCommands } from "./profile-cli.js";
 import { registerSiteCommands } from "./site-cli.js";
@@ -67,6 +69,8 @@ export function buildProgram(deps: CliDeps): Command {
   trackActionCommand(program);
   // #434/#435: the readiness and catalog-analysis pre-approval analyzers (once per process).
   registerBuiltinAnalyzers();
+  // 0.30.0: the run-mode and typed-parameter run hooks (once per process; cli-shared.ts).
+  registerRunSurfaceHooks({ inboxDir: resolveInboxDir(deps) });
 
   registerInitCommands(program, deps);
   registerProfileCommands(program, deps);

@@ -18,6 +18,9 @@ import { ok, fail } from "../envelope.js";
 import { evidenceErrorOf, runJourneyProgrammatically, UnknownJourneyError, JourneyRequiresAuthError } from "../journey-api.js";
 import { resolveCatalogDir } from "../catalog-api.js";
 import { journeyDraftWarning } from "../journey-stale-api.js";
+import { draftOnAutomationTargetWarning, RunModeRefusedError } from "../journey-run-mode-gate.js";
+import { ParamTypeError, paramTypeRefusalBody } from "../journey-param-types.js";
+import { heldOutcomeOf } from "../journey-hold.js";
 import { runRecordErrorOf, withJourneyRunRecord } from "../journey-run-record.js";
 import { ExtensionMismatchError } from "../browser-run-options.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "../run-screenshots.js";
@@ -268,6 +271,9 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         // #788: a draft runs here, as authoring needs, and says once what MCP would answer.
         const unapproved = await journeyDraftWarning(runJourneysDir, id, resolveCatalogDir(deps.catalogDir));
         if (unapproved !== undefined) program.configureOutput().writeErr?.(unapproved);
+        // 0.30.0 §5.7: a draft on an automation-mode target (anything not declared trust test or harness) says so once.
+        const draftOnAutomation = await draftOnAutomationTargetWarning({ journeysDir: runJourneysDir, id, environment, targetsFile: environmentSeams(deps).targetsFile });
+        if (draftOnAutomation !== undefined) program.configureOutput().writeErr?.(draftOnAutomation);
         let fixtureDrift: FixtureDrift | undefined;
         // #790: every run leaves one value-free record, whatever it comes to.
         const result = await doneCheckRun.run(() => withJourneyRunRecord({ channel: "cli", id, params: param, logsRoot: deps.logs?.logsRoot }, (runRecorder) => withSiteGate(resolveDbPath(deps), (siteGate) => runJourneyProgrammatically({
@@ -288,6 +294,8 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
           ...(actionDeltas === true ? { actionDeltas: true } : {}),
           ...(stepResponseTimeout === undefined ? {} : { stepResponseTimeoutMs: stepResponseTimeout }),
           ...(environment === undefined ? {} : { environment }),
+          // 0.30.0 §5: the operator's targets file the run's trust is read from (the #789 guard's seam).
+          ...(environmentSeams(deps).targetsFile === undefined ? {} : { runGuardTargetsFile: environmentSeams(deps).targetsFile }),
           ...(allow.length === 0 ? {} : { allow }),
           // #140: fixture HTTP steps may only reach the replay's allowlist (authenticated from --storage-state):
           // the journey's own site (#247: under an environment, its allowed origins), plus (#542/#543) its
@@ -348,7 +356,12 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         if (recordProblem !== undefined) program.configureOutput().writeErr?.(`warning: ${recordProblem}\n`);
         const evidenceProblem = evidenceErrorOf(err);
         if (evidenceProblem !== undefined) program.configureOutput().writeErr?.(`warning: ${evidenceProblem}\n`);
-        if (err instanceof SiteGateRefusedError || isEnvironmentError(err) || err instanceof HttpCheckOffAllowlistError) {
+        const held = heldOutcomeOf(err);
+        if (held !== undefined) {
+          // 0.30.0 §5.4: held for a person (`jevitate inbox approve <holdId>`); it proves nothing yet (exit 2).
+          emitJson(program, ok(withEngine(held)));
+          process.exitCode = 2;
+        } else if (err instanceof SiteGateRefusedError || isEnvironmentError(err) || err instanceof HttpCheckOffAllowlistError) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
@@ -369,6 +382,13 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof ParamValidationError) {
           emitJson(program, fail("E_INVALID_PARAMS", String(err.message)));
+        } else if (err instanceof ParamTypeError) {
+          // #796: names and expected types only, never a value; exit 64.
+          const body = paramTypeRefusalBody(err);
+          emitJson(program, fail(body.code, body.message));
+        } else if (err instanceof RunModeRefusedError) {
+          // 0.30.0 §5: a test-mode target never waits for a person (exit 2, refused).
+          emitJson(program, fail(err.refusalCode, err.message));
         } else {
           emitJson(program, fail("E_JOURNEY_RUN", String(err)));
         }

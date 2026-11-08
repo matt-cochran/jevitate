@@ -109,6 +109,7 @@ export class JourneyRunEvidenceWriter {
   #watched = false;
   #unknown: UnknownReason | undefined;
   #mode: RunEvidence["run"]["mode"] = "automation";
+  #trust: RunEvidence["run"]["target"]["trust"] | undefined;
   #doneCheck: DoneCheckEvidence | undefined;
   #detach: (() => void) | undefined;
 
@@ -163,6 +164,11 @@ export class JourneyRunEvidenceWriter {
   /** The run's mode, as a `resolveMode` run hook decided it (journey-run-hooks.ts). Default `automation`. */
   noteMode(mode: RunEvidence["run"]["mode"]): void {
     this.#mode = mode;
+  }
+
+  /** The target's trust, as the run-mode gate resolved it (journey-run-mode-gate.ts). Wins over the request's. */
+  noteTrust(trust: RunEvidence["run"]["target"]["trust"]): void {
+    this.#trust = trust;
   }
 
   /** #800: the job done check's fresh-session readings (journey-done-check-hook.ts). Placeholders only, never a resolved value. */
@@ -278,7 +284,7 @@ export class JourneyRunEvidenceWriter {
         // §5: decided by target configuration once d-run-modes lands (a `resolveMode` run hook); `automation` until then.
         mode: this.#mode,
         channel: this.#req.channel,
-        target: { origin, ...(this.#req.environment === undefined ? {} : { environment: this.#req.environment }), trust: this.#req.trust ?? "unknown" },
+        target: { origin, ...(this.#req.environment === undefined ? {} : { environment: this.#req.environment }), trust: this.#trust ?? this.#req.trust ?? "unknown" },
         paramsDigest: evidenceParamsDigest(key, this.#req.params, this.#req.secretParamNames),
         secretParamNames: [...new Set(this.#req.secretParamNames)].sort(),
       },
