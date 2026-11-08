@@ -1,7 +1,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { RunEvidenceSchema, type DoneCheckEvidence, type Known, type RunEvidence, type StepEvidence, type UnknownReason, type WriteShape } from "@jevitate/adjudicator";
+import { RunEvidenceSchema, type AdvisoryJudgment, type DoneCheckEvidence, type Known, type RunEvidence, type StepEvidence, type UnknownReason, type WriteShape } from "@jevitate/adjudicator";
 import { clock } from "@jevitate/domain";
 import type { Journey } from "@jevitate/journey";
 import type { BrowserSession } from "@jevitate/playwright";
@@ -111,6 +111,7 @@ export class JourneyRunEvidenceWriter {
   #mode: RunEvidence["run"]["mode"] = "automation";
   #trust: RunEvidence["run"]["target"]["trust"] | undefined;
   #doneCheck: DoneCheckEvidence | undefined;
+  readonly #judgments: AdvisoryJudgment[] = [];
   #detach: (() => void) | undefined;
 
   constructor(req: JourneyRunEvidenceRequest) {
@@ -174,6 +175,11 @@ export class JourneyRunEvidenceWriter {
   /** #800: the job done check's fresh-session readings (journey-done-check-hook.ts). Placeholders only, never a resolved value. */
   noteDoneCheck(doneCheck: DoneCheckEvidence): void {
     this.#doneCheck = doneCheck;
+  }
+
+  /** #794: advisory judgments (the write sentinel's); they never enter the adjudication. */
+  noteJudgments(judgments: readonly AdvisoryJudgment[]): void {
+    this.#judgments.push(...judgments);
   }
 
   /**
@@ -291,7 +297,7 @@ export class JourneyRunEvidenceWriter {
       steps,
       writes: { sent: this.#known(sent.length), answered: this.#known(answered), aborted: this.#known(aborted), openAtClose: this.#known(open), shapes },
       ...(this.#doneCheck === undefined ? {} : { doneCheck: this.#doneCheck }),
-      judgments: [],
+      judgments: this.#judgments,
       notes,
     } satisfies RunEvidence);
   }

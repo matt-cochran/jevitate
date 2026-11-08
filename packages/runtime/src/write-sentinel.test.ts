@@ -4,11 +4,10 @@ import { type SentinelGateway, WriteSentinel } from "./write-sentinel.js";
 const MARKER_S = "MARKER_S_secret_value";
 const redact = (t: string) => t.split(MARKER_S).join("«redacted»");
 const input = {
-  control: "Delete account",
+  control: { role: "button", name: `Delete account ${MARKER_S}` },
   method: "POST",
   pathShape: "/account/:id/delete",
-  pageSummary: `Settings page for user, token ${MARKER_S}`,
-  jobStory: "update my profile name",
+  job: { id: "update-profile", title: "update my profile name" },
 };
 
 describe("WriteSentinel", () => {
@@ -30,6 +29,20 @@ describe("WriteSentinel", () => {
       ["write.destructive", 0.9, true],
       ["write.outside-intent", 0.7, true],
     ]);
+  });
+
+  it("has no field that carries page text: the payload is only the structured input", async () => {
+    let payload = "";
+    const gateway: SentinelGateway = {
+      async systemOne(args) {
+        payload = JSON.stringify(args);
+        return {};
+      },
+    };
+    await new WriteSentinel(gateway, redact).judge({ ...input, pageSummary: "PAGE_TEXT", jobStory: "PAGE_TEXT" } as never);
+    expect(payload).not.toContain("PAGE_TEXT");
+    expect(payload).toContain("update-profile");
+    expect(payload).toContain('POST button');
   });
 
   it("returns [] with jev-unavailable when the gateway rejects, and resolves", async () => {
