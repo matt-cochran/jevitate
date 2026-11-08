@@ -2196,7 +2196,7 @@
   Reproduces: type-alias
   ReproductionReport: interface
 
-# @jevitate/runtime (63 exports)
+# @jevitate/runtime (70 exports)
   anchorValues: function
   assertProofUntouched: function
   assertRecordedProofUntouched: function
@@ -2250,6 +2250,12 @@
   retargetRecording: function
   sanitizeStep: function
   SelfHealer: interface
+  SENTINEL_NOTE_UNAVAILABLE: variable
+  SENTINEL_TASKS: variable
+  SentinelGateway: interface
+  SentinelInput: interface
+  SentinelJudgment: interface
+  SentinelResult: interface
   SiteGateDeps: interface
   SiteGateRefusal: type-alias
   SiteGateRefusedError: class
@@ -2260,6 +2266,7 @@
   summarizeChangeScope: function
   ThrottleClass: type-alias
   throttleClassOf: function
+  WriteSentinel: class
 
 # @jevitate/screenplay (21 exports)
   Ability: interface

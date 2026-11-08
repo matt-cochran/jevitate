@@ -1377,13 +1377,16 @@
   reproduceFailure: function
   reproduceFailureAt: function
 
-# @jevitate/runtime (27 exports)
+# @jevitate/runtime (30 exports)
   DEFAULT_HEAL_BUDGET: object
   EMPTY_CHANGE_SCOPE: object
   HealBudgetMeter: class
   JourneyRunner: class
   PolicyEnforcementError: class
+  SENTINEL_NOTE_UNAVAILABLE: const (string)
+  SENTINEL_TASKS: array
   SiteGateRefusedError: class
+  WriteSentinel: class
   anchorValues: function
   assertProofUntouched: function
   assertRecordedProofUntouched: function
