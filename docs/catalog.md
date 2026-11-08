@@ -488,13 +488,19 @@ twice:
 [Journeeze](https://app.journeeze.dev) can import the catalog as a catalog bundle (v1.0).
 
 The CLI package ships Jevitate's current immutable repository-catalog contract under
-`contracts/jevitate-catalog/v2/` and preserves the previous-major v1.0.0 contract under
-`contracts/jevitate-catalog/v1/`. Each contains the JSON Schemas for `.jevitate/personas.json`,
-`.jevitate/jobs.json` and each Journey file, approval-hash vectors, conformance fixtures and a
-SHA-256 manifest. Consumers vendor one exact released package and verify the manifest; they do not
-fetch a mutable schema URL at runtime. Contract v2 writes portable, unsigned-UTF-16-ordered approval
-hashes; because v1-only consumers cannot reproduce those hashes, v2 is a new contract major rather
-than an in-place v1 revision. The Job and Journey schemas are closed. The repository persona
+`contracts/jevitate-catalog/v3/` (v3.0.0) and preserves the previous-major v2.0.0 and v1.0.0
+contracts, unchanged, under `contracts/jevitate-catalog/v2/` and `contracts/jevitate-catalog/v1/`.
+Each contains the JSON Schemas for `.jevitate/personas.json`, `.jevitate/jobs.json` and each Journey
+file, approval-hash vectors, conformance fixtures and a SHA-256 manifest. Consumers vendor one exact
+released package and verify the manifest; they do not fetch a mutable schema URL at runtime. A
+published contract never changes: a schema change is a new contract version beside the old ones.
+Contract v2 writes portable, unsigned-UTF-16-ordered approval hashes; because v1-only consumers
+cannot reproduce those hashes, v2 is a new contract major rather than an in-place v1 revision.
+Contract v3 adds the job done check (`jobs[].done`) and typed Journey parameters
+(`metadata.parameters[].type` and `enum`). The Job and Journey schemas are closed, so a v2 validator
+refuses a file that uses them, and v3 is a new contract major; every file valid under v2 is valid
+under v3, so a v3 reader may accept files written for v2. The repository-catalog layout is unchanged
+(`repositoryCatalogMajor` 1) and v3 keeps the v2 approval hashes. The repository persona
 schema retains its pre-contract descriptive-key extension behavior; those keys participate in the
 persona approval hash, while session/login keys do not.
 
@@ -517,7 +523,8 @@ Each check also carries the app's release label (`check.appVersion`, #479) besid
 run was given `--app-version` (or `JEVITATE_APP_VERSION`); an invalid label is left out with a warning
 and the check still exports.
 The bundle is catalog bundle **v1, minor 2**. Minor 2 adds `catalogContract`, which binds the bundle
-to the exact v2 manifest used by its producer. The additions in minor 1 over minor 0 are the optional
+to the exact contract manifest used by its producer (`version` and `manifestSha256`; v3.0.0 since
+0.30.0, v2.0.0 before). The additions in minor 1 over minor 0 are the optional
 `finding.locator` object, one per brittle element of an exported Journey (`kind: "ux"`, claim
 `other`, producerClaim `locator-brittle` — a fix for the app, de-duplicated across steps and
 Journeys, dated at the latest approval of the Journeys it occurs in), and the optional

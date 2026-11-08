@@ -5,10 +5,10 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { JobSchema, JourneySchema } from "../../journey/dist/index.js";
 
-const root = fileURLToPath(new URL("../contracts/jevitate-catalog/v2", import.meta.url));
+const root = fileURLToPath(new URL("../contracts/jevitate-catalog/v3", import.meta.url));
 const identityModule = fileURLToPath(new URL("../src/catalog-contract-identity.ts", import.meta.url));
-const contractVersion = "2.0.0";
-const schemaBase = "https://jevitate.com/schemas/catalog/v2";
+const contractVersion = "3.0.0";
+const schemaBase = "https://jevitate.com/schemas/catalog/v3";
 const packageJson = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"));
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
@@ -66,7 +66,7 @@ const personaMapValue = {
 const personasFile = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
   $id: `${schemaBase}/personas.schema.json`,
-  title: "Jevitate personas.json v2",
+  title: "Jevitate personas.json v3",
   oneOf: [
     { type: "array", items: personaEntry },
     { type: "object", additionalProperties: false, required: ["personas"], properties: { personas: { type: "array", items: personaEntry } } },
@@ -74,17 +74,17 @@ const personasFile = {
   ],
 };
 
-const jobEntry = generatedSchema(JobSchema, "job.schema.json", "Jevitate job v2");
+const jobEntry = generatedSchema(JobSchema, "job.schema.json", "Jevitate job v3");
 const jobsFile = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
   $id: `${schemaBase}/jobs.schema.json`,
-  title: "Jevitate jobs.json v2",
+  title: "Jevitate jobs.json v3",
   oneOf: [
     { type: "array", items: { $ref: "job.schema.json" } },
     { type: "object", additionalProperties: false, required: ["jobs"], properties: { jobs: { type: "array", items: { $ref: "job.schema.json" } } } },
   ],
 };
-const journey = generatedSchema(JourneySchema, "journey.schema.json", "Jevitate Journey v2");
+const journey = generatedSchema(JourneySchema, "journey.schema.json", "Jevitate Journey v3");
 
 function parseOptions(argv, env) {
   const values = new Map();
@@ -148,7 +148,48 @@ const validJourney = {
 };
 
 rmSync(root, { recursive: true, force: true });
-write("README.md", `# Jevitate repository catalog contract v2\n\nThis immutable contract release defines the git-backed \`.jevitate/\` files shared with consumers.\nThe JSON Schemas are closed where the runtime schemas are closed. The repository-catalog compatibility\nexception for legacy persona descriptive keys remains: they participate in the persona approval hash.\n\nNew approval hashes use \`jevitate-content-hash-v2\` and the vectors in\n\`approval-hash-vectors.json\`: object keys sort lexicographically by unsigned UTF-16 code units;\narrays retain order and the encoded JSON has no insignificant whitespace. This writer is not readable\nby consumers of the v1 contract, so it is published as contract major 2. Readers may also recognize\nexisting v1 approvals (JavaScript \`localeCompare\`) during migration, but never write a new v1\napproval. Session paths and login settings are operational and excluded from persona approval hashes.\nA consumer must still run Jevitate's semantic reference and approval checks; JSON Schema validation\nalone is insufficient. The immutable v1.0.0 contract remains available at the sibling \`v1/\` path.\n\nThe manifest records the source repository, the full source commit and the package version at that\ncommit. Publication is intentionally two commits: first commit source and generator changes, then\nrun the generator with that commit's SHA and commit the regenerated immutable contract.\n`);
+const readme = [
+  "# Jevitate repository catalog contract v3",
+  "",
+  "This immutable contract release defines the git-backed `.jevitate/` files shared with consumers.",
+  "The JSON Schemas are closed where the runtime schemas are closed. The repository-catalog compatibility",
+  "exception for legacy persona descriptive keys remains: they participate in the persona approval hash.",
+  "",
+  "## Changes from v2",
+  "",
+  "- A job may carry `done`, its done check (`{version: 1, at, check, session?, distinguishedBy?}`): a",
+  "  statement about the application's state, read at the path `at`, that is false before the job is",
+  "  done and true after.",
+  "- A Journey param may carry a `type` (`string`, `number`, `boolean`, `enum`, `email`, `url`, `date`)",
+  "  and, for `enum`, the allowed values in `enum`.",
+  "",
+  "Both fields are optional and nothing else changed: the persona schema, the file envelopes, the",
+  "approval-hash algorithm and vectors (`jevitate-content-hash-v2`) are those of v2.",
+  "",
+  "## Compatibility",
+  "",
+  "The v2 Job and Journey schemas are closed, so a v2 validator refuses a file that uses `done` or a typed",
+  "param. A file valid under v3 is therefore not always valid under v2, and v3 is published as contract",
+  "major 3 rather than as an in-place v2 revision. Every file valid under v2 is valid under v3, so a v3",
+  "reader may accept files written for v2 (for example a `jobs.json` without `done`) unchanged; a",
+  "consumer that pins v2 must move to v3 before it reads files that use the new fields. The repository",
+  "catalog layout itself (file names, envelopes, the persona exception) is unchanged, so",
+  "`repositoryCatalogMajor` stays 1.",
+  "",
+  "New approval hashes use `jevitate-content-hash-v2` and the vectors in `approval-hash-vectors.json`:",
+  "object keys sort lexicographically by unsigned UTF-16 code units; arrays retain order and the encoded",
+  "JSON has no insignificant whitespace. Readers may also recognize existing v1 approvals (JavaScript",
+  "`localeCompare`) during migration, but never write a new v1 approval. Session paths and login settings",
+  "are operational and excluded from persona approval hashes. A consumer must still run Jevitate's",
+  "semantic reference and approval checks; JSON Schema validation alone is insufficient. The immutable",
+  "v1.0.0 and v2.0.0 contracts remain available at the sibling `v1/` and `v2/` paths.",
+  "",
+  "The manifest records the source repository, the full source commit and the package version at that",
+  "commit. Publication is intentionally two commits: first commit source and generator changes, then",
+  "run the generator with that commit's SHA and commit the regenerated immutable contract.",
+  "",
+].join("\n");
+write("README.md", readme);
 write("schemas/job.schema.json", jobEntry);
 write("schemas/jobs.schema.json", jobsFile);
 write("schemas/journey.schema.json", journey);
@@ -157,6 +198,12 @@ write("approval-hash-vectors.json", vectors);
 write("fixtures/valid/personas.json", validPersona);
 write("fixtures/valid/jobs.json", validJob);
 write("fixtures/valid/journey.json", validJourney);
+// v3 additions: a v2 validator refuses each of these (closed schemas), a v3 validator accepts them.
+write("fixtures/valid/jobs-done.json", [{ ...validJob[0], done: { version: 1, at: "/work", check: "textIncludes:testId=status|Reviewed" } }]);
+write("fixtures/valid/journey-typed-parameters.json", {
+  ...validJourney,
+  metadata: { ...validJourney.metadata, parameters: [{ name: "verdict", type: "enum", enum: ["approve", "reject"] }] },
+});
 write("fixtures/invalid/jobs-unknown-field.json", [{ ...validJob[0], typo: true }]);
 write("fixtures/invalid/journey-unknown-field.json", { ...validJourney, typo: true });
 
@@ -175,6 +222,8 @@ const manifest = {
   package: "@jevitate/cli",
   source,
   compatibility: {
+    // The `.jevitate/` repository layout (file names, envelopes, persona exception) is unchanged
+    // since v1; v3 only adds optional fields, so the repository-catalog major stays 1 (README).
     repositoryCatalogMajor: 1,
     approvalHash: "jevitate-content-hash-v2",
     readsApprovalHashes: ["jevitate-content-hash-v2", "jevitate-content-hash-v1"],

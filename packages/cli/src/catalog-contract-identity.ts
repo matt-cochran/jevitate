@@ -2,5 +2,5 @@
 export const CATALOG_CONTRACT_IDENTITY = {
   "kind": "jevitate.catalog-contract",
   "version": "2.0.0",
-  "manifestSha256": "f311b770451b86f6e46f482123e2ff09a7c72db87d751124b317e4e8f77a9e0c"
+  "manifestSha256": "481a4dc41ef6d619539500b2d141a07ceb003e9d83bc1f5cd11214360c83dbbd"
 } as const;
