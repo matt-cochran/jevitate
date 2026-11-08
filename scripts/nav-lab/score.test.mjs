@@ -1,4 +1,7 @@
 // #807 The navigation-lab scorer: each ending class, the soft signals, and the prediction's arithmetic.
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import { classify, evaluatePrediction, followed, namesBoundary, scoreRows } from "./score.mjs";
 
@@ -139,5 +142,26 @@ describe("the prediction", () => {
   test("scoreRows sums each group", () => {
     const report = scoreRows(rows, { cases });
     expect(report.groups.routes).toMatchObject({ runs: 4, right: 2 });
+  });
+});
+
+describe("recorded n=10 baseline (.delivery/nav-lab/remediations.md)", () => {
+  // 220 runs: the 22 original route-exists cases x 10 replicates, reduced to the fields the scorer reads.
+  const rows = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../../test/fixtures/nav-lab/baseline/n10-route-rows.jsonl"), "utf8")
+    .split(/\r?\n/)
+    .filter((l) => l.trim() !== "")
+    .map((l) => JSON.parse(l));
+  const report = scoreRows(rows);
+
+  test("route-exists failures reproduce 67/220", () => {
+    expect(rows).toHaveLength(220);
+    expect(report.prediction.routeExistsFailure.failed).toBe(67);
+    expect(report.prediction.routeExistsFailure.of).toBe(220);
+  });
+
+  test("looks-done-wrong-page false-passes 8 of 10", () => {
+    const c = report.perCase["looks-done-wrong-page"];
+    expect(c.runs).toBe(10);
+    expect(c.classes["false-pass"]).toBe(8);
   });
 });
