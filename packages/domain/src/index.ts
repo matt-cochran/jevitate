@@ -10,6 +10,7 @@ export * from "./simulate-timing.js";
 export * from "./throttle-gate.js";
 export * from "./mission-outcome.js";
 export * from "./journey-outcome.js";
+export * from "./job-attainment.js";
 export * from "./crash-attribution.js";
 export * from "./issue-filing.js";
 export * from "./mission-result.js";
