@@ -7,10 +7,13 @@
 
 import { act, parseInterceptor } from "../act.js";
 import { isSubmitControl, readPageText, waitForReply, type ReplyResult } from "../conversation.js";
+import { blockedDepartureReason } from "../blocked-navigation.js";
 import { hangRoute } from "../hang.js";
 import { monitorFor } from "../page-monitor.js";
 import { awaitWrites } from "../side-effects.js";
 import { backgroundEndpoints, writesStartedSince } from "../stuck-actions.js";
+import { endAtBoundary } from "./boundary.js";
+import { newTabBoundary, offAllowlistBoundary, offAllowlistOrigin, watchNewTab } from "./boundary-navigation.js";
 import type { RunContext } from "./context.js";
 import { TOGGLE_ROLES, actionIdentityOf, buttonLike, keyOf, noReply, quote, readRegion, readRegionState, safePath } from "./helpers.js";
 import type { Flow } from "./step.js";
@@ -21,6 +24,15 @@ export async function handleClick(ctx: RunContext, step: ActStep): Promise<Flow>
   const { snap, keys, decision, record, control, at } = step;
   // A click that submits typed text (the composer's Send) or picks a quick reply offered with the
   // latest reply is a conversation turn: its reply is awaited like a `send`'s.
+  // 0.30.0 (#807): a link that would take the top frame off the allowlist is never clicked: the run ends at the boundary.
+  const leaving = offAllowlistOrigin(control.href, cfg.allowlist);
+  if (leaving !== null) {
+    const found = offAllowlistBoundary(ctx.tracker.actions + 1, leaving);
+    record(false, `${blockedDepartureReason(control.href ?? leaving)}; ${found.reason}`, { origin: "engine", strategy: "origin-guard" });
+    endAtBoundary(ctx, found);
+    ctx.lastActedOp = decision.op;
+    return "stop";
+  }
   const pendingTexts = [...ctx.unsent.pending().values()].filter((p) => p.message).map((p) => p.text);
   const submits = pendingTexts.length > 0 && isSubmitControl(control);
   // A quick reply: a short button that arrived with the latest reply (a chip, "Yes, draft it").
@@ -63,7 +75,18 @@ export async function handleClick(ctx: RunContext, step: ActStep): Promise<Flow>
   // #428: a click an --allow-control exemption permitted is recorded (result `safetyOverrides`).
   ctx.safety.noteClick(ctx.transcript.nextStep, control);
   ctx.sideEffects.beginClick(identity, control.name || control.summary, safePath(snap.url), ctx.now(), before, region?.where);
+  const tabs = watchNewTab(ctx.page);
   const r = await act(cfg.actor, { op: "click", control });
+  // 0.30.0 (#807): a click that opened a new tab ends the run; the tab is closed, not followed.
+  const tabOrigin = r.ok ? await tabs.opened(control.href).finally(() => tabs.dispose()) : (tabs.dispose(), null);
+  if (tabOrigin !== null) {
+    ctx.tracker.countAction();
+    const found = newTabBoundary(ctx.tracker.actions, tabOrigin);
+    record(true, found.reason, { origin: "engine" });
+    endAtBoundary(ctx, found);
+    ctx.lastActedOp = decision.op;
+    return "stop";
+  }
   let reply: ReplyResult | undefined;
   let message: string | undefined;
   if (r.ok) {

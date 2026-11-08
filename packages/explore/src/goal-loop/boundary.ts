@@ -12,10 +12,12 @@ import { isLoginLikeUrl } from "../seed-redirect.js";
 import type { RunContext } from "./context.js";
 
 export interface BoundaryEvidence {
-  readonly kind: "wall" | "session";
+  readonly kind: "wall" | "session" | "off-allowlist" | "new-tab";
   /** 1-based step the boundary was met at. */
   readonly step: number;
-  readonly signal: "http-401" | "http-403" | "paid-control" | "login-url";
+  /** The origin an `off-allowlist` or `new-tab` stop names. */
+  readonly origin?: string;
+  readonly signal: "http-401" | "http-403" | "paid-control" | "login-url" | "write-refused" | "tab-opened";
 }
 
 /** The signals this deliverable can name; each is also a `goalReason`. */

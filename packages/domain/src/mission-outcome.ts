@@ -346,6 +346,8 @@ export const GOAL_REASONS = [
   "http-403",
   "paid-control",
   "login-url",
+  "write-refused",
+  "tab-opened",
 ] as const;
 export type GoalReason = (typeof GOAL_REASONS)[number];
 
