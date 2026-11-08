@@ -23,7 +23,7 @@ interface LabState {
   readonly requests: readonly string[];
 }
 
-async function oneRun(): Promise<{ lab: LabState; transcript: string }> {
+async function oneRun(): Promise<{ lab: LabState; transcript: string; recording: string }> {
   // @ts-expect-error — a plain .mjs fixture with no declaration file
   const { startNavLab } = (await import("../../../test/fixtures/nav-lab/app.mjs")) as {
     startNavLab: (o: { caseId: string; port?: number }) => Promise<{ url: string; close: () => Promise<void> }>;
@@ -50,7 +50,7 @@ async function oneRun(): Promise<{ lab: LabState; transcript: string }> {
     );
     const state = (await (await fetch(`${lab.url}/__lab/state`)).json()) as LabState;
     expect(result.outcome).toBe("succeeded");
-    return { lab: state, transcript: JSON.stringify(result.transcript) };
+    return { lab: state, transcript: JSON.stringify(result.transcript), recording: JSON.stringify(result.recording) };
   } finally {
     await lab.close();
   }
@@ -65,13 +65,14 @@ describe("#810 — a sign-in goal is not read-only", () => {
     "the sign-in-goal case succeeds 2 of 2: one POST /login each, and the lab is signed in",
     async () => {
       for (let i = 0; i < 2; i++) {
-        const { lab, transcript } = await oneRun();
+        const { lab, transcript, recording } = await oneRun();
         expect(lab.posts).toEqual(["/login"]);
         expect(lab.requests.filter((r) => r.startsWith("POST /login"))).toEqual(["POST /login 303"]);
         expect(lab.done).toBe(true);
-        // The transcript masks the typed password field. NOT asserted for the Recording: without a
-        // registered secret (--secret) it holds the goal as `intent` and the typed value (0.29.0 behaviour).
+        // The transcript masks the typed password field; so does the Recording, without any --secret:
+        // a value typed into a credential field is a run secret (goal-credential-redaction-served.test.ts).
         expect(transcript).not.toContain("lab-pass-1");
+        expect(recording).not.toContain("lab-pass-1");
       }
     },
     180_000,

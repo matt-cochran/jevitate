@@ -7,10 +7,10 @@
 
 import { act } from "../act.js";
 import { sendable } from "../actions.js";
-import { isCredentialField } from "../auth-completion.js";
+import { isCredentialInput } from "../credential-input.js";
 import { capFormText } from "../fill.js";
 import { monitorFor } from "../page-monitor.js";
-import { redactContext } from "../redact.js";
+import { REDACTION_MASK, redactContext } from "../redact.js";
 import { backgroundEndpoints } from "../stuck-actions.js";
 import type { RunContext } from "./context.js";
 import { MAX_TYPE_NO_EFFECT, documentOf, firstLine, keyOf, quote, searchLike, stateBesides } from "./helpers.js";
@@ -26,8 +26,12 @@ export async function handleFill(ctx: RunContext, step: ActStep): Promise<Flow> 
   let text: string | null;
   let rejected: string | undefined;
   let source: "goal" | "model" | undefined;
+  // A credential field (a password, a one-time code, a credential-named field): its value is a run
+  // secret once typed. A retype into the same field reuses that value — never re-asked, never masked.
+  const credential = decision.op === "type" && isCredentialInput(control);
+  const retyped = credential ? ctx.typedCredentials.get(keyOf(control)) : undefined;
   try {
-    ({ text, rejected, source } = await ctx.fillHelper.valueFor({
+    ({ text, rejected, source } = retyped !== undefined ? { text: retyped, source: "goal" as const } : await ctx.fillHelper.valueFor({
       fieldLabel: control.name || control.summary,
       goal: cfg.goal,
       visibleContext: snap.controls.map((c) => c.summary).join("; "),
@@ -69,6 +73,25 @@ export async function handleFill(ctx: RunContext, step: ActStep): Promise<Flow> 
     ctx.stop = "blocked";
     return "stop";
   }
+  if (credential) {
+    // Masked text is never typed: the goal's value for this field was redacted (a credential typed
+    // into another field), so there is no value to give it here — fail closed, saying how to bind one.
+    if (text.includes(REDACTION_MASK)) {
+      const label = quote(control.name || control.summary, 80);
+      const reason = `no value for credential field ${label}: the value is redacted — bind it with --secret-field 'label=${control.name || "Field"}=env:VAR' (or a targets.json secretFields entry)`;
+      ctx.history.push(`type into ${control.name} failed: ${reason}`);
+      record(false, reason, { origin: "engine" });
+      ctx.lastActedOp = decision.op;
+      return "continue";
+    }
+    // Registered BEFORE it is typed: from here on every seam (transcript, Recording and its intent,
+    // later model payloads, the caller's own artifacts) masks it — whatever the value's source.
+    ctx.typedCredentials.set(keyOf(control), text);
+    if (text.trim() !== "" && !ctx.secrets.includes(text)) {
+      ctx.secrets.push(text);
+      cfg.onRunSecret?.(text);
+    }
+  }
   // Free-text form values are bounded too (dogfood: 2–3k-char markdown essays in "Rationale").
   // #281: a value the goal states verbatim is typed as stated (its line breaks kept), never capped.
   if (decision.op === "type" && source !== "goal" && (control.tag === "textarea" || control.inputType === "text" || control.inputType === "")) {
@@ -92,7 +115,7 @@ export async function handleFill(ctx: RunContext, step: ActStep): Promise<Flow> 
     ? await act(cfg.actor, { op: "send", control, value: text, candidates: snap.controls })
     : await act(cfg.actor, { op: decision.op, control, value: text });
   if (r.ok && submitSearch) {
-    ctx.recorder.fill(control.descriptor, text, at);
+    ctx.recorder.fill(control.descriptor, credential ? { redacted: true, length: text.length } : text, at);
     const via = r.submittedVia;
     if (via !== undefined && via.kind === "click") ctx.recorder.click(via.control.descriptor, ctx.now());
     else ctx.recorder.press("Enter", control.descriptor, ctx.now());
@@ -116,11 +139,11 @@ export async function handleFill(ctx: RunContext, step: ActStep): Promise<Flow> 
       ctx.typeProbe = { key: keyOf(control), label: quote(control.name || control.summary, 60), at: typedAt, background: typedBackground, state: typedState };
       // A form field (not a message composer) is submitted with its form's own button; retyping
       // it is a correction, not the chat anti-pattern — so only composers are tracked.
-      ctx.recorder.fill(control.descriptor, text, at);
+      ctx.recorder.fill(control.descriptor, credential ? { redacted: true, length: text.length } : text, at);
       ctx.valueLog.typed(control.name || control.summary, text);
       // #671: on this document load, a field holding what the run typed (a composer too) is not a read-back.
       ctx.observed.noteTypedOn(text, await documentOf(ctx.page));
-      if (!ctx.isBound(control) && !isCredentialField(control) && !sendable(control)) {
+      if (!ctx.isBound(control) && !credential && !sendable(control)) {
         ctx.save.noteTyped(control.name || control.summary, text);
         // #239: until a write after it succeeds, the field shows what the run entered — not grounds.
         ctx.observed.noteOwnInput(text);
@@ -148,6 +171,6 @@ export async function handleFill(ctx: RunContext, step: ActStep): Promise<Flow> 
  * value is never shown, and registered secrets are masked.
  */
 function attempted(ctx: RunContext, control: ActStep["control"], text: string): string {
-  if (isCredentialField(control)) return " (the value is redacted)";
+  if (isCredentialInput(control)) return " (the value is redacted)";
   return ` (tried ${quote(redactContext(text, ctx.secrets), 80)})`;
 }

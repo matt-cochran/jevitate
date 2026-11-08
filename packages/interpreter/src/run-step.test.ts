@@ -6,7 +6,7 @@ import type { Assertion, RecordedStep } from "@jevitate/recording";
 import { FixturePathError } from "@jevitate/recording";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { checkAssertion, PostconditionFailed } from "./assertion.js";
-import { runStep } from "./run-step.js";
+import { RedactedFillError, runStep } from "./run-step.js";
 
 function fakeLocator(overrides: Partial<Record<string, any>> = {}) {
   return {
@@ -221,6 +221,12 @@ test("runStep: fill with a redacted constant value rejects with a clear, non-Pos
   expect(err).toBeInstanceOf(Error);
   expect(err).not.toBeInstanceOf(PostconditionFailed);
   expect(err.message).toMatch(/redacted/i);
+  // Typed, naming the field and how to supply its value — never typing the mask.
+  expect(err).toBeInstanceOf(RedactedFillError);
+  expect(err.code).toBe("E_REDACTED_FILL");
+  expect(err.field).toBe("Password");
+  expect(err.message).toContain("--secret-field 'label=Password=env:VAR'");
+  expect(err.message).toContain("secretFields");
   expect(locator.fill).not.toHaveBeenCalled();
 });
 
@@ -605,6 +611,8 @@ test("runStep: select with a redacted constant value rejects with a clear, non-P
   expect(err).toBeInstanceOf(Error);
   expect(err).not.toBeInstanceOf(PostconditionFailed);
   expect(err.message).toMatch(/redacted/i);
+  expect(err).toBeInstanceOf(RedactedFillError);
+  expect(err.field).toBe("country");
   expect(locator.selectOption).not.toHaveBeenCalled();
 });
 

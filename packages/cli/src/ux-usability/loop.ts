@@ -14,7 +14,7 @@ import { usabilityOnSnapshot } from "./observe.js";
  * `explore()` — and the drained server-log transcript, Recording and transcript written.
  */
 export async function runUsabilityLoop(ctx: UsabilitySetup) {
-  const { opts, session, origin, serverLog, journalListener, journal, health, uxSecretCommand, fixture, capture } = ctx;
+  const { opts, session, origin, serverLog, journalListener, journal, health, uxSecretCommand, onRunSecret, fixture, capture } = ctx;
   // #293: a journey-anchored review first replays its Journey's prefix into this very session.
   const start = await startFromJourney(opts.journeyPrefix, session, opts.url, opts.allowlist, opts.browser);
   const actor = CastActor.named("usability-mission").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
@@ -58,6 +58,7 @@ export async function runUsabilityLoop(ctx: UsabilitySetup) {
     ...(start.restart === undefined ? {} : { restartAtStart: start.restart.restartAtStart }),
     bounds: opts.bounds,
     secrets: opts.secrets,
+    onRunSecret,
     site: origin,
     fixture,
     fixtureRoot: journeyFixtureBaseDir(),
