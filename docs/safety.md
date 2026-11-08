@@ -240,8 +240,10 @@ against (`packages/cli/src/run-mode.test.ts`):
 | An agent over MCP (`mcp`) | **No** (no tool writes either file) | Yes (`promote_journey`, recorded as `mcp`) | **No** | **Tighten only** | **No** (`approve_action` refuses) | **No** (`E_SECRET_PARAM_OVER_MCP`) |
 | An agent with file access | Can forge any of the above | | | | | |
 
-The `ci` and `non-interactive` secret cell is the table's contract, not a built route: in 0.30.0 no
-run reads `secretFields` for a test-mode target over MCP (see the limits below). The last row is the
+Over MCP, a test-mode run reads the test target's own `secretFields` for a secret parameter the request
+leaves out: code types the value into the bound field on that origin, and it never reaches the model (see
+[run modes](./run-modes.md#how-a-secret-comes-back-over-mcp)). The agent still supplies no value: one in
+the arguments is refused with `E_SECRET_PARAM_OVER_MCP`. The last row is the
 limit, stated plainly: an agent that can write to `.jevitate/` or `~/.jevitate/` can write what this table
 trusts, including `trust: "test"` and `provenance.channel: "tty"`. The files that matter are signed
 with a per-user key (holds) or hashed (approvals); an agent that can read the key can forge those too.
@@ -302,8 +304,6 @@ What does not guard a run today:
   was allowed: it can't be moved onto another one.
 - `load run` (the API load test), `regression run`, `verify-fix` and `source run` do not go through the
   run hooks, so they get no run mode, no hold and no mode refusal.
-- The `secretFields` route for a test-mode target over MCP is not built. In test mode a secret parameter the
-  request leaves out is refused with `E_SECRET_PARAM_OVER_MCP`.
 - The `targets.json` secret route covers `run_journey` and holds. It is not read by every tool that can run
   a Journey.
 - A hold reached during a proof replay (`verify_journey`, `journey_readiness`) resumes as a plain run. The

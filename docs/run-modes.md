@@ -98,9 +98,16 @@ If a binding for the field exists only on another origin, the run is refused wit
 (`auto`, `fail-closed`, `vault-autofill`, `visible-handback`) narrows the choice; a mode the target cannot
 give is refused with `E_SECRET_MODE_UNAVAILABLE`.
 
-In test mode, a Journey with a human step is refused with `E_HUMAN_STEP_IN_TEST_MODE`. The design also
-routed a test target's `secretFields` to the run; that route is not built, so over MCP in test mode a missing
-secret parameter is refused with `E_SECRET_PARAM_OVER_MCP`.
+In test mode a run never waits for a person. A Journey with a handback step is refused with
+`E_HUMAN_STEP_IN_TEST_MODE`. A secret parameter the request leaves out comes from the test target's own
+`secretFields` in `~/.jevitate/targets.json` (test credentials a person wrote), through the same binding
+`vault-autofill` uses: code types it into the field the spec names, on that origin only, and the value never
+reaches the model, the result, the evidence or a log. A promoted Journey reads it whatever channel approved it, an MCP
+promotion included, since that authorises test-mode runs (on `run_journey` the approval must also be
+current); a draft never reads the file. With no binding for
+every such parameter (or a binding whose environment variable is unset), the run is refused with
+`E_HUMAN_STEP_IN_TEST_MODE` before any browser opens; it is never held. A binding on another origin only is
+refused with `E_SECRET_ORIGIN_REFUSED`.
 
 Limits of this route: the `targets.json` read covers `run_journey` and its holds, not every tool. A Journey with
 a secret still cannot self-heal or be annotated, and a secret in a `navigate` URL runs on the CLI only.
@@ -173,7 +180,7 @@ retry: it is refused the same way until a person changes the setting it names. E
 | Code | Exit | When | Way out |
 | --- | --- | --- | --- |
 | `E_APPROVAL_CHANNEL_FOR_MODE` | 2 | an MCP run on an automation-mode target, and the Journey's approval is `mcp`, `ci`, `non-interactive` or has no channel | `jevitate journey promote <id>` at a terminal, or a verified PR review; or a person declares the target `"trust": "test"` |
-| `E_HUMAN_STEP_IN_TEST_MODE` | 2 | a test-mode target, and the Journey has a human step (a handback) | run it on an automation-mode target, where it holds for a person, or take the handback out of the Journey |
+| `E_HUMAN_STEP_IN_TEST_MODE` | 2 | a test-mode target, and the Journey has a human step (a handback), or a secret parameter that no `secretFields` binding of that target supplies | give the test target the `secretFields` binding; or run it on an automation-mode target, where it holds for a person; or take the handback out of the Journey |
 | `E_POLICY_LOOSEN_OVER_MCP` | 2 | `site_policy set` over MCP asked for a policy looser than the effective one on some axis | a person loosens it on the CLI: `jevitate site policy set <site> --file <policy.json>` |
 | `E_TARGET_PROMOTE_OVER_MCP` | 2 | `mission_targets` over MCP tried to promote a target | `jevitate mission target promote <id>` on the CLI |
 | `E_SECRET_ORIGIN_REFUSED` | 2 | a `secretFields` binding exists for the field on another origin only | bind it for this origin in that origin's `secretFields`, or run the Journey on the bound origin |
@@ -189,4 +196,4 @@ retry: it is refused the same way until a person changes the setting it names. E
 | `E_HOLD_CHECKPOINT` | 64 | the hold has no usable checkpoint to resume from | run the Journey again |
 | `E_HUMAN_APPROVAL_REQUIRED` | 64 | `inbox approve` or `cancel` inside an MCP call, without a TTY, or for an id that is not a hold | a person runs it at a terminal, or answers in `jevitate ui` |
 | `E_JOURNEY_PARAM_TYPE` | 64 | a parameter's value is not of the type the Journey declares (the message names the parameter, never the value) | pass a value of the declared type |
-| `E_SECRET_PARAM_OVER_MCP` | none (MCP `invalid_args`) | a secret value passed as an MCP parameter, or (in test mode) a secret the request leaves out | use `--secret-field` or a `targets.json` `secretFields` binding on the CLI; on an automation-mode target let the run hold |
+| `E_SECRET_PARAM_OVER_MCP` | none (MCP `invalid_args`) | a secret value passed as an MCP parameter, or a secret the request leaves out on a Journey with no current approval that authorises the run's mode | never pass the value; use a `targets.json` `secretFields` binding, or on an automation-mode target let the run hold |
