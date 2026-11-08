@@ -108,6 +108,7 @@ export class JourneyRunEvidenceWriter {
   #step = 1;
   #watched = false;
   #unknown: UnknownReason | undefined;
+  #mode: RunEvidence["run"]["mode"] = "automation";
   #detach: (() => void) | undefined;
 
   constructor(req: JourneyRunEvidenceRequest) {
@@ -156,6 +157,20 @@ export class JourneyRunEvidenceWriter {
   /** How a step ended. A later report of the same index replaces the earlier one. */
   noteStep(step: StepReport): void {
     this.#steps.set(step.index, step);
+  }
+
+  /** The run's mode, as a `resolveMode` run hook decided it (journey-run-hooks.ts). Default `automation`. */
+  noteMode(mode: RunEvidence["run"]["mode"]): void {
+    this.#mode = mode;
+  }
+
+  /**
+   * What the writer saw, for the #790 run record that is derived from it (journey-run-record.ts): each
+   * write as sent or refused (method shape and raw URL, in the order seen) and the values to mask.
+   * In memory only; nothing here is written by this class except as a masked shape.
+   */
+  observed(): { readonly writes: readonly { readonly method: string; readonly url: string; readonly refused: boolean }[]; readonly values: readonly string[] } {
+    return { writes: [...this.#writes.values()].map((w) => ({ method: w.method, url: w.url, refused: w.refused })), values: [...this.#extracted] };
   }
 
   /** A code-templated reason, for people. Never page text or a value. */
@@ -254,8 +269,8 @@ export class JourneyRunEvidenceWriter {
       producer: { jevitate: engine.version.slice(0, 64), commit: engine.commit.slice(0, 64) },
       subject: { kind: "journey-run", journey: { id: this.#req.journey.id, hash: this.#req.journey.hash } },
       run: {
-        // §5: decided by target configuration once d-run-modes lands; a placeholder until then.
-        mode: "automation",
+        // §5: decided by target configuration once d-run-modes lands (a `resolveMode` run hook); `automation` until then.
+        mode: this.#mode,
         channel: this.#req.channel,
         target: { origin, ...(this.#req.environment === undefined ? {} : { environment: this.#req.environment }), trust: this.#req.trust ?? "unknown" },
         paramsDigest: evidenceParamsDigest(key, this.#req.params, this.#req.secretParamNames),
