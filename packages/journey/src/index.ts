@@ -20,3 +20,4 @@ export * from "./anchor-edit.js";
 export * from "./anchor-suggest.js";
 export * from "./proof-hash.js";
 export * from "./handoff.js";
+export * from "./done-check.js";
