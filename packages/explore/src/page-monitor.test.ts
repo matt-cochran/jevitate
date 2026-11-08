@@ -160,3 +160,63 @@ describe("RequestCapture — sent counts only requests this capture saw begin (#
     expect(capture.sent().map((r) => r.path)).toEqual(["/api/new"]);
   });
 });
+
+/**
+ * A response whose body the page never reads, sent with `Cache-Control: no-store`: Chromium reports
+ * the response and never that the request finished. A status check is judged on the response, so it
+ * has to see this one, and a request the server has not answered still reads as awaiting one.
+ */
+describe("a no-store response the page does not read", () => {
+  const PAGE = `<!doctype html><html><body><script>window.go = (p) => { fetch(p, { method: "POST" }).then((r) => { window.__status = r.status; }); };</script></body></html>`;
+  let unread: Server;
+  let at: string;
+
+  beforeAll(async () => {
+    unread = createServer((req, res) => {
+      const path = (req.url ?? "").split("?")[0];
+      if (path === "/held") return;
+      if (path === "/connect") return void res.writeHead(200, { "content-type": "application/connect+json", "cache-control": "no-store" }).end("{}");
+      if (path === "/save") return void res.writeHead(201, { "content-type": "application/json", "cache-control": "no-store" }).end("{}");
+      res.writeHead(200, { "content-type": "text/html" }).end(PAGE);
+    });
+    await new Promise<void>((resolve) => unread.listen(0, "127.0.0.1", resolve));
+    at = `http://127.0.0.1:${(unread.address() as AddressInfo).port}`;
+  });
+  afterAll(async () => {
+    unread.closeAllConnections();
+    await new Promise<void>((resolve) => unread.close(() => resolve()));
+  });
+
+  const sentAfterStatus = async (path: string, responded: boolean): Promise<readonly CapturedRequest[]> =>
+    withSession(
+      "page-monitor-unread-",
+      async ({ page }) => {
+        await page.goto(at);
+        const monitor = monitorFor(page);
+        const capture = monitor.startCapture();
+        const reached = responded ? page.waitForResponse((r) => r.url().endsWith(path)) : page.waitForRequest((r) => r.url().endsWith(path));
+        await page.evaluate((p) => (window as unknown as { go(x: string): void }).go(p), path);
+        await reached;
+        const sent = capture.sent();
+        monitor.stopCapture(capture);
+        return sent;
+      },
+      at,
+    );
+
+  it("a status check sees the response", async () => {
+    const sent = await sentAfterStatus("/save", true);
+    expect(sent.map((r) => [r.path, r.status, r.pending])).toEqual([["/save", 201, undefined]]);
+    expect(evaluateNetworkCheck({ kind: "responseStatus", method: "POST", pathGlob: "/save", status: { class: 2 } }, sent, false).passed).toBe(true);
+  });
+
+  it("a request with no response still reads as awaiting one", async () => {
+    const sent = await sentAfterStatus("/held", false);
+    expect(sent.map((r) => [r.path, r.status, r.pending])).toEqual([["/held", null, true]]);
+  });
+
+  it("an RPC response stays pending, its result being in a body not yet read", async () => {
+    const sent = await sentAfterStatus("/connect", true);
+    expect(sent.map((r) => [r.path, r.status, r.pending])).toEqual([["/connect", null, true]]);
+  });
+});

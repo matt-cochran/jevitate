@@ -16,7 +16,184 @@ command's codes only as a reminder; this is the reference.
 | `4` | intermittent | a hang, or a `verify-fix` signal, fired on some but not every replay |
 | `5` | pending-review | a self-heal produced a proposed Journey revision; nothing passes until a person accepts it (`journey promote <id> --proposal <pid>`) |
 | `64` | usage | a usage or input error, and nothing ran: an unknown or missing flag, a bad argument (`E_EXPLORE_ARGS`, `E_EXPLORE_ASSERTION`, `E_VERIFY_FIX_ARGS`, …) or number (`--max-actions abc`, `--replays 0`: refused while the command line is parsed), an unreadable or invalid input file (`E_CHECK_SUITE`, `E_LEDGER_INPUT`, `E_UX_INPUT`, `E_TARGET_CONFIG`, …), an unknown id (`E_UNKNOWN_JOURNEY`, `E_REGRESSION_NOT_FOUND`, `E_BASELINE_NOT_FOUND`, …), a `journey annotate --approve` draft that is missing, invalid or stale (`E_JOURNEY_ANNOTATIONS_STALE`: the Journey changed since the draft), missing keys (`E_AI_SETUP_REQUIRED`), or a target outside the allowlist — including a `check` suite item whose start URL is off its target's allowlist, or whose `verifyFix` fingerprint is not in its result (refused up front, like a missing result file) |
-| `129` / `130` / `143` | killed | SIGHUP (or the parent died) / SIGINT / SIGTERM; the partial result is still written and every browser is closed (see [operations](./operations.md)) |
+| `129` / `130` / `143` | killed | SIGHUP (or the parent died) / SIGINT / SIGTERM. A mission writes its partial result; `journey verify` and `verify-fix` print one envelope (`E_TERMINAL_SIGNAL`, or `E_TERMINAL_PARENT_GONE` for a parent that died) and write a result file; every browser is closed (see [operations](./operations.md)) |
+
+`journey verify` and `verify-fix` always end with a result. Besides the signal codes above, they report
+`E_TERMINAL_WATCHDOG` (2) when no replay has started for the run's inactivity limit, `E_TERMINAL_INTERNAL` (2)
+for an unexpected error, and `E_TERMINAL_UNSETTLED` (2) if the process would otherwise have exited without a
+verdict. The limit measures silence, not length: a proof whose replays keep starting is never ended. A run
+ended this way has no verdict, leaves any earlier mutation-proof receipt as it was, and does not run `after`
+fixtures, so state a fixture would have restored may remain.
+
+In `journey verify --mutate`, any errored replay leaves the proof `inconclusive`, even when other mutations
+covered the same assertions. A replay that errored before opening a browser, as on an admission timeout, is
+retried once and listed in `mutations[].retries`. One that opened a browser may have changed the app, so it is
+not retried. A failed replay or a stall is never retried. `--resume` runs an errored pair again without starting
+the proof over.
+
+What `journey verify --mutate` runs, in order:
+
+1. **The base**: the Journey as recorded. It must pass. It stays open until the writes it sent are answered, up to
+   the longest of the Journey's response timeouts and the base's own length. A write that outlasts that makes the
+   proof `inconclusive`, unless it is a line the Journey never recorded and is also still open in the next replay,
+   which marks it a long-lived connection.
+2. **The independence replay**: as recorded, straight after the base, held to the floors of the first mutated
+   replay. A failure is run again after a quiet gap of at least 5 s. If that passes, or the Journey no longer passes
+   unheld, the proof is `inconclusive`, because state may cross replays. If both held replays fail and the unheld one
+   passes, the hold is what breaks the claim, and the proof goes on.
+3. **One replay per mutation**, each held to floors: from the mutated step on, it cannot leave a step or read its end
+   state before the base did plus a margin of 1 s and a quarter of the base's time on the mutated step. Before the end
+   state, it waits for its open writes as the base did. A claim wait runs past what the base's claim took, and no
+   further than the larger of that and the hang threshold. If a failure at the step's own claim hides later paired
+   sites, a relaxed replay of the same mutation reads them. If an earlier check still hides a site, a targeted replay
+   relaxes it.
+4. **A matched control**, only when needed: a fresh replay as recorded on the same floors. It must pass the site and
+   reach it within the margin of the mutated replay, in either direction. A `sensitive` reading needs one when the
+   site was reached inside twice the margin of the base's time, or the replay was held on the way there. Mutations of
+   one step share a control. A targeted proof always has its own, with the same relaxations and floors, because it also
+   answers whether relaxing broke the site.
+5. **The mutation at the base's time**, only when the control failed at the same site: the mutated replay held with
+   no margin. A pass reads `insensitive`, since the claim held without the mutation. A failure reads `cascade`.
+6. **Disagreement**: when one mutation of a step fails a site and another passes it, a control runs and the failing
+   mutation runs once more. If the failure reproduces, `sensitive` stands, since skip and block can really differ. If
+   the re-run passes the site, the failure is struck and the site reads `insensitive`, since a replay saw the claim
+   hold with the mutation applied. If neither is clear, the proof is `inconclusive`.
+7. **The closing replay**: as recorded, last, when the verdict could still change.
+
+A blocked write's recorded lines stay blocked for the rest of that replay, except while a later step that records the
+same line runs. If one is answered anyway (a popup, a worker), that mutation reads `not-applied`. Open writes are
+counted when they go to the Journey's own origins or a line it recorded, and a line it did not record that repeats is
+background. A write is open until it finishes or fails, until a new document in the opened page's top frame drops it, or, on a `no-store`
+response only, until bytes of its body are reported (see "What a proof assumes"). A response alone does not close it: a server that
+sends its headers and keeps working has not answered yet. A frame or a popup starting to load drops nothing. A write still open when any replay closes, or that replay throws or stalls, makes the proof `inconclusive`, and nothing further
+runs, as with a failed fixture restore. A stalled replay whose close never finished can't say what was open, and counts as having a write open, and a resume reads the same. A mutated replay that stopped early still stays open as long as the base did.
+
+### What a proof assumes
+
+A `proven` verdict says what was shown, and no more: this Journey's checks noticed when a recorded step was changed,
+under the conditions the proof ran in. It does not say the Journey's checks are right in general, or that a real job
+can be done. A job being doable is shown by a successful run with a done check, not by a mutation proof. The verdict
+holds only if all of these are true. Each one that fails can produce a false reading.
+
+- **No one-off slowdown that nothing cross-checks.** A job can run slower in one mutated replay than in any other,
+  so that a claim fails with room to spare. Nothing catches that unless the failure was thin or held, or a sibling
+  mutation of the step passed the same site. A mutation with no sibling, or whose sibling also failed, reads
+  `sensitive`.
+- **State from one replay reaches the next only where the independence replay would meet it.** A job that
+  lands after the independence replay ends, and changes what a site reads only inside one mutated replay, reads
+  `sensitive` if that replay has no sibling that passes. So does a change made to the app from outside the proof.
+- **A control and a mutated replay see the same app.** A control that passes says the hold did not break the claim. It
+  cannot say the mutated replay was not unluckily slow, so a job slow only in that replay reads `sensitive` even when a
+  control ran. Siblings that share a control may reach a site up to the margin apart, so a claim that decays in that
+  gap is not told apart.
+- **Sibling mutations of a step are the cross-check.** Disagreement is looked for only between mutations of the same
+  step. Two siblings that both fail for a reason other than the mutation read `sensitive`.
+- **A resumed proof's reused results still describe the app.** A resume measures a new base and runs the independence
+  replay again, but a reused pair ran against the app as it was then.
+- **A blocked write's retry uses a recorded line.** A retry on a path the step never recorded is a new write and gets
+  through. The site then reads `insensitive`, or `sensitive` for what remains, on an app the block no longer describes.
+- **An aborted write ends soon.** A write the browser gave up on, even after its response arrived, keeps its replay open
+  for 2 s, and so does one a new document in the opened page's top frame dropped. A server still working after that is seen only through the independence replay.
+- **A write belongs to the step that was running when it started.** A recording places a write by time, so a write a
+  timer sends after a later step started is credited to the later step. `block-write:<n>` goes further: it aborts every
+  write sent during step n's window, recorded there or not. So a timer's write that lands in the last write step's window
+  is blocked by that step's mutation, even if a delta names it under another step or none does. What still holds: the
+  check does depend on that write, since it failed when the write was stopped. What does not: the step named may not be
+  the one that caused it, so that step's mutation can read `sensitive` and the proof `proven` without that step mattering.
+  To spot it, read `--json`: the site's `provedBy` is `block-write:<n>`, `skip:<n>` passed, and step n's delta does not
+  name the check's request. That can also be a real difference between skip and block, so it is a reason to look, not a
+  verdict. To correct the credit, move the line to the delta of the step that starts the timer and add
+  `{"check":"end-state:0","mustFailWhen":"skip:<that step>"}` to `metadata.mutationPairs`: the site is then proved by that
+  skip. The last write's block still fails the check, and nothing in the proof marks that reading as wrong.
+- **A server that answers, then keeps doing work the Journey depends on, has sent nothing that reads as a finished
+  `no-store` body.** A write stays open until it finishes or fails, up to the replay's bound, and then the proof reads
+  `inconclusive`. A response does not close it, and neither do bytes arriving, with one exception. Chromium never reports the
+  end of a `no-store` body the page does not read, so a write that waited for that would read `inconclusive` about a request
+  answered in milliseconds. It does report such a body's bytes, only when the body ends. So on a `no-store` response, and on
+  no other, reported bytes count: the replay stays open until 2 s after they were reported, so such a write costs a replay
+  up to 2 s, and nothing if it was open that long anyway, and the write reads as answered. A `no-store` body with nothing reported stays open.
+
+  This can be a false reading. The bytes are reported as they arrive, not at the end, when the page reads the body, holds
+  an unread `r.clone()` of it (a fetch wrapper that clones does this), sent it with `sendBeacon`, or the browser reads it as a
+  document (a form POST whose `no-store` page streams). So a `no-store` response
+  whose server has sent its first bytes and goes on working reads as answered after those 2 s for those pages, and what the
+  server does next is seen only through the independence replay. If that work changes what a site reads, that site can read
+  `sensitive` and the proof `proven`. This can't be limited to pages that don't read: the browser sends the same kinds of event
+  for a complete unread body and for the first bytes of one that is read, cloned or beaconed. Their byte counts can differ (on
+  chunked HTTP/1.1 they carry framing), but that was seen in one probe and is not relied on. A page that reads a body
+  to its end is not at risk once it ends, since the write then finishes.
+
+  Reads as open, so `inconclusive` or `cascade`, though the server did answer: an unread `no-store` body over about 2 MB, which
+  is never reported; a write a dedicated worker sends unread with `no-store`, since the page's events don't show it; one a
+  popup sends as it opens, before the replay can watch it; a body a frame or a popup had reported, once the opened page loads
+  a new document; a write open in a popup that navigates or closes, which nothing reports; and any unread `no-store` write if the browser doesn't let the replay watch the page within 2 s.
+
+Some readings are limits rather than assumptions: they are never `proven`, but they say less than the Journey deserves.
+
+- A claim that really depends on the mutated write and also decays inside the hold (a toast shorter than the margin)
+  reads `cascade`, and the proof `inconclusive`: the experiment cannot tell it from a claim the hold broke.
+- A failed fixture restore, a write left open, and state crossing replays stop the proof at once, so sites not yet
+  reached read `error`. Fix the cause and run it again.
+
+#### Following and resuming a long proof
+
+`journey verify <id> --mutate` writes a progress receipt to `.jevitate/logs/verify-progress/` as it goes, atomically,
+after each pair (one planned mutation with all its replays). `journey verify <id> --status` reads it: live, exited
+or stale verifier (pid plus the kernel's start time, so a reused pid is `stale`), pairs finished of the total (`completed`
+counts what a resume keeps, and `toRunAgain` the errored or control-short pairs it would run again), the current pair,
+and whether a resume could run. It opens no browser, runs no hook and reads nothing of the app's.
+MCP: `verify_journey` with `status: true`, which answers even while the same server is running that proof.
+
+`journey verify <id> --mutate --resume` (MCP: `mutate: true, resume: true`) continues an interrupted proof with the
+same flags. The base replay runs again and must pass, the pair that was interrupted runs again, later pairs run,
+and finished pairs are reused. A pair with an errored replay is not reused: it runs again, in an interrupted proof
+and in one that finished `inconclusive` on errored replays and nothing else, which `--resume` also accepts. Nor is a
+pair that skipped its control because the verdict looked decided: another pair's error may be why, and the resume
+repairs that, so the pair runs again and decides afresh whether its control is needed. A pair run again is a real
+replay: it sends its real writes to the app a second time, so restore state between runs if that matters. A proof whose independence replay errored is such a proof: the resume runs that replay again against its own base, as every resume does, and an error there leaves it `inconclusive`. The closing replay always runs. The result says how many pairs were reused in
+`reusedPairs` (0 on a run that did not resume), each one is marked `reused: true`, and the verdict comes from the
+same rule over the same results as an uninterrupted proof. A plain `--mutate` starts again and replaces the
+checkpoint, unless a live verifier owns it, in which case it runs without progress of its own.
+
+A resume never starts over silently. It exits 2 with `E_JOURNEY_VERIFY_RESUME_REFUSED` and a reason in `data.reason`:
+
+| `reason` | Why |
+| --- | --- |
+| `no-checkpoint`, `finished`, `live-verifier`, `other-host` | nothing to resume (`finished`: the proof ended with a verdict a re-run of errored pairs could not change; if a replay may have decided another, as with a write left open, fix that and rerun with plain `--mutate`), or a verifier owns it or cannot be checked from this host |
+| `journey-hash`, `mutation-plan`, `params`, `hook`, `origin`, `browser`, `cli-build` | what the proof ran under changed. A build that cannot name itself counts as changed |
+| `too-old` | a reused result is over 24 hours old |
+| `corrupt`, `integrity`, `not-regular-file`, `key-unavailable`, `not-writable` | the file is damaged or was changed outside jevitate, a link or FIFO is at its path, or the key below cannot be used |
+| `base-failed` | the Journey as recorded no longer passes |
+| `pace`, `isolation` | the base, measured again, is slower than a reused failure allows (it reached a site sooner than the new base passes it, or with little to spare and no control), or left fewer writes open than a reused replay did. Controls are held to the same checks |
+| `unknown-record` | the checkpoint holds a kind of replay this build cannot re-check |
+
+Timing is why a resume on a slower or busier machine can be refused: a reused failure counts only against the base
+measured now. Run the proof again from the start.
+
+The checkpoint holds outcome classes, structured failed sites, site keys, mutation ids, step timings and write
+counts. It holds no hook text, parameter value, failure message, blocked request path or page text. On a reused pair
+`reason`, `blockedWrites` and `controlDiagnostics` are therefore absent, and a targeted refusal's or a retry's wording
+says it was not kept. The verdict reads none of these. Hooks, params, origin and browser settings are compared by
+HMAC-SHA-256 under a random key in `~/.jevitate/verify-checkpoint.key` (mode 0600), which also signs the file. The
+signature proves the file came from this user's own runs. It does not stop that user's own processes, which can read
+the key, nor someone putting back an older genuine file: a rollback reads as that earlier proof, within the 24-hour
+limit. Only the bytes of a fixture file, a `--fixture-identity` session file and a `--storage-state` file and the text
+of a hook are bound: a script a hook calls, and a new deploy of the app between the two runs, cannot be detected, beyond
+the base and closing replays having to pass.
+Receipts stay until the next proof of that Journey replaces them; `logs prune` does not remove them.
+
+The key protects against a change to the file, not against everything. Someone who can write `.jevitate/` but cannot
+read the key cannot make up a result, but can delete the checkpoint, or put back an older one this user's own run wrote
+for the same configuration within the 24 hours, which forgets any later pairs and any later taint such as a failed
+restore. That person can also edit the Journey and the proof receipt in `.jevitate/journeys/` directly, so treat
+`.jevitate/` as you treat the rest of the repository. A process running as you can read the key and sign anything.
+
+A coordinator that dies takes a verifier with it unless the run set `JEVITATE_PARENT_WATCHDOG=off`; either way the
+finished pairs stay on disk. A killed verifier never ran its `after` hook, so use a `--before` that resets the app.
+
+A closed output pipe never becomes a result. A closed stderr only stops progress lines. With stdout closed, a
+command keeps the exit code it set; one still running finishes first; and if no verdict was reached, it exits
+2. Only a command with no code to keep (`jevitate <cmd> | head -1`) exits 0.
 
 `64` is `EX_USAGE` from `sysexits.h`. It is deliberately not a small integer, so a new outcome code
 (such as `5`) never collides with it. A refused command's code comes from its error code: `_ARGS`, `_INPUT`,

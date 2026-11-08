@@ -86,7 +86,10 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
   // #367 — a scroll that did NOT move is part of the streak too: down (moved), down (did not move),
   // up (moved), up (did not move)… used to restart the bound at every unmoved scroll, so each moved
   // one counted as progress again and the run scrolled to its decision cap.
-  const scrolled = ctx.lastActedOp === "scroll_down" || ctx.lastActedOp === "scroll_up";
+  // #769: a refused `blocked` took no action, so neither the scroll streak nor no-progress counts it.
+  const refused = ctx.refusedTurn;
+  ctx.refusedTurn = false;
+  const scrolled = !refused && (ctx.lastActedOp === "scroll_down" || ctx.lastActedOp === "scroll_up");
   const scrolledMoved = scrolled && ctx.lastScrollMoved;
   if (!scrolled) {
     ctx.movingScrolls = 0;
@@ -110,6 +113,7 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
   const scrollStalled = scrolledMoved && !scrollProgress;
   if (
     ctx.lastActedOp !== null &&
+    !refused &&
     !scrollProgress &&
     (scrollStalled ? ctx.noProgress.stalled(snap.signature) : ctx.noProgress.noteDelta(ctx.lastActedOp, snap.signature, verdictNow))
   ) {

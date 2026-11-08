@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken } from "@jevitate/screenplay";
 import { RecordingSchema, type Recording } from "@jevitate/recording";
-import { RecordingInterpreter } from "@jevitate/interpreter";
+import { RecordingInterpreter, ReplayRefusal, type ReplayActionGuard } from "@jevitate/interpreter";
 import { journeyFixtureBaseDir } from "./journey-api.js";
 import {
   reproduceFailure,
@@ -213,7 +213,12 @@ export interface RunRegressionCaptureOptions {
    * reload the page) becomes an assertion that the prefix landed there (`anchoredRecording`).
    */
   anchored?: boolean;
+  /** #789: the MCP floor under each replay. Absent on the CLI, where the person at the terminal is the guard. */
+  actionGuard?: ReplayActionGuard;
 }
+
+/** The options every replay of a regression runs under. */
+const replayOptions = (actionGuard: ReplayActionGuard | undefined): { fixtureBaseDir?: string; actionGuard?: ReplayActionGuard } => ({ fixtureBaseDir: journeyFixtureBaseDir(), ...(actionGuard === undefined ? {} : { actionGuard }) });
 
 export type RunRegressionCaptureResult =
   | { recordingPath: string; metaPath: string }
@@ -297,15 +302,15 @@ export async function runRegressionCapture(opts: RunRegressionCaptureOptions): P
   let report;
   try {
     report = requiredFingerprint
-      ? await reproduceFailureAt(working, opts.makeActor, requiredFingerprint, attempts, { fixtureBaseDir: journeyFixtureBaseDir() })
-      : await reproduceFailure(working, opts.makeActor, attempts, { fixtureBaseDir: journeyFixtureBaseDir() });
+      ? await reproduceFailureAt(working, opts.makeActor, requiredFingerprint, attempts, replayOptions(opts.actionGuard))
+      : await reproduceFailure(working, opts.makeActor, attempts, replayOptions(opts.actionGuard));
   } catch (cause) {
     if (cause instanceof NeverFailedError) throw new NoFailureToReproduceError();
     throw cause;
   }
   if (report.label === "flaky") return { skipped: "flaky", rate: report.rate };
 
-  const reproduces = makeSingleShotReproduces(opts.makeActor, report.fingerprint, { fixtureBaseDir: journeyFixtureBaseDir() });
+  const reproduces = makeSingleShotReproduces(opts.makeActor, report.fingerprint, replayOptions(opts.actionGuard));
   const minimized = await minimizeRecording(working, reproduces);
 
   return commitRegression(opts.regressionsDir, opts.id, minimized, report, opts.bugSummary);
@@ -326,15 +331,17 @@ function asSuccessCheck(check: NetworkCheckOracle): Extract<SuccessCheck, { kind
  * traffic. Returns whether the check STILL FAILS (the defect reproduced) — never whether the
  * Recording interpreter's own step outcomes succeeded, which is irrelevant to a network check.
  */
-async function replayAndCheckNetwork(makeActor: () => Promise<Actor>, recording: Recording, check: NetworkCheckOracle): Promise<boolean> {
+async function replayAndCheckNetwork(makeActor: () => Promise<Actor>, recording: Recording, check: NetworkCheckOracle, actionGuard?: ReplayActionGuard): Promise<boolean> {
   const actor = await makeActor();
   const page = actor.ability(BrowseTheWebToken).session.page;
   const monitor = monitorFor(page);
   await monitor.instrument().catch(() => undefined);
   const capture = monitor.startCapture();
   try {
-    await new RecordingInterpreter({ fixtureBaseDir: journeyFixtureBaseDir() }).run(actor, recording);
-  } catch {
+    await new RecordingInterpreter(replayOptions(actionGuard)).run(actor, recording);
+  } catch (err) {
+    // A guard's refusal ends the run: it is no replay to read a verdict from.
+    if (err instanceof ReplayRefusal) throw err;
     // A replay that throws (browser/automation error) still leaves whatever the app sent captured;
     // the network check is evaluated over that, same as a replay that merely fails a later step.
   }
@@ -355,7 +362,7 @@ async function captureNetworkCheckRegression(
 ): Promise<RunRegressionCaptureResult> {
   let reproducedCount = 0;
   for (let i = 0; i < attempts; i++) {
-    if (await replayAndCheckNetwork(opts.makeActor, recording, check)) reproducedCount++;
+    if (await replayAndCheckNetwork(opts.makeActor, recording, check, opts.actionGuard)) reproducedCount++;
   }
   if (reproducedCount === 0) throw new NoFailureToReproduceError();
   const rate = reproducedCount / attempts;
@@ -397,6 +404,7 @@ async function captureInvariantRegression(
     defectKind: "invariant",
     invariant: { spec: invariantSpec, id: invariantId, allowlist: mission.target.allowlist, baseUrl: mission.target.seedUrl },
     replays: attempts,
+    ...(opts.actionGuard === undefined ? {} : { actionGuard: opts.actionGuard }),
     openSession: async () => {
       const actor = await opts.makeActor();
       const page = actor.ability(BrowseTheWebToken).session.page;
@@ -456,6 +464,8 @@ export interface RunRegressionRunOptions {
    * it does not allow is refused before any browser opens. Absent: the recorded site, as before.
    */
   readonly environment?: ResolvedJourneyEnvironment;
+  /** #789: the MCP floor under each replay. Absent on the CLI, where the person at the terminal is the guard. */
+  readonly actionGuard?: ReplayActionGuard;
 }
 
 export type RegressionRunVerdict = "reproduces" | "fixed" | "inconclusive" | "intermittent";
@@ -496,7 +506,7 @@ export async function runRegressionRun(opts: RunRegressionRunOptions): Promise<R
       : { ...stored, baseUrl: `${env.baseUrl}${new URL(stored.baseUrl).pathname}`, allowlist: [...env.allowedOrigins] };
   if (oracle === undefined) {
     const actor = await opts.makeActor();
-    const outcome = await replayRegression(actor, recording, { fixtureBaseDir: journeyFixtureBaseDir() });
+    const outcome = await replayRegression(actor, recording, replayOptions(opts.actionGuard));
     return outcome === "failed"
       ? { id: opts.id, verdict: "reproduces", reason: "the committed Recording's own oracle step failed again on replay" }
       : { id: opts.id, verdict: "fixed", reason: "the committed Recording replayed clean; its oracle step held" };
@@ -504,7 +514,7 @@ export async function runRegressionRun(opts: RunRegressionRunOptions): Promise<R
 
   if (oracle.kind === "network") {
     const spec = describeCheck(asSuccessCheck(oracle.check));
-    const stillFails = await replayAndCheckNetwork(opts.makeActor, recording, oracle.check);
+    const stillFails = await replayAndCheckNetwork(opts.makeActor, recording, oracle.check, opts.actionGuard);
     return stillFails
       ? { id: opts.id, verdict: "reproduces", reason: `the network check (${spec}) still fails on replay` }
       : { id: opts.id, verdict: "fixed", reason: `the network check (${spec}) now passes on replay` };
@@ -520,6 +530,7 @@ export async function runRegressionRun(opts: RunRegressionRunOptions): Promise<R
     defectKind: "invariant",
     invariant: { spec: oracle.invariantSpec, id: oracle.invariantId, allowlist: oracle.allowlist, baseUrl: oracle.baseUrl },
     replays: opts.attempts ?? 3,
+    ...(opts.actionGuard === undefined ? {} : { actionGuard: opts.actionGuard }),
     openSession: async () => {
       const actor = await opts.makeActor();
       const page = actor.ability(BrowseTheWebToken).session.page;

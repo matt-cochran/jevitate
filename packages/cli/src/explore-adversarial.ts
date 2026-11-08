@@ -1,4 +1,5 @@
 /** The adversarial strategy runner behind `jevitate explore --strategy adversarial`. */
+import { withModelSecrets } from "@jevitate/ai-core";
 import { logsDirFor } from "./project-dir.js";
 import { join, resolve as resolvePath } from "node:path";
 import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
@@ -220,7 +221,11 @@ export type AdversarialCliMissionResult = Omit<AdversarialOutcome, "defects"> & 
  * session is always torn down. The stop-on-defect decision is the mission's
  * own trusted hard-signal oracle — never Jev's `Noul` (guardrail #4).
  */
-export async function runAdversarialCliMission(
+export async function runAdversarialCliMission(opts: RunAdversarialCliMissionOptions): Promise<AdversarialCliMissionResult> {
+  return withModelSecrets(opts.secrets, () => runAdversarial(opts));
+}
+
+async function runAdversarial(
   opts: RunAdversarialCliMissionOptions,
 ): Promise<AdversarialCliMissionResult> {
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.

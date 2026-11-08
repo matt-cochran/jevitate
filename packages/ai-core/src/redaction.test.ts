@@ -1,9 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
+  JevJudgmentGateway,
+  OpenRouterGenerationGateway,
   REDACTION_MASK,
+  envCredentialStore,
   SecretLeakError,
   assertNoSecretInPayload,
+  ModelSecretsFullError,
+  openModelSecretScope,
   redactContext,
+  redactModelPayload,
   redactText,
   redactUrl,
 } from "./index.js";
@@ -138,5 +144,85 @@ describe("short secrets (#454) — matched as whole tokens, never inside ordinar
 
   it("makes the payload guard reject a short secret right after a newline inside a structured payload", () => {
     expect(() => assertNoSecretInPayload({ text: "line one\nme" }, ["me"])).toThrow(SecretLeakError);
+  });
+});
+
+describe("the gateways' backstop", () => {
+  const store = envCredentialStore({ OPENROUTER_API_KEY: "sk-or-test", TYPESAFE_API_KEY: "ts-test" }, {});
+  const genSent = async (input: unknown): Promise<string> => {
+    const bodies: unknown[] = [];
+    const gen = new OpenRouterGenerationGateway({
+      store,
+      catalog: [{ id: "m", promptUsdPer1k: 0.1, completionUsdPer1k: 0.1, regions: ["US"], latencyClass: "fast", capabilities: [] }] as never,
+      constraints: { requireRegion: "US", maxPromptUsdPer1k: 1, requiredCapabilities: [] } as never,
+      call: (async (a: { body: unknown }) => (bodies.push(a.body), { object: { order: [], control: null }, latencyMs: 1 })) as never,
+    });
+    await gen.generate("heal.rank", input as never);
+    return JSON.stringify(bodies);
+  };
+  const rank = (summary: string) => ({ step: "click x", evidence: [], candidates: [], controls: [{ index: 2, summary }] });
+  const open: Array<{ release(): void }> = [];
+  const scope = (...values: string[]) => {
+    const s = openModelSecretScope();
+    open.push(s);
+    s.add(values);
+    return s;
+  };
+  afterEach(() => {
+    for (const s of open.splice(0)) s.release();
+  });
+
+  it("masks a live run's value at both gateways, in every string", async () => {
+    scope("S3ntinel-Bound-Value");
+    const sent = await genSent(rank(`button "${encodeURIComponent("S3ntinel-Bound-Value")} x" S3ntinel-Bound-Value`));
+    expect(sent).not.toContain("S3ntinel-Bound-Value");
+    expect(sent).toContain(REDACTION_MASK);
+    const seen: unknown[] = [];
+    const judge = new JevJudgmentGateway(store, (async (a: unknown) => (seen.push(a), {})) as never);
+    await judge.systemOne({ state: { page: "shows S3ntinel-Bound-Value" } as never, questions: {} });
+    expect(JSON.stringify(seen)).not.toContain("S3ntinel-Bound-Value");
+  });
+
+  it.each(["2", "1", "Save", "token", "short"])("%s is too short to be a secret here: never masked, and nothing throws", async (value) => {
+    scope(value);
+    const sent = await genSent(rank("Save 2 token 1 «redacted»"));
+    expect(sent).toContain("Save 2 token 1 «redacted»");
+  });
+
+  it("a run's values go with it: a later run's call is untouched", async () => {
+    const first = scope("Longer-Value-Here");
+    first.release();
+    expect(await genSent(rank("Longer-Value-Here"))).toContain("Longer-Value-Here");
+  });
+
+  it("longest first: a secret that starts another leaves no tail", async () => {
+    scope("SECRETPART", "SECRETPARTTAILSECRET");
+    expect(await genSent(rank("SECRETPARTTAILSECRET"))).not.toContain("TAILSECRET");
+  });
+
+  it("too many live values: the call fails rather than passing one in clear", async () => {
+    scope(...Array.from({ length: 2001 }, (_, i) => `live-secret-${i}`));
+    await expect(genSent(rank("live-secret-0"))).rejects.toBeInstanceOf(ModelSecretsFullError);
+  });
+
+  it("masks a value in an object key too", () => {
+    scope("S3ntinel-Bound-Value");
+    expect(JSON.stringify(redactModelPayload({ "S3ntinel-Bound-Value": "x" }))).not.toContain("S3ntinel-Bound-Value");
+  });
+
+  it("a registered value that survives masking stops the call", async () => {
+    scope("1234567890");
+    expect(() => redactModelPayload({ n: 1234567890 })).toThrow(SecretLeakError);
+    await expect(genSent({ ...rank("x"), controls: [{ index: 1234567890, summary: "x" }] })).rejects.toBeInstanceOf(SecretLeakError);
+  });
+
+  it.each(["redacted", "«redacted»", "x«redacted»y"])("%s can't be told from the mask, so it isn't held, and nothing throws", (value) => {
+    scope(value);
+    expect(redactModelPayload({ a: "«redacted»" })).toEqual({ a: "«redacted»" });
+  });
+
+  it("with nothing live the payload passes untouched", () => {
+    const p = { a: "plain" };
+    expect(redactModelPayload(p)).toBe(p);
   });
 });

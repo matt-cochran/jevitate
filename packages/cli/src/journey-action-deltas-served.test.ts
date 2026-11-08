@@ -44,15 +44,18 @@ afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-/** The Save step's stored delta says it changed nothing — the replay will show otherwise. */
-function journey(): Journey {
+/**
+ * The Save step's stored delta says it changed nothing — the replay will show otherwise. #809: a
+ * secret-bound Journey is never annotated, so annotate drafts from a twin whose parameter is not secret.
+ */
+function journey(param = "apiToken", secret = true): Journey {
   return {
     metadata: {
       id: "token",
       name: "Save an API token",
       promoted: false,
-      params: ["apiToken"],
-      parameters: [{ name: "apiToken", description: "the token", secret: true }],
+      params: [param],
+      parameters: [{ name: param, description: "the token", secret }],
       createdAtIso: "2026-09-28T00:00:00.000Z",
     },
     recording: {
@@ -64,8 +67,8 @@ function journey(): Journey {
           steps: [
             { step: { kind: "navigate", url: "/app", expect: { kind: "visible", target: { role: "heading", name: "Settings" } } }, objective: "Open the settings" },
             {
-              step: { kind: "fill", target: { label: "API token" }, value: { var: "apiToken" }, expect: { kind: "visible", target: { label: "API token" } } },
-              variableName: "apiToken",
+              step: { kind: "fill", target: { label: "API token" }, value: { var: param }, expect: { kind: "visible", target: { label: "API token" } } },
+              variableName: param,
               objective: "Enter the token",
             },
             {
@@ -132,7 +135,13 @@ describe("--action-deltas on replays (#303, served)", () => {
   it("journey annotate: the expected result is drafted by code from the step's delta (no model call, nothing secret)", async () => {
     const journeysDir = join(dir, "annotate");
     await new FsJourneyStore(journeysDir).put(journey());
-    const r = await cli(journeysDir, ["journey", "annotate", "token", "--param", `apiToken=${SECRET}`, "--action-deltas", "--fake-ai", "--json"]);
+    const refused = await cli(journeysDir, ["journey", "annotate", "token", "--param", `apiToken=${SECRET}`, "--action-deltas", "--fake-ai", "--json"]);
+    expect(refused.exitCode).toBe(2);
+    expect(JSON.parse(refused.out)).toMatchObject({ ok: false, error: { code: "E_MODEL_REFUSED_SECRET" } });
+    expect(refused.out).not.toContain(SECRET);
+
+    await new FsJourneyStore(journeysDir).put(journey("label", false));
+    const r = await cli(journeysDir, ["journey", "annotate", "token", "--param", "label=demo-label", "--action-deltas", "--fake-ai", "--json"]);
     expect(r.exitCode).toBe(0);
     const draftPath = (JSON.parse(r.out) as { data: { draftPath: string } }).data.draftPath;
     const raw = await readFile(draftPath, "utf8");

@@ -211,6 +211,7 @@ describe("#543 http end-state check on a split-origin app (served)", () => {
   });
 
   it("resets the outbox before every replay (the base and each mutation)", () => {
-    expect(clears).toBe(1 + verifyReport.data.mutations.length);
+    // The base, the independence replay and each mutation at least; a control or a closing replay resets it too.
+    expect(clears).toBeGreaterThanOrEqual(2 + verifyReport.data.mutations.length);
   });
 });

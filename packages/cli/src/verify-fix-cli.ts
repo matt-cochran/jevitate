@@ -3,7 +3,7 @@ import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js"
 import { Command } from "commander";
 import { UnauthorizedExploreTargetError } from "@jevitate/explore";
 import { ok, fail, type JsonEnvelope } from "./envelope.js";
-import { runVerifyFix, VerifyFixInputError } from "./verify-fix-api.js";
+import { runVerifyFix, verifyFixArtifactPath, VerifyFixInputError } from "./verify-fix-api.js";
 import { LedgerError, ledgerEntryFor } from "./ledger-api.js";
 import { TargetConfigError, loadTargetsFile } from "./target-config.js";
 import { withFixtureFlags, type FixtureFlags } from "./fixture-cli.js";
@@ -11,7 +11,10 @@ import { LITERAL_SECRET_WARNING, SecretArgError, resolveSecretArgs } from "./sec
 import { withEngine } from "./engine.js";
 import { positiveIntArg } from "./cli-args.js";
 import { formatVerifyFixHuman } from "./cli-output.js";
-import { type EmulationSpec } from "@jevitate/playwright";
+import { DEFAULT_ADMISSION_TIMEOUT_MS, type EmulationSpec } from "@jevitate/playwright";
+import { clock } from "@jevitate/domain";
+import { artifactStamp } from "./mission-journal.js";
+import { redactSensitiveText, registerTerminalResult, type TerminalResultDeps } from "./terminal-result.js";
 import {
   type CliDeps,
   type BrowserLaunchFlags,
@@ -30,8 +33,22 @@ import {
   resolveDbPath,
 } from "./cli-shared.js";
 
+const MIN_MASKED_PARAM_LENGTH = 6;
+
+/**
+ * #767: how long one replay may run without a progress report. Progress comes only when a replay
+ * opens, so this has to outlast a long but legal replay of a many-step recording: it is a backstop
+ * for a run that has stopped, not a measure of a slow one. Added to the 300 s machine-slot admission
+ * bound, which can also fall between two `progress()` calls.
+ */
+const REPLAY_BOUND_MS = 30 * 60_000;
+
 /** Registers `jevitate verify-fix`. */
-export function registerVerifyFixCommands(program: Command, deps: CliDeps): void {
+export function registerVerifyFixCommands(
+  program: Command,
+  deps: CliDeps,
+  seams: { readonly runVerifyFix?: typeof runVerifyFix; readonly terminalDeps?: TerminalResultDeps } = {},
+): void {
   // `verify-fix`: replays a finding's reproduction N times in FRESH browsers (#74) and reports
   // whether its fingerprint still fires. Exit 0 fixed · 1 still reproduces · 2 inconclusive ·
   // 4 intermittent (fired on some but not all replays — never reported as fixed) · 64 usage error.
@@ -136,6 +153,11 @@ export function registerVerifyFixCommands(program: Command, deps: CliDeps): void
         emitVerify(fail("E_VERIFY_FIX_ARGS", err.message));
         return;
       }
+      // `--secret` is the channel for a secret. A `--param` may still hold one by mistake, so it's masked
+      // too, unless it's too short to be one: masking "acme" or "1" everywhere ruins the diagnosis.
+      const secrets = [...o.secret, ...Object.values(o.param).filter((v) => v.length >= MIN_MASKED_PARAM_LENGTH)];
+      // What this run's own error messages mask: `secrets`, plus what the run learns as it goes.
+      const known = [...secrets];
       let verifyFixEmulation: EmulationSpec | undefined;
       // #245: demo mode, resolved (a headed run without a display refused) before any browser opens.
       let browser: ReturnType<typeof browserRunFromFlags>;
@@ -150,24 +172,58 @@ export function registerVerifyFixCommands(program: Command, deps: CliDeps): void
           throw new Error(`two different fingerprints given (${positional} and --fingerprint ${o.fingerprint})`);
         }
       } catch (err) {
-        emitVerify(fail("E_VERIFY_FIX_ARGS", err instanceof Error ? err.message : String(err)));
+        emitVerify(fail("E_VERIFY_FIX_ARGS", redactSensitiveText(err instanceof Error ? err.message : String(err), known)));
         return;
       }
+      // #195: without --result, the fingerprint's ledger entry is the repro material (the run's output may be long gone).
+      let resultPath: string;
       try {
-        // #195: without --result, the fingerprint's ledger entry is the repro material (the run's output may be long gone).
-        const resultPath = o.result ?? ledgerEntryFor(fingerprint, o.regressionsDir);
-        const report = await runVerifyFix({
+        resultPath = o.result ?? ledgerEntryFor(fingerprint, o.regressionsDir);
+      } catch (err) {
+        if (err instanceof LedgerError) {
+          emitVerify(fail(err.code, redactSensitiveText(err.message, known)));
+          return;
+        }
+        emitVerify(fail("E_VERIFY_FIX", redactSensitiveText(String(err instanceof Error ? err.message : err), known)));
+        return;
+      }
+      // #767: one stamped path, shared by the report writer and the terminal layer, so a signal or
+      // parent death overwrites the same artifact instead of leaving two.
+      const stamp = artifactStamp(clock.nowIso());
+      const vfArtifact = verifyFixArtifactPath(resultPath, stamp);
+      const handle = registerTerminalResult(
+        {
+          command: "verify-fix",
+          json: o.json === true,
+          secrets,
+          artifactPath: vfArtifact,
+          inactivityMs: DEFAULT_ADMISSION_TIMEOUT_MS + REPLAY_BOUND_MS,
+          progress: { phase: "replay" },
+        },
+        seams.terminalDeps,
+      );
+      // A property call, so surface-wiring.test.ts still sees this surface's call to the API.
+      const api = { runVerifyFix: seams.runVerifyFix ?? runVerifyFix };
+      try {
+        const report = await api.runVerifyFix({
           targets: loadTargetsFile(deps.explore?.targetsConfigPath),
           resultPath,
           fingerprint,
+          resultArtifact: true,
+          resultStamp: stamp,
+          onReplay: (replay) => handle.progress({ replay }),
+          onSecrets: (values) => {
+            known.push(...values);
+            handle.addSecrets(values);
+          },
           ...(o.storageState !== undefined ? { storageState: o.storageState } : {}),
           ...(o.replays !== undefined ? { replays: Number(o.replays) } : {}),
           ...(o.invariants.length > 0 ? { invariantFiles: o.invariants } : {}),
           ...(o.allowLogCmd === undefined ? {} : { allowLogCmd: o.allowLogCmd }),
           ...(o.hangReplayWrites === true ? { hangReplayWrites: true } : {}),
           fixtureFlags: o,
-          secrets: [...o.secret, ...Object.values(o.param).filter((v) => v !== "")],
-          journeyPrefix: { params: o.param, dbPath: resolveDbPath(deps), environmentSeams: environmentSeams(deps) },
+          secrets,
+          journeyPrefix: { params: o.param, warn: (line) => program.configureOutput().writeErr?.(line), dbPath: resolveDbPath(deps), environmentSeams: environmentSeams(deps) },
           browserPortFactory: deps.explore?.browserPortFactory,
           browser,
           ...(screenshots === undefined ? {} : { screenshots }),
@@ -178,13 +234,18 @@ export function registerVerifyFixCommands(program: Command, deps: CliDeps): void
           ...(o.allowEmulationOverride === undefined ? {} : { allowEmulationOverride: o.allowEmulationOverride }),
         });
         emitVerify(ok(withEngine(report)), report.exitCode);
+        handle.complete();
       } catch (err) {
         if (err instanceof VerifyFixInputError || err instanceof TargetConfigError || err instanceof LedgerError) {
-          emitVerify(fail(err.code, err.message));
+          emitVerify(fail(err.code, redactSensitiveText(err.message, known)));
+          handle.complete();
         } else if (err instanceof UnauthorizedExploreTargetError) {
-          emitVerify(fail("E_UNAUTHORIZED_EXPLORE_TARGET", err.message));
+          emitVerify(fail("E_UNAUTHORIZED_EXPLORE_TARGET", redactSensitiveText(err.message, known)));
+          handle.complete();
         } else {
-          emitVerify(fail("E_VERIFY_FIX", String(err instanceof Error ? err.message : err)));
+          // #767: an internal error is the terminal layer's: it redacts, writes one artifact, emits
+          // one envelope and exits. (Typed input errors keep their own code and write no artifact.)
+          handle.fail(err);
         }
       }
     }));

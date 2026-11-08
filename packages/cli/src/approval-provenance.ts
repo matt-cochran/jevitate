@@ -92,16 +92,31 @@ export function osUserName(): string | undefined {
 }
 
 // ── The MCP channel ──────────────────────────────────────────────────────────────────────────
-const mcpScope = new AsyncLocalStorage<true>();
+/** #789: what one MCP tool call holds beside its result: the run guard's refusal, however a command handled the error. */
+export interface McpInvocation {
+  refusal?: Error;
+}
+
+const mcpScope = new AsyncLocalStorage<McpInvocation>();
 
 /** Runs `fn` as an MCP tool call: every approval it makes is recorded as channel `mcp` (mcp-cli-runner.ts). */
-export function runAsMcpInvocation<T>(fn: () => Promise<T>): Promise<T> {
-  return mcpScope.run(true, fn);
+export function runAsMcpInvocation<T>(fn: () => Promise<T>, invocation: McpInvocation = {}): Promise<T> {
+  return mcpScope.run(invocation, fn);
 }
 
 /** True inside `runAsMcpInvocation`. */
 export function inMcpInvocation(): boolean {
-  return mcpScope.getStore() === true;
+  return mcpScope.getStore() !== undefined;
+}
+
+/** The tool call running here, to hold on to: a callback a browser runs later may be in another's async context. */
+export function currentMcpInvocation(): McpInvocation | undefined {
+  return mcpScope.getStore();
+}
+
+/** #789: records the invocation's first refusal, so the tool result reports it whatever the command made of the error. */
+export function noteMcpRefusal(refusal: Error, invocation: McpInvocation | undefined = mcpScope.getStore()): void {
+  if (invocation !== undefined && invocation.refusal === undefined) invocation.refusal = refusal;
 }
 
 // ── Confirmation ─────────────────────────────────────────────────────────────────────────────

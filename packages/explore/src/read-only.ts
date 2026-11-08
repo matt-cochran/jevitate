@@ -190,6 +190,15 @@ export interface BlockedWrite {
   readonly allowMismatch?: AllowOriginMismatch;
 }
 
+/** A `BlockedWrite.path`'s path alone: an off-origin one carries its origin. */
+function pathOfEndpoint(endpoint: string): string {
+  try {
+    return /^https?:\/\//i.test(endpoint) ? new URL(endpoint).pathname : endpoint;
+  } catch {
+    return endpoint;
+  }
+}
+
 export class ReadOnlyGuard {
   readonly #isWrite: WriteClassifier;
   readonly #mode: ReadOnlyMode;
@@ -206,6 +215,9 @@ export class ReadOnlyGuard {
   #armed = false;
   /** A model-chosen action's window is open (from its act until the page settled after it). */
   #inAction = false;
+  /** `METHOD /path` lines blocked outside any action window, until `releaseHeldLines`. */
+  readonly #heldLines = new Set<string>();
+  #heldLinesReleased = false;
   /** #402: how a held main-frame write navigation is stopped (default: answered `204` in the browser). */
   readonly #navigationWrites: "no-content" | "abort";
   readonly #startUrl: string | undefined;
@@ -252,6 +264,22 @@ export class ReadOnlyGuard {
     const was = this.#inAction;
     this.#inAction = false;
     return was;
+  }
+
+  /**
+   * A mutation proof: these `METHOD /path` lines stay blocked outside the action window too, along with
+   * every line blocked so far, so a client's retry of an aborted write does not get through later.
+   * Returns the lines now held.
+   */
+  holdLines(lines: readonly string[]): ReadonlySet<string> {
+    for (const line of lines) this.#heldLines.add(line);
+    for (const b of this.#blocked) this.#heldLines.add(`${b.method} ${pathOfEndpoint(b.path)}`);
+    return this.#heldLines;
+  }
+
+  /** While true, held lines go through: another step records the same write as its own. */
+  releaseHeldLines(released: boolean): void {
+    this.#heldLinesReleased = released;
   }
 
   /** Why an op on a control may not run under this guard, or null when it may. */
@@ -350,7 +378,8 @@ export class ReadOnlyGuard {
       return;
     }
     const held = this.#mode === "read-only" || isDestructiveRequest(request.method(), path);
-    if (!write || !held || thirdParty || !this.#inAction || this.#exempt(path, request.url())) {
+    const heldLine = !this.#heldLinesReleased && this.#heldLines.has(`${request.method().toUpperCase()} ${path}`);
+    if (!write || !held || thirdParty || (!this.#inAction && !heldLine) || this.#exempt(path, request.url())) {
       await route.fallback().catch(() => undefined);
       return;
     }

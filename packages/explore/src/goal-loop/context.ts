@@ -94,6 +94,8 @@ export interface RunContext {
   stop: StopReason;
   failure: MissionFailure | undefined;
   lastActedOp: string | null;
+  /** #769: the last turn was a refused or deferred `blocked`, so it took no action to judge progress by. */
+  refusedTurn: boolean;
   /** #172: did the last scroll move the page, and how many moved scrolls in a row on one state. */
   lastScrollMoved: boolean;
   movingScrolls: number;

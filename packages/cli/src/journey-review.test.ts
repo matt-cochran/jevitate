@@ -80,6 +80,35 @@ describe("#432 buildJourneyReview", () => {
     expect(review.summary.goal).toBe("Buy the Pro plan");
   });
 
+  it("uses the target's explicit read-request policy consistently for lint and displayed side effects", () => {
+    const journey = fixtureJourney({ endState: [] });
+    journey.recording.pages = [{
+      url: `${SITE}/companies`,
+      steps: [{
+        step: {
+          kind: "click",
+          target: { testId: "open-companies" },
+          expect: { kind: "visible", target: { testId: "companies-table" } },
+        },
+        objective: "Open the companies table",
+        expectedResult: "The companies table is visible",
+        expectRequests: [{ kind: "responseStatus", method: "POST", pathGlob: "/api/v1/tool/crm-companies/query", status: { class: 2 } }],
+        delta: {
+          verdict: "relevant-change",
+          why: "companies loaded",
+          changes: ["companies table visible"],
+          requests: ["POST /api/v1/tool/crm-companies/query → 200"],
+          overheadMs: 1,
+        },
+      }],
+    }];
+
+    const reviewed = buildJourneyReview(journey, { safety: { readRequests: ["/api/v1/tool/crm-companies/query"] } });
+
+    expect(reviewed.proof.lint.findings.some((finding) => finding.rule === "no-persistence-check")).toBe(false);
+    expect(reviewed.sideEffects.writeRequests).toEqual([]);
+  });
+
   it("summary: carries the success criteria with their checks", () => {
     expect(review.summary.successCriteria).toEqual([{ description: "The order is confirmed", check: "textIncludes:role=status|Order confirmed" }]);
   });

@@ -1,3 +1,4 @@
+import { isSecretName } from "@jevitate/journey";
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { redactText, redactUrl } from "@jevitate/ai-core";
@@ -688,6 +689,7 @@ export class MissionFixtures {
   #active = false;
   #cycles = 0;
   readonly #log: FixtureStepLog[] = [];
+  #restoreFailed = false;
 
   constructor(opts: FixtureRunOptions) {
     if (opts.hooks !== undefined && (opts.hooks.before !== undefined || opts.hooks.after !== undefined) && opts.allowShellHooks !== true) {
@@ -755,7 +757,15 @@ export class MissionFixtures {
   secrets(): string[] {
     const values = [...this.#secretNames].map((n) => this.#values[n]);
     values.push(...[...this.#restoreSecretNames].map((n) => this.#restoreValues[n]));
-    return values.filter((v): v is string => v !== undefined && v !== "");
+    // An output named like a credential is one, listed in secretOutputs or not (as an `extract` output is, #564).
+    values.push(...Object.entries(this.#values).filter(([k]) => isSecretName(k)).map(([, v]) => v));
+    values.push(...Object.entries(this.#restoreValues).filter(([k]) => isSecretName(k)).map(([, v]) => v));
+    return [...new Set(values.filter((v): v is string => v !== undefined && v !== ""))];
+  }
+
+  /** The public outputs a result or artifact may hold: no credential-named value. */
+  #reportedOutputs(): Record<string, string> {
+    return Object.fromEntries(Object.entries(this.publicOutputs()).filter(([k]) => !isSecretName(k)));
   }
 
   #redact(text: string): string {
@@ -771,7 +781,7 @@ export class MissionFixtures {
     return {
       identity: this.identity(),
       specHash: this.#specHash,
-      outputs: this.publicOutputs(),
+      outputs: this.#reportedOutputs(),
       secretOutputs: [...this.#secretNames].sort(),
       cycles: this.#cycles,
       log: [...this.#log],
@@ -793,7 +803,7 @@ export class MissionFixtures {
       specHash: this.#specHash,
       ...(this.#opts.spec === undefined ? {} : { spec: this.#opts.spec }),
       ...(hooks === undefined ? {} : { hooks }),
-      outputs: this.publicOutputs(),
+      outputs: this.#reportedOutputs(),
       secretOutputs: [...this.#secretNames].sort(),
       ...(identities === undefined ? {} : { identities }),
     };
@@ -813,20 +823,28 @@ export class MissionFixtures {
     }
   }
 
-  /** Restores the state the last `setup()` created. Never throws: every step is logged. */
+  /** A restore step or the `--after` hook has failed. Sticky: what it left behind stays. */
+  restoreFailed(): boolean {
+    return this.#restoreFailed;
+  }
+
+  /** Restores the state the last `setup()` created. Never throws: every step is logged, and a failure shows in `restoreFailed()`. */
   async restore(): Promise<void> {
     // #560: each restore pass starts with no restore bindings, so `reset()` never reuses a stale id.
     this.#restoreValues = {};
     this.#restoreSecretNames = new Set();
     if (!this.#active) return;
     this.#active = false;
-    for (const [i, step] of (this.#opts.spec?.restore ?? []).entries()) await this.#runHttp(step, "restore", i);
+    for (const [i, step] of (this.#opts.spec?.restore ?? []).entries()) {
+      if ((await this.#runHttp(step, "restore", i)) !== null) this.#restoreFailed = true;
+    }
     const after = this.#opts.hooks?.after;
     if (after !== undefined) {
       const started = clock.now();
       const r = await runHook(after, this.#opts.hooks?.timeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS, JSON.stringify({ vars: this.publicOutputs() }), {
         JEVITATE_FIXTURE_PHASE: "restore",
       });
+      if (r.timedOut || r.exitCode !== 0) this.#restoreFailed = true;
       this.#log.push({
         phase: "restore",
         kind: "shell",

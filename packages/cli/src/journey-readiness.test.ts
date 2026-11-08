@@ -268,6 +268,20 @@ describe("journey readiness", () => {
     expect(checkOf(r, "proof", "publish")?.state).toBe("pass");
   });
 
+  it("prove classifies writes with the target's read requests, as its review did (#763)", async () => {
+    await store.put(journey("publish"));
+    const site = journey("publish").recording.site;
+    const targetsFile = join(journeysDir, "targets.json");
+    await writeFile(targetsFile, JSON.stringify({ [new URL(site).origin]: { safety: { readRequests: ["/api/read"] } } }));
+    const verify = vi.fn(async () => ({}));
+    const run = vi.fn(async () => ({ outcome: "ok" }));
+    await receipt(
+      { id: "publish", mode: "prove", baseUrl: "https://example.test", journeysDir, targetsFile },
+      { review: reviewDep(), run: run as unknown as Run, verify: verify as unknown as Verify },
+    );
+    expect(verify.mock.calls[0]?.[0 as never]).toMatchObject({ readRequests: ["/api/read"] });
+  });
+
   it("a param value never reaches the receipt", async () => {
     await store.put(paramJourney("publish"));
     const run = vi.fn(async () => ({ outcome: "ok" }));

@@ -1,3 +1,5 @@
+import type { Journey } from "@jevitate/journey";
+import { journeyReviewHash } from "./journey-review.js";
 import { describe, expect, it } from "vitest";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,10 +19,13 @@ import { buildMcpTools } from "./mcp-api.js";
 const ORIGIN = "https://shop.example.test";
 
 async function seed(dir: string): Promise<void> {
-  await new JourneyRegistry(new FsJourneyStore(dir)).put({
+  const journey = {
     metadata: { id: "browse", name: "browse", promoted: true, params: [], createdAtIso: "2026-09-25T00:00:00Z" },
     recording: { version: "1", site: ORIGIN, pages: [] },
-  } as never);
+  } as never as Journey;
+  // #788: MCP runs a promoted Journey whose approval is current.
+  journey.metadata.approval = { contentHash: journeyReviewHash(journey), at: "2026-09-25T00:00:00Z" };
+  await new JourneyRegistry(new FsJourneyStore(dir)).put(journey);
 }
 
 function harness(dbPath: string) {

@@ -273,7 +273,8 @@ test("CLI journey chain forwards --param so the producer param validation passes
 
   const envelope = await cliEnvelope(["journey", "chain", "--from", "discover", "--to", "reply", "--requests", requests, "--journeys-dir", d, "--param", "threadId=thread-001", "--param", "replyIdentity=acct-a", "--json"]);
 
-  expect((envelope.error as { code?: string }).code).toBe("E_CHAIN_NOT_PROMOTED");
+  // This runner is the MCP mirror's (`makeInProcessCliRunner`), so #788's gate answers, after the param check.
+  expect((envelope.error as { code?: string }).code).toBe("E_JOURNEY_NOT_PROMOTED");
 });
 
 test("CLI journey chain refuses an unknown --param with E_CHAIN_PARAMS", async () => {

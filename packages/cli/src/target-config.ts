@@ -94,6 +94,22 @@ export interface TargetConfig {
    * the repo's `.jevitate/environments.json` refuses any session or secret key.
    */
   readonly personas?: Readonly<Record<string, TargetPersona>>;
+  /**
+   * #789: what an MCP-driven run may do on this origin, beyond the default refusals. Only this file,
+   * written by a person, carries it: no MCP tool has an argument for it or may write this file
+   * (`site_policy` and `mission_targets` are agent-writable, so neither can be the switch).
+   */
+  readonly mcpRun?: McpRunAllowances;
+}
+
+/** #789: the `mcpRun` section of a target (see `TargetConfig.mcpRun`). */
+export interface McpRunAllowances {
+  /** Lets an MCP run click what the shared safety policy refuses: session-ending, destructive and paid controls. `safety.deny` still holds. */
+  readonly allowDestructive?: boolean;
+  /** Origins an MCP run may send a write to beyond the run's allowlist: exact http(s) origins, no wildcard. */
+  readonly allowOffAllowlistWrites?: readonly string[];
+  /** Lets an MCP run replay on an environment flagged `production: true`. */
+  readonly allowProduction?: boolean;
 }
 
 /** A persona's session on one origin (#247). */
@@ -113,6 +129,35 @@ function strings(v: unknown, where: string): string[] {
     throw new TargetConfigError(`${where} must be an array of strings`);
   }
   return v;
+}
+
+/** #789: strict, as it lifts a refusal: an unknown key or a wrong type refuses the file. */
+function parseMcpRun(v: unknown, where: string): McpRunAllowances {
+  if (v === null || typeof v !== "object" || Array.isArray(v)) throw new TargetConfigError(`${where} must be an object`);
+  const o = v as Record<string, unknown>;
+  for (const k of Object.keys(o)) {
+    if (k !== "allowDestructive" && k !== "allowOffAllowlistWrites" && k !== "allowProduction") throw new TargetConfigError(`${where}.${k}: unknown key (allowed: allowDestructive, allowOffAllowlistWrites, allowProduction)`);
+  }
+  for (const k of ["allowDestructive", "allowProduction"] as const) {
+    if (o[k] !== undefined && typeof o[k] !== "boolean") throw new TargetConfigError(`${where}.${k} must be true or false`);
+  }
+  const origins = o.allowOffAllowlistWrites === undefined ? undefined : strings(o.allowOffAllowlistWrites, `${where}.allowOffAllowlistWrites`);
+  origins?.forEach((origin, i) => {
+    let parsed: URL | undefined;
+    try {
+      parsed = new URL(origin);
+    } catch {
+      parsed = undefined;
+    }
+    if (parsed === undefined || (parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.origin !== origin) {
+      throw new TargetConfigError(`${where}.allowOffAllowlistWrites[${i}] must be an exact http(s) origin such as https://other.example.test`);
+    }
+  });
+  return {
+    ...(o.allowDestructive === undefined ? {} : { allowDestructive: o.allowDestructive as boolean }),
+    ...(origins === undefined ? {} : { allowOffAllowlistWrites: origins }),
+    ...(o.allowProduction === undefined ? {} : { allowProduction: o.allowProduction as boolean }),
+  };
 }
 
 function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
@@ -137,7 +182,9 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
     logCorrelationHeaders?: string[];
     logIdPatterns?: string[];
     personas?: Record<string, TargetPersona>;
+    mcpRun?: McpRunAllowances;
   } = {};
+  if (o.mcpRun !== undefined) out.mcpRun = parseMcpRun(o.mcpRun, `${where}.mcpRun`);
   if (o.storageState !== undefined) {
     if (typeof o.storageState !== "string" || o.storageState === "") throw new TargetConfigError(`${where}.storageState must be a file path`);
     out.storageState = resolvePath(baseDir, o.storageState);
@@ -271,6 +318,30 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
   return out;
 }
 
+/**
+ * #763: the target's `safety.readRequests` for a Journey's recorded site, for every write classifier that
+ * reads the Journey: lint, verify and readiness, as `journey review` resolves its safety config. A site
+ * with no resolvable origin has no target config, so no read-request policy.
+ */
+export function journeyReadRequests(journey: { readonly recording: { readonly site: string } }, opts: { readonly targetsFile?: string } = {}): readonly string[] | undefined {
+  let origin: string;
+  try {
+    origin = new URL(journey.recording.site).origin;
+  } catch {
+    return undefined;
+  }
+  return resolveTargetConfig(loadTargetsFile(opts.targetsFile), origin).safety?.readRequests;
+}
+
+/** `journeyReadRequests` for advice about a proof, where a targets file that cannot be read is another command's refusal. */
+export function advisoryReadRequests(journey: { readonly recording: { readonly site: string } }): readonly string[] | undefined {
+  try {
+    return journeyReadRequests(journey);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Reads the whole targets file, keyed by origin. */
 export function loadTargetsFile(path = resolveDataDir(["targets.json"])): Readonly<Record<string, TargetConfig>> {
   let raw: string;
@@ -321,13 +392,29 @@ export interface TargetFlags {
   readonly dialogs?: DialogPolicy;
 }
 
+/**
+ * An origin as this code compares origins: lower case and no default port (as `URL` has it), and no
+ * trailing dot on the host, so an alias of the same host matches the same entry. An IP, or another
+ * scheme, can't be known to be the same site. Undefined for what is no URL.
+ */
+export function canonicalOrigin(url: string): string | undefined {
+  try {
+    const u = new URL(url);
+    if (u.hostname.endsWith(".")) u.hostname = u.hostname.replace(/\.+$/, "");
+    return u.origin;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The config for one origin: the file's entry, with flag patterns ADDED and flag numbers winning. */
 export function resolveTargetConfig(
   file: Readonly<Record<string, TargetConfig>>,
   origin: string,
   flags: TargetFlags = {},
 ): TargetConfig {
-  const base = file[origin] ?? {};
+  const wanted = canonicalOrigin(origin);
+  const base = file[origin] ?? Object.entries(file).find(([key]) => wanted !== undefined && canonicalOrigin(key) === wanted)?.[1] ?? {};
   const ignoreRequests = [...(base.settle?.ignoreRequests ?? []), ...(flags.settleIgnore ?? [])];
   const longPollMs = flags.longPollMs ?? base.settle?.longPollMs;
   const devServer = flags.devServer === true || base.settle?.devServer === true;

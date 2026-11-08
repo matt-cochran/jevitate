@@ -1,5 +1,6 @@
 /** `createRunContext`: reply/wait limits, seen states, the last mutation and the perception options (#192) (#500: moved verbatim out of `context.ts`). */
 import { textMatcher } from "../../settle-config.js";
+import { maskPageReads } from "../../status.js";
 import { DEFAULT_STALL_MS } from "../../hang-repro.js";
 import { REPLY_CEILING_MS, REPLY_QUIET_MS, REPLY_WAIT_MS } from "../../conversation.js";
 import { REPLY_MAX_CHARS, WAIT_OP_MS } from "../limits.js";
@@ -30,6 +31,8 @@ export function initPerception(ctx: MutableRunContext, cfg: ExploreConfig): void
     ...(cfg.hangs === undefined ? {} : { hangConfig: cfg.hangs }),
     ...(cfg.timingConfig === undefined ? {} : { timingConfig: cfg.timingConfig }),
   };
+  // A read before the first perception is masked too: these reads learn the secrets only from this.
+  maskPageReads(ctx.page, ctx.secrets);
   ctx.ignoreNoProgress = textMatcher(cfg.hangs?.ignoreNoProgress);
   ctx.stallMs = cfg.stallMs ?? DEFAULT_STALL_MS;
 }

@@ -2,6 +2,7 @@ import { readFileSync, readdirSync, rmSync, rmdirSync, statSync } from "node:fs"
 import { join } from "node:path";
 import { resolveDataDir } from "./data-dir.js";
 import { clock } from "@jevitate/domain";
+import { isLiveVerifyReceipt } from "./journey-verify-checkpoint.js";
 
 /**
  * Retention for run output under `.jevitate/logs/<date>/` (0.2.0): a run older than `ttlDays` is
@@ -57,6 +58,28 @@ interface Run {
   readonly mtimeMs: number;
 }
 
+/** #787: a proof's durable progress: one receipt per Journey, replaced as the proof moves. */
+const VERIFY_PROGRESS_DIR = "verify-progress";
+
+/**
+ * #787: the proof receipts under `logs/verify-progress/`, each its own run. A receipt whose verifier is
+ * still live stays, however old (its proof may be mid-way). One that cannot be read is judged by age.
+ */
+function verifyProgressIn(root: string): Run[] {
+  const dir = join(root, VERIFY_PROGRESS_DIR);
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch (e) {
+    if (typeof e === "object" && e !== null && "code" in e && e.code === "ENOENT") return [];
+    throw e;
+  }
+  return names.flatMap((name) => {
+    const path = join(dir, name);
+    return isLiveVerifyReceipt(path) ? [] : [{ key: `${VERIFY_PROGRESS_DIR}/${name}`, paths: [path], mtimeMs: statSync(path).mtimeMs }];
+  });
+}
+
 function runsIn(root: string): { runs: Run[]; dateDirs: string[] } {
   let dates: string[];
   try {
@@ -90,14 +113,16 @@ export interface PruneReport {
 export function pruneLogs(root: string, retention: LogsRetention, opts: { readonly nowMs?: number; readonly dryRun?: boolean } = {}): PruneReport {
   const nowMs = opts.nowMs ?? clock.now();
   const { runs, dateDirs } = runsIn(root);
-  const newestFirst = [...runs].sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const receipts = verifyProgressIn(root);
   const cutoff = nowMs - retention.ttlDays * 86_400_000;
-  const doomed = newestFirst.slice(retention.keepLatest).filter((r) => r.mtimeMs < cutoff);
+  // Receipts keep their own `keepLatest`: a project's many proofs never crowd out its runs, or the reverse.
+  const expired = (pool: readonly Run[]): Run[] => [...pool].sort((a, b) => b.mtimeMs - a.mtimeMs).slice(retention.keepLatest).filter((r) => r.mtimeMs < cutoff);
+  const doomed = [...expired(runs), ...expired(receipts)];
   if (opts.dryRun !== true) {
     for (const r of doomed) for (const p of r.paths) rmSync(p, { recursive: true, force: true });
     for (const d of dateDirs) {
       if (readdirSync(d).length === 0) rmdirSync(d);
     }
   }
-  return { root, removed: doomed.map((r) => r.key).sort(), keptRuns: runs.length - doomed.length };
+  return { root, removed: doomed.map((r) => r.key).sort(), keptRuns: runs.length + receipts.length - doomed.length };
 }

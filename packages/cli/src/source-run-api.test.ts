@@ -18,6 +18,8 @@ import { safeRunPolicy } from "@jevitate/domain";
 import { addSource, trustJourney, type SourceApiDeps } from "./source-api.js";
 import { runSourceJourney, realResolvedJourneyRunner, type RunResolvedJourney } from "./source-run-api.js";
 import { JourneyRequiresAuthError } from "./journey-api.js";
+import { runAsMcpInvocation } from "./approval-provenance.js";
+import { SECRET_PARAM_OVER_MCP, SecretParamOverMcpError } from "./secret-params.js";
 
 const ORIGIN = "https://shop.test";
 
@@ -250,6 +252,39 @@ describe("#399 runSourceJourney: a secret navigate param never comes back", () =
     const err = await runSourceJourney({ ...deps, runJourney: crashing }, { sourceName: "shop", journeyId: "accept", params: { inviteToken: SECRET } }).catch((e: unknown) => e as Error);
     expect(err.message).toContain("crashed at");
     expect(err.message).not.toContain("inv-tok");
+  });
+});
+
+describe("runSourceJourney: a secret parameter's value and the two surfaces", () => {
+  const VALUE = "inv-tok-sentinel";
+  const seeded = async (): Promise<SourceApiDeps & { runJourney: RunResolvedJourney; calls: () => number }> => {
+    const s = await makeStores();
+    const j = sharedJourney("accept");
+    const secretJourney = { ...j, metadata: { ...j.metadata, parameters: [{ name: "secret1", secret: true }] } };
+    const { git } = makeFakeGit((d) => seedRemote(d, [secretJourney]));
+    const spy = makeRunnerSpy();
+    const deps = { sourcesDir: s.sourcesDir, lockPath: s.lockPath, trust: s.trust, ack: s.ack, git, runJourney: spy.runJourney, calls: () => spy.calls.length };
+    await addSource(deps, { name: "shop", gitUrl: "https://git.test/shop.git", acceptTou: true, ackedBy: "matthew" });
+    return deps;
+  };
+
+  test("under an MCP invocation it is refused by name, before the runner", async () => {
+    const deps = await seeded();
+    const err = await runAsMcpInvocation(() => runSourceJourney(deps, { sourceName: "shop", journeyId: "accept", params: { secret1: VALUE } })).catch((e: unknown) => e as SecretParamOverMcpError);
+    expect(err).toBeInstanceOf(SecretParamOverMcpError);
+    expect((err as SecretParamOverMcpError).code).toBe(SECRET_PARAM_OVER_MCP);
+    expect((err as SecretParamOverMcpError).message).toContain("secret1");
+    expect((err as SecretParamOverMcpError).message).not.toContain(VALUE);
+    expect(deps.calls()).toBe(0);
+  });
+
+  test("on the CLI it runs and warns, without the value", async () => {
+    const deps = await seeded();
+    const lines: string[] = [];
+    await runSourceJourney(deps, { sourceName: "shop", journeyId: "accept", params: { secret1: VALUE }, warn: (l) => lines.push(l) });
+    expect(deps.calls()).toBe(1);
+    expect(lines.join("")).toContain("secret1");
+    expect(lines.join("")).not.toContain(VALUE);
   });
 });
 

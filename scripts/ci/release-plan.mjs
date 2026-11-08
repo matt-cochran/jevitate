@@ -38,6 +38,9 @@ export function planRelease(f) {
   if (channel === undefined) return none(`${f.refType} ${f.refName} is not a release channel (staging, main, vX.Y.Z)`);
   if (f.pending > 0) {
     if (channel === "main" && f.refType !== "tag") return { mode: "version", needsArtifact: false, reason: `${f.pending} changeset(s) pending` };
+    if (channel === "staging" && !(f.event === "workflow_dispatch" && !f.publishInput)) {
+      throw new Error(`${f.pending} changeset(s) pending; version them on dev first (RELEASING.md)`);
+    }
     return none(`${f.pending} changeset(s) pending; version them first (RELEASING.md)`);
   }
   if (f.aliasVersion !== f.version) throw new Error(`jevitate is ${f.aliasVersion} but @jevitate/cli is ${f.version}; they release together`);

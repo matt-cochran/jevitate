@@ -18,6 +18,7 @@ export { runStep, SelectAlternativeUnavailableError, type SelectAlternative, typ
 export { waitForOutcome, type StepWait } from "./outcome-wait.js";
 export type { StepOutcome } from "./outcome.js";
 export { RecordingInterpreter, type StepObserver } from "./interpreter.js";
+export { ReplayRefusal, type ReplayActionGuard } from "./replay-guard.js";
 export type { InterpretResult, StepResolution } from "./interpret-result.js";
 export { BufferingSink } from "./sink.js";
 export type { RecordingSink, ToRecordingOptions } from "./sink.js";

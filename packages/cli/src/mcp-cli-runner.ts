@@ -1,6 +1,6 @@
 import { CommanderError, type Command } from "commander";
 import { EXIT_CODES } from "./exit-codes.js";
-import { runAsMcpInvocation } from "./approval-provenance.js";
+import { runAsMcpInvocation, type McpInvocation } from "./approval-provenance.js";
 
 /**
  * #255 — the CLI, in process, for the MCP tools that mirror a CLI command (mcp-cli-tools.ts).
@@ -20,6 +20,8 @@ import { runAsMcpInvocation } from "./approval-provenance.js";
  *   into a typed usage refusal (exit 64).
  * - `process.exitCode` (how every action reports its contract code) is saved, read and restored,
  *   and calls are serialised, so one call's code never leaks into another's or into the server's.
+ * - #787: a read that must answer while a long call holds the queue (`journey verify --status`) runs
+ *   beside it. It touches no shared state: only its own refusal sets an exit code, undone at once.
  * - #437: every call runs inside `runAsMcpInvocation`, so an approval it makes (`promote_journey`,
  *   `approve_demo`) never prompts and is recorded with provenance channel `mcp`.
  */
@@ -29,9 +31,11 @@ export interface CliRunOutcome {
   readonly stdout: string;
   /** The command's contract exit code (exit-codes.ts). */
   readonly exitCode: number;
+  /** #789: the run guard ended a replay in this call: the tool's answer, however the command handled the error. */
+  readonly refusal?: Error;
 }
 
-export type McpCliRunner = (argv: readonly string[]) => Promise<CliRunOutcome>;
+export type McpCliRunner = (argv: readonly string[], options?: { readonly unqueued?: boolean }) => Promise<CliRunOutcome>;
 
 function configureTree(cmd: Command, write: (s: string) => void, discard: (s: string) => void): void {
   cmd.exitOverride();
@@ -54,12 +58,14 @@ export function makeInProcessCliRunner(build: () => Command): McpCliRunner {
     );
     const saved = process.exitCode;
     process.exitCode = undefined;
+    const invocation: McpInvocation = {};
     try {
       // #437: an approval made inside an MCP tool call is recorded as channel `mcp` (an agent's).
-      await runAsMcpInvocation(() => program.parseAsync([...argv], { from: "user" }));
+      await runAsMcpInvocation(() => program.parseAsync([...argv], { from: "user" }), invocation);
       const code = process.exitCode as number | string | undefined;
-      return { stdout, exitCode: code === undefined ? 0 : Number(code) };
+      return { stdout, exitCode: code === undefined ? 0 : Number(code), ...(invocation.refusal === undefined ? {} : { refusal: invocation.refusal }) };
     } catch (err) {
+      if (invocation.refusal !== undefined) return { stdout, exitCode: EXIT_CODES.inconclusive, refusal: invocation.refusal };
       if (err instanceof CommanderError) {
         const envelope = { v: 1, ok: false, error: { code: "E_CLI_USAGE", message: err.message.replace(/^error: /, "") } };
         return { stdout: `${stdout}${JSON.stringify(envelope)}\n`, exitCode: EXIT_CODES.usage };
@@ -71,7 +77,31 @@ export function makeInProcessCliRunner(build: () => Command): McpCliRunner {
       process.exitCode = saved;
     }
   };
-  return (argv) => {
+  // Only file reads and resolved promises, so no call in the queue can run in between. A call's own exit code is never reset: it may hold the queue's.
+  const runBeside = async (argv: readonly string[]): Promise<CliRunOutcome> => {
+    let stdout = "";
+    const program = build();
+    configureTree(
+      program,
+      (s) => {
+        stdout += s;
+      },
+      () => undefined,
+    );
+    const held = process.exitCode;
+    try {
+      await runAsMcpInvocation(() => program.parseAsync([...argv], { from: "user" }));
+      return { stdout, exitCode: process.exitCode === held ? 0 : Number(process.exitCode) };
+    } catch (err) {
+      const usage = err instanceof CommanderError;
+      const envelope = { v: 1, ok: false, error: { code: usage ? "E_CLI_USAGE" : "E_CLI_INTERNAL", message: err instanceof Error ? err.message.replace(/^error: /, "") : String(err) } };
+      return { stdout: `${stdout}${JSON.stringify(envelope)}\n`, exitCode: usage ? EXIT_CODES.usage : EXIT_CODES.inconclusive };
+    } finally {
+      if (process.exitCode !== held) process.exitCode = held;
+    }
+  };
+  return (argv, options) => {
+    if (options?.unqueued === true) return runBeside(argv);
     const next = queue.then(() => runOne(argv));
     queue = next.catch(() => undefined);
     return next;

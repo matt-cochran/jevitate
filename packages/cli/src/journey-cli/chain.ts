@@ -1,3 +1,4 @@
+import { JourneyRunRefusedError } from "@jevitate/mcp-facade";
 import { existsSync, readFileSync } from "node:fs";
 import { Command } from "commander";
 import {
@@ -14,6 +15,7 @@ import {
   withEmulationFlags,
   writeRawResult,
 } from "../cli-shared.js";
+import { warnSecretParamsOnArgv } from "../secret-params.js";
 import {
   type EnvironmentFlags,
   environmentFromFlags,
@@ -60,6 +62,7 @@ export function registerJourneyChain(journey: Command, program: Command, deps: C
         allowDraft?: boolean;
         param: Record<string, string>;
       }>();
+      await warnSecretParamsOnArgv(program.configureOutput().writeErr, chainJourneysDir, [from, to], param);
       const { env: envName, baseUrl } = this.opts<EnvironmentFlags>();
       // #247: --env/--base-url choose where both runs go (unknown env / bad file → 64, nothing opened).
       let environment: ResolvedJourneyEnvironment | undefined;
@@ -127,6 +130,8 @@ export function registerJourneyChain(journey: Command, program: Command, deps: C
         process.exitCode = chainSucceeded(result) ? 0 : 1;
       } catch (err) {
         if (err instanceof JourneyChainError) {
+          emitJson(program, fail(err.code, err.message));
+        } else if (err instanceof JourneyRunRefusedError) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));

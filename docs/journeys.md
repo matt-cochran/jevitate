@@ -5,6 +5,12 @@ A **Journey** is Jevitate's deterministic, replayable browser flow: a Recording 
 nondeterministic, but a Journey replays the same way every time, and a replay never clicks a
 guess ([how replay finds elements](./verification.md#replay-finds-the-recorded-element-exactly)).
 
+A Journey is also a parameterized flow you can run: `journey run <id> --param k=v`, or MCP
+`run_journey`, does the real work (it types, clicks and sends real requests) and returns what it
+extracted. Its purpose is to prove that users can meet their objectives in your app. You can use it to
+automate a flow, to test one, or both. What stops a run from doing damage differs between MCP and the
+CLI: see [what guards a Journey run](./safety.md).
+
 ## Author a Journey from a goal (needs model keys)
 
 ```bash
@@ -16,8 +22,9 @@ jevitate journey run checkout
 ```
 
 The authored Journey carries its `--success` checks as its end state, so a replay fails when the
-flow stops reaching its goal. It is written unpromoted: promotion is always a deliberate human
-act. `--takes <n>` corroborates the flow over several takes.
+flow stops reaching its goal. It is written unpromoted. `journey promote` is a deliberate human act
+at a terminal; an agent can also promote over MCP (`promote_journey`), recorded as an agent's approval.
+MCP refuses to run an unpromoted Journey; the CLI runs it with a warning. `--takes <n>` corroborates the flow over several takes.
 
 `--success` is repeatable (every check must hold) and takes every kind `explore --success` takes:
 page checks (`textIncludes`, `valueEquals`, `count`, `attr`, `flashed`, …), `reloadThen:<check>`
@@ -120,10 +127,12 @@ absent and unchanged for 30.0s …`. Without `waitFor`, a step is checked exactl
 starts. The lint (`journey lint`) judges the `expect` itself; a waited `expect` that claims nothing
 is flagged like any other.
 
-Under `journey verify --mutate`, a waited claim on the mutated step (`skip:<n>`, `block-write:<n>`)
-waits at most its hang threshold plus 5 s (`stallMs`, default 30 s) instead of `maxMs`: the job was never
-started (or its writes were aborted), so the claim must fail, and the proof does not wait out the
-budget to show it. Waits on other steps, and under `stale-value`, keep their `maxMs`.
+Under `journey verify --mutate`, a waited claim from the mutated step on runs a little past what the base
+replay's claim took (1 s and a quarter more), or to its hang threshold plus 5 s if that is longer, and never
+past `maxMs`: a claim whose job never started must fail, and the proof does not wait out the budget to show
+it. A `progress` signal cannot end this wait, since the action that brings the signal may be what was
+mutated, so such a replay reports `it never held` rather than a hang, and names both limits: `(this replay's waitFor
+maxMs 188838; the Journey's is 1200000)`.
 
 ### Parameter-relative assertions
 
@@ -197,7 +206,9 @@ the author command takes the same run-shaping flags: `--secret`, `--secret-field
 hang flags, `--save-storage-state`, `--viewport`/`--device`/`--geolocation` and `--screenshots`.
 Reproduce whatever setup the goal run needed. A field that code typed (a `--secret-field` or
 `--totp` binding) is never kept in the Journey: it becomes a secret parameter (`secret1`, …,
-declared `secret: true`) that `journey run --param secret1=…` supplies.
+declared `secret: true`). At replay the same `--secret-field` binding supplies it
+([Secret parameters on a replay](#secret-parameters-on-a-replay)). `journey run` has no `--totp`, so a
+Journey authored with one takes the code through `--param` on the CLI and has no MCP path.
 
 Every take writes its own result, transcript and Recording (under `--out`, default
 `.jevitate/logs/<date>`). When the discovery take does not reach the goal, the `not-reached` result
@@ -211,10 +222,20 @@ prints the same.
 The lint reads a Journey; `journey verify --plan` previews the exact negative-proof graph without a
 browser, target, session, fixture or hook, and `journey verify --mutate` runs it. Inspect the plan
 before a long proof: it lists every mutation, its paired assertions, unpaired assertions and the
-minimum replay count (the base plus one per mutation; relaxed or targeted proofs may add replays).
+minimum replay count (the base, an independence replay, one per mutation and a closing replay; relaxed and
+targeted replays, controls and re-runs add to it, and a proof that fails or is tainted partway stops sooner).
 Parameter values help derive the plan but are never returned. An assertion is evidence only if it
-**fails** when the outcome is absent, so the proof replays the Journey once as recorded (it must
-pass), then once per mutation, and checks that each mutation breaks the assertion paired with it:
+**fails** when the outcome is absent, so the proof replays the Journey as recorded (it must pass),
+then once per mutation, and checks that each mutation breaks the assertion paired with it.
+
+Budget for that before a long proof. No replay leaves a step sooner than the base did, so each takes at
+least as long as the base, and the count above is a floor: most proofs also run a control for each
+mutated step. A proof of 3 mutations on 2 steps runs 7 replays. Every replay that reaches a write sends
+it for real, so use a target whose data can take that, and fixtures that reset it. With no reset hook or
+fixture, `--plan` and the report each say so in one line, with how many of the planned replays can send real
+writes (`summary.writeReplays`, and `noReset` in `--json`). See
+[what a proof runs](outcomes.md).
+
 
 ```bash
 jevitate journey verify checkout --plan                   # static preflight; no browser or target
@@ -227,7 +248,7 @@ jevitate journey verify checkout --mutate --allow http://127.0.0.1:26110   # blo
 
 | Mutation | What the replay does | Derived for |
 |---|---|---|
-| `skip:<n>` | leaves step n's action out; its own `expect` is still checked where it stood (a `waitFor` on it waits at most its hang threshold plus 5 s) | each write step (the lint's rule) |
+| `skip:<n>` | leaves step n's action out; its own `expect` is still checked where it stood (a `waitFor` on it waits a little past what the base's claim took, or its hang threshold plus 5 s if longer) | each write step (the lint's rule) |
 | `block-write:<n>` | aborts the write requests step n sends, from its start until the network settled after it | each write step |
 | `stale-value:<n>` | types `""` into fill step n — or, for a `{ "var": name }` fill whose non-secret parameter an assertion names, an altered value of it (stale text in the composer) | each fill whose value a `valueEquals`/`textIncludes` checks, or whose variable an assertion names |
 | `swap-param:<name>` | replays with parameter `name` swapped for a wrong value where the app receives it (a fill, a select, a navigate URL): a reviewed `mutationValues` entry (#579), else for a select another enabled option of the live `<select>`, else another supplied parameter of the same shape, else the value with its last letter or digit changed; every assertion naming `${name}` still expects the supplied value | each non-secret `--param` an assertion at or after the action names and an action reads |
@@ -247,6 +268,12 @@ value or a `navigate` URL placeholder), and that an assertion names (`{ "var": n
 A `{ "var": name }` fill whose parameter an assertion names gets a `stale-value` that types an
 **altered** value of the parameter instead of `""`. This is the stale text a composer can keep
 from an earlier reply.
+
+A write step is one the lint counts: a step whose recorded delta names a write request, whose
+`expectRequests` names one, or a state-changing step whose delta changed the page. A `networkChecks` entry
+does not make one, and neither does page timing, which can place a request under the wrong step. A Journey
+with no write step and no other pair has 0 pairs and reads `inconclusive`, and the reason names each check
+and what to add: if the request is the step's write, its `delta.requests`.
 
 A mutation of step n is paired with step n's own `expect`/`check` and its `expectRequests`; the
 **last** write step's mutations are also paired with every end-state check; a `stale-value` is also
@@ -295,7 +322,8 @@ proof stays inconclusive (exit 2); it is never counted as proof. Refusal reasons
 - there is no failed site to relax, or the first failure is before the mutated step;
 - the failing site is not a step postcondition (an action failed, or it is an end-state or
   request check), or it is a `handback` resume assertion;
-- the failing step is not before the target, or is not paired with this mutation (pair it);
+- the failing step is not before the target (the target held under the mutation, so make it read what
+  the mutation removes), or is not paired with this mutation (the refusal names the pair to add);
 - the site is already relaxed, or the bound of 4 relaxations is reached;
 - the unmutated control replay with the same relaxations did not pass.
 
@@ -489,6 +517,7 @@ and Jev never fail it. `--stale --strict` is refused. MCP: `review_journey` with
   an approval still binds to the full review hash, so annotating re-stales an approval. One
   exception: annotating drops a success criterion's code `check` when that criterion is reworded,
   which changes executable content and does stale the proof.
+  Changing the target's `safety.readRequests` stales it too: they decide which steps the proof treats as writes.
 - **Linking.** `jevitate journey link <id> --job <jobId> --persona <personaId>` (MCP `journey_link`)
   sets `metadata.job` / `metadata.persona` without hand-editing the file; `--unlink-job` /
   `--unlink-persona` clear them. Each id is checked against the catalog: an unknown one is refused
@@ -617,7 +646,7 @@ steps, each take's captured values and the steps' recorded expectations, it deci
 |---|---|
 | **params** | a typed or selected value that varies across takes (`reply`, `account`), and a `navigate` path segment that varies (`/threads/${thread}`) |
 | **constants** | a value equal in every take. A credential is never a constant |
-| **handbacks** | a credential field (password, one-time code, token, PIN, …), and a username or email field on the same page as one. A person types it at replay. It is never a value, a constant or a parameter |
+| **handbacks** | a credential field (password, one-time code, token, PIN, …), and a username or email field on the same page as one. A replay is meant to pause for a person to type it, but no surface turns that mode on yet ([#798](https://github.com/matt-cochran/jevitate/issues/798)), so today a run that reaches a `handback` step is `quarantined` (`secret step reached under fail-closed/unattended secretMode`). It is never a value, a constant or a parameter |
 | **outputs** | an identifier the page shows **before** the first write that matches exactly one parameter in every take, for example `data-thread-id`. It becomes an `extract` step |
 | **checks** | a `pre-write` identity check. The page must show the supplied identifier, or still be at the supplied thread's URL, so a changed source context fails before anything is typed. Also a `post-write` `valueEquals { "var": … }` on each filled or selected parameter |
 | **stopBefore** | the first send/submit/post/publish click after the first write, else the last click after the last write. The draft ends **before** it |
@@ -863,6 +892,86 @@ A secret parameter's value is redacted in the `journey run` output, in `journey 
 evidence, drafts and output, and in anything sent to a model. A parameter whose name looks like a
 credential (`password`, `token`, `apiKey`, `otp`, …) is treated as secret even when the Journey
 does not declare it.
+
+### Secret parameters on a replay
+
+A secret parameter's value stays off the command line and out of every MCP request:
+
+```bash
+APP_PASSWORD=… jevitate journey run login --secret-field 'label=Password=env:APP_PASSWORD'
+```
+
+`--secret-field` takes the binding the Journey was authored with. The value comes from the
+environment variable, and the binding is matched against the recorded target of the step that types
+the parameter, by `label`, `testId`, `id` or `name`. `type=` needs a live field, so it cannot match
+on a replay, and a `cmd:` source is for goal runs. A binding that supplies no secret parameter is a
+usage error (`E_JOURNEY_RUN_ARGS`).
+
+On the CLI, with `--env` or `--base-url`, the `secretFields` for that origin in
+`~/.jevitate/targets.json` apply the same way, so no flag is needed. `--param` wins over `--secret-field`, which wins over
+`targets.json`. A `targets.json` binding whose variable is not set supplies nothing, and the
+parameter is reported missing.
+
+`--param secret1=…` still works on the CLI, and warns on stderr: the value is in the process list and
+the shell history. `journey run` is the only command with `--secret-field` and `targets.json`
+resolution. `journey verify`, `journey readiness`, `journey chain`, `journey demo`,
+`journey annotate`, `load run`, `explore --from-journey`, `source run`, `verify-fix` and
+`regression capture`/`run` take a secret parameter through `--param` only, with the same warning.
+On `journey chain` that means the producer: a consumer's secret parameter can't be supplied at all,
+through `--param` or `targets.json`, and the chain fails closed.
+
+A bound value goes in only at a field, on the origin its binding applies to: the one the
+`targets.json` entry is keyed by, or for `--secret-field` the run's allowlist, checked with the field in
+hand on `fill`, `select` and `editText`. Anywhere else, such as after a redirect, nothing is typed and
+the step fails with `E_SECRET_ORIGIN_REFUSED`. A `navigate` URL or an `http` check that holds a bound
+parameter refuses the same way before anything runs. For a sign-in on another origin (SSO), run
+`journey run --secret-field … --allow <origin>`. A value given with `--param` isn't held to an origin:
+it can go to an allowlisted origin in a `navigate` URL or an `http` check. The one exception is an `http`
+check naming a parameter the narrower rule below refuses, such as `password`: `E_HTTP_CHECK_SECRET_REF`.
+
+A secret-bound Journey can't self-heal or be annotated in 0.29.0, because nothing secret-bound goes to a
+model. The step fails as it would without a heal, saying the heal was skipped, and annotate refuses with
+`E_MODEL_REFUSED_SECRET`. That covers a secret parameter, a fixture secret or credential-named output,
+and any step that can extract a credential, decided from the Journey before it runs. A name that only
+reads as a credential, such as `passengers` or `token_count`, counts too. To lift it, declare a parameter
+of that name `"secret": false` and have a person approve the Journey (a typed `journey promote` or a
+verified PR review).
+
+A value is never guessed. If two secret parameters match one binding, or one parameter matches two,
+nothing runs (`E_JOURNEY_RUN_ARGS`). Bind each by a
+target only its own step has, or give all but one with `--param`.
+
+Over MCP a Journey that needs a secret parameter doesn't run. A value for one is refused by name with
+`E_SECRET_PARAM_OVER_MCP` before anything runs, on `run_journey`, `verify_journey`,
+`journey_readiness`, `chain_journeys`, `demo_journey`, `annotate_journey`, `run_load_test`,
+`run_exploration` and `sources`, and `run_journey` refuses the same way when the parameter is left out.
+`targets.json` is not read for this over MCP: an agent can promote a Journey over MCP, so it could
+choose where the value goes. A person runs it on the CLI, or the Journey signs in with a stored session
+(`storageState`) and needs no secret. A `${setup.x}` reference holds no value and is not refused.
+`run_check` and `run_campaign` read `params` from the suite or spec file, not from the request.
+
+**Which names count.** A parameter is secret when it declares `secret: true`, or when its name reads
+as a credential. The name check is deliberately broad, since a credential that slips through has no
+way back: it matches `pass`, `pwd`, `secret`, `token`, `otp`, `auth`, `session`, `cookie`, `key`,
+`pin`, `ssn`, `cvv`, `signature`, `nonce`, `card_number`, and foreign words for password, anywhere in
+the name for the longer ones. So it also matches `passengers`, `token_count` and `footprint`.
+
+For those, declare `"secret": false` on the parameter and have a person approve the Journey: a typed
+`journey promote` at a terminal, or a verified PR review. Then the value goes through MCP and is not
+redacted. An approval over MCP, a scripted one (`non-interactive`, `ci`), one with no recorded channel
+or one the Journey has changed since lifts nothing. The rule is per Journey, so in `journey chain` and a
+`journey readiness` pair every Journey the params can reach has to lift it. A source's Journey never
+lifts it over MCP: its file is someone else's, so the name alone refuses. The review sheet warns
+about a `secret: false` on such a name (`secret-false-credential-name`).
+
+This list decides what happens to a value. It doesn't decide whether a Journey loads: an assertion
+reference or a request-body field keeps an older, narrower rule (`password`, `pass`, `secret`, `token`,
+`apiKey`, `otp`, `pin`, `credential`, `session`, `cookie`), whatever the Journey declares. So an
+assertion on `${key}` loads and runs on the CLI, with the value redacted from the result, and over MCP
+the value is still refused.
+
+Provenance is detection, not proof: whoever can edit the Journey file can also write the channel. What
+enforces it is git review of `.jevitate/` (see [catalog.md](./catalog.md)).
 
 ### Parameters in a `navigate` URL
 

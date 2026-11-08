@@ -58,8 +58,12 @@ export interface HealProbeGuard {
   dispose(): Promise<void>;
 }
 
-/** Installs the guard on the page's BrowserContext (HTTP routes + WebSocket proxy), unarmed. */
-export async function installHealProbeGuard(page: Page): Promise<HealProbeGuard> {
+/**
+ * Installs the guard on the page's BrowserContext (HTTP routes + WebSocket proxy), unarmed. Playwright
+ * calls only the socket route added last, so this one would stand in for any before it: `claimSocket`
+ * keeps such a guard's sockets its own (#789: an MCP run's off-allowlist refusal).
+ */
+export async function installHealProbeGuard(page: Page, claimSocket?: (ws: WebSocketRoute) => boolean): Promise<HealProbeGuard> {
   const context = page.context();
   const monitor = monitorFor(page);
   let armed = false;
@@ -75,6 +79,7 @@ export async function installHealProbeGuard(page: Page): Promise<HealProbeGuard>
     await route.abort("blockedbyclient").catch(() => undefined);
   };
   const onSocket = (ws: WebSocketRoute): void => {
+    if (claimSocket?.(ws) === true) return;
     const server = ws.connectToServer();
     ws.onMessage((message) => {
       if (armed) {

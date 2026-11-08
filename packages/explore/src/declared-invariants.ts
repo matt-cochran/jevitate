@@ -1110,7 +1110,8 @@ export class InvariantMonitor {
 
   #clip<T extends ObservedValue>(v: T): T | string {
     if (typeof v !== "string") return v;
-    return this.#redact(v.length > MAX_VALUE_CHARS ? `${v.slice(0, MAX_VALUE_CHARS)}…` : v);
+    const masked = this.#redact(v);
+    return masked.length > MAX_VALUE_CHARS ? `${masked.slice(0, MAX_VALUE_CHARS)}…` : masked;
   }
 
   #shown(v: EvalValue | undefined): InvariantValue {

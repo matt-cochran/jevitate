@@ -68,6 +68,10 @@ describe("owner marker", () => {
     expect(parseOwnerMarker(["chrome", "--no-sandbox"])).toBeUndefined();
     expect(parseOwnerMarker([ownerMarkerArg()])?.pid).toBe(process.pid);
   });
+
+  it("ignores a marker embedded inside another argument", () => {
+    expect(parseOwnerMarker(["bash", "-c", "echo # --jevitate-owner=7@1"])).toBeUndefined();
+  });
 });
 
 describe.runIf(linux)("orphan cleanup (real processes, restricted table)", () => {
@@ -176,6 +180,18 @@ describe("terminateOwnBrowsersSync (#326)", () => {
     expect(f.slept()).toBe(100);
     expect(f.signals.filter(([, s]) => s === "SIGKILL").map(([p]) => p)).toEqual([-100, 100, 101]);
     expect(f.running.size).toBe(0);
+  });
+
+  it("does not signal a non-browser process that embeds this process's marker in a script argument", () => {
+    const f = fake([{ pid: 400, ppid: 7, argv: ["bash", "-c", "echo # --jevitate-owner=7@1"] }]);
+    terminateOwnBrowsersSync({ table: f.table, ownerPid: 7, kill: f.kill, alive: f.alive, sleepSync: f.sleepSync });
+    expect(f.signals).toEqual([]);
+  });
+
+  it("does not signal a browser whose marker names this pid with a different start token", () => {
+    const f = fake([{ pid: 100, ppid: 7, argv: ["chrome --headless --jevitate-owner=7@2 --no-sandbox"] }]);
+    terminateOwnBrowsersSync({ table: f.table, ownerPid: 7, kill: f.kill, alive: f.alive, sleepSync: f.sleepSync });
+    expect(f.signals).toEqual([]);
   });
 
   it("no browsers, an unsupported platform, or failing signals: returns without throwing", () => {

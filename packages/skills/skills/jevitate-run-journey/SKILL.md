@@ -1,6 +1,6 @@
 ---
 name: jevitate-run-journey
-description: Find and replay a promoted jevitate Journey (a saved, deterministic browser flow such as a login, checkout or form submission) by id with typed params, on any named environment (`--env`/`--base-url`), optionally with video and screenshots and self-heal. Runs via `jevitate journey find|run` or MCP `find_capabilities`/`run_journey`. Also covers promoting (human-only). Use when a known flow should be re-run or regression-checked, not explored or recorded fresh.
+description: Find and replay a promoted jevitate Journey (a saved, deterministic browser flow such as a login, checkout or form submission) by id with typed params, on any named environment (`--env`/`--base-url`), optionally with video and screenshots and self-heal. Runs via `jevitate journey find|run` or MCP `find_capabilities`/`run_journey`. Also covers promoting (a person's act). Use when a known flow should be re-run or regression-checked, not explored or recorded fresh.
 ---
 
 You drive already-published, promoted Jevitate Journeys. You never write or invent
@@ -17,7 +17,7 @@ artifact; your job is to find the right one and run it with the right params.
 - `jevitate journey list --json` shows ALL Journeys including unpromoted ones —
   use this only for authoring/debugging with a human present, never to find
   something to run autonomously (an unpromoted Journey is unpromoted for a
-  reason and `journey run`/`run_journey` will refuse it anyway).
+  reason). MCP `run_journey` refuses it; the CLI `journey run` does not (below).
 
 ## Run
 
@@ -28,6 +28,25 @@ artifact; your job is to find the right one and run it with the right params.
 - MCP: `run_journey({ id, params, storageState? })` — same param-schema
   validation, same refusal on an unknown id or params. It NEVER accepts inline
   steps or a raw recording — a published id only.
+- A secret parameter's value (a `secret: true` param, or one named like a
+  credential) never goes in an MCP request: `E_SECRET_PARAM_OVER_MCP`, by name.
+  Leave it out and pass `env` or `baseUrl` when `~/.jevitate/targets.json` binds
+  the field under `secretFields`. On the CLI use `--secret-field
+  '<label|testId|id|name>=<value>=env:<VAR>'`; `--param` works and warns.
+- Promotion differs by surface. MCP `run_journey` and `chain_journeys` refuse a
+  Journey that is not promoted, or whose content changed since its approval,
+  before any browser opens: `{error: "refused", code: E_JOURNEY_NOT_PROMOTED |
+  E_JOURNEY_APPROVAL_STALE | E_JOURNEY_APPROVAL_UNKNOWN, fix}`. Do not retry;
+  ask the person to review and promote it (`journey review <id>`, then
+  `journey promote <id>`). The CLI `journey run` runs an unpromoted or stale
+  Journey anyway and prints a `warning:` line on stderr with the same code.
+- MCP runs also refuse, with `outcome: "refused"` and `retryable: false`, a click
+  on a session-ending, destructive or paid control (`E_RUN_REFUSED_DESTRUCTIVE`),
+  a write to an origin outside the run's allowlist
+  (`E_RUN_REFUSED_OFF_ALLOWLIST_WRITE`) and a `production: true` environment
+  (`E_RUN_REFUSED_PRODUCTION`). The result's `setting` names what lifts it, in the
+  target's `mcpRun` section of `~/.jevitate/targets.json`. Only a person edits
+  that; never try to work around it. The CLI applies none of these refusals.
 - Read the JSON envelope's `outcome` field (MCP: also `exitCode`). Only `"ok"`
   (exit 0) is a pass. `"healed-pending-review"` (exit 5) is NOT a pass: a
   self-heal retargeted steps and proposed a Journey revision a person must
@@ -143,7 +162,8 @@ artifact; your job is to find the right one and run it with the right params.
   fails — it never counts as the person's sign-off. Every authored/recorded Journey starts
   `metadata.promoted: false` (`explore-author-journey`, `jevitate record` +
   `recording postdoc`); only a promoted Journey is discoverable via `journey
-  find`/`find_capabilities` and runnable via `journey run`/`run_journey`.
+  find`/`find_capabilities` and runnable over MCP (`run_journey`); the CLI
+  `journey run` also runs an unpromoted one, with a warning.
   There is still no "raw Recording -> promoted Journey in one step" command —
   a Recording becomes a Journey first (through an authoring path, or the
   `JourneyRegistry` API), then `journey promote <id>` promotes it.

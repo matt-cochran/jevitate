@@ -1,3 +1,4 @@
+import { warnSecretParamsOnArgv } from "./secret-params.js";
 import { formatScreenshotsLine, parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
 import { PromotionsConfigError } from "./promotions.js";
 import { existsSync } from "node:fs";
@@ -79,6 +80,7 @@ export function registerJourneyDemoCommand(journey: Command, program: Command, d
       const layout = journeyLayout(program, deps, { project, journeysDir: journeysDirFlag, dir });
       if (layout === null) return;
       const journeysDir = layout.journeysDir;
+      await warnSecretParamsOnArgv(program.configureOutput().writeErr, journeysDir, [id], param);
 
       // #247: --env/--base-url choose where the demo runs — the same resolver as `journey run`.
       let environment: ResolvedJourneyEnvironment | undefined;

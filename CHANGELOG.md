@@ -5,6 +5,120 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.29.0] – 2026-11-07
+
+### Behaviour changes
+
+- **A promoted Journey from before 0.29 must be re-promoted for MCP (#788).** Over MCP a Journey runs
+  only when promoted with a current approval on record. Older promoted Journeys have none and are refused
+  with `E_JOURNEY_APPROVAL_UNKNOWN` until re-promoted. The CLI still runs them, with a warning.
+- **MCP-driven replays refuse unsafe writes by default (#789).** Session-ending and destructive clicks,
+  writes to origins outside the allowlist, and runs on a `production: true` target are refused before
+  anything is sent, unless the target's human-written `mcpRun` settings allow them.
+- **Every run leaves a record (#790).** `run_journey` and `journey run` write one value-free record under
+  the project's logs.
+- **Secrets never pass through the model (#809).** Over MCP a Journey that needs a secret is refused with
+  `E_SECRET_PARAM_OVER_MCP`. On the CLI, `journey run --secret-field` supplies one without the command
+  line. A secret-bound Journey can't self-heal or be annotated in 0.29.0, and `--secret` is refused on
+  the coverage and exploratory strategies. A secret in a `navigate` URL needs CLI `--param` for now (#819).
+- **A proof runs a closing replay.** It sends real writes like every replay, so a proof leaves more
+  behind on a target you can't reset. A proof's strength depends on a target you can reset.
+- **Jevitate is described as automation and testing (#791).** The docs say what does and doesn't guard a run.
+
+### Added
+
+- **`verify-fix` result file (#767).** Over the CLI and MCP, `verify-fix` writes one
+  `verify-fix-<stamp>.result.json` per run and names it in its result, inconclusive and internal-error
+  endings included. A run from the ledger writes it to the logs directory, not the committed ledger.
+- **Progress for long proofs (#766).** `journey verify --mutate` and `verify-fix` print one line per
+  replay to stderr, while stdout stays one JSON envelope.
+- **Pending drafts in review (#765).** `journey review` shows an annotation draft as current or stale,
+  with the command to approve or re-draft it. Draft binding and review hashes are unchanged.
+
+### Fixed
+
+- **False green on a closed pipe.** `verify-fix` with stdout's reader gone exited 0 on a run that still
+  reproduced. A closed pipe no longer becomes a command's result.
+- **Silent endings (#764, #766, #767).** `journey verify` and `verify-fix` now end with a result on a
+  signal, parent death, internal error or a run that stops progressing, including a bound on a stuck
+  `verify_journey` over MCP. The caller termination reported in #764 was not reproduced as Jevitate
+  signalling its caller: it appears when something outside ends the caller's process group.
+- **Refused `blocked` (#769).** Goal exploration takes another decision after a refusal instead of
+  ending as no-progress, and the hint ranks a control the goal names first.
+- **Discovery and lint (#770, #763).** `journey find` matches a Journey's goal, and `journey lint`
+  honours `safety.readRequests`.
+- **Redaction on every surface.** `verify-fix` stdout, result file and MCP return come from one redacted
+  report, and terminal diagnostics mask URL tokens, cookies and body passwords.
+- **Targeted control replays (#785).** A targeted proof's unmutated control keeps the waiting of the
+  assertions it relaxes, so a reload-sensitive end state no longer refuses the proof when a slow write
+  had not landed. A failed control reports counts and booleans that tell apart action omission,
+  browser-context replacement, storage clearing and end-state timing, never storage values.
+- **Proofs compare like with like (#785, #766).** A targeted replay and its control now wait the same, so a
+  slow write can't read as a sensitive assertion. A replay that moved on early (a wait out of its cap, or a
+  skipped step with a write unanswered) is refused. A failed fixture restore makes a proof `inconclusive`.
+  Storage diagnostics hold only real counts, and the admission timeout and `jevitate doctor` name a
+  non-regular slot file.
+- **A sturdier mutation proof (#785, #766).** A `sensitive` reading now stands on a closer experiment.
+  A control replay waits exactly as the mutated replay did and must reach the site at about the same time.
+  One replay as recorded runs straight after the base, so a job left running can be seen crossing replays.
+  When one mutation of a step fails a site and another passes it, the failure must reproduce. A blocked write
+  stays blocked for the rest of the replay, and open writes are waited for before anything is judged. Proofs
+  of a claim that decays or a write that retries can read differently from earlier versions. Replays that can
+  no longer change the verdict are skipped. `docs/outcomes.md` lists what a proof assumes.
+- **Empty `.git` directories.** A directory counts as a git root only when `.git` is a file or holds
+  `HEAD`, so a sandbox's empty placeholder no longer makes its parent a project.
+- **Bystander signals (#764).** Browser teardown signals only processes with this process's exact owner
+  marker as a whole argument.
+
+### Changed
+
+- **Proofs keep their browser slot (#766).** `journey verify --mutate` keeps its machine slot between
+  replays unless another run is waiting for one, when it yields and competes again. Waiters announce
+  themselves with `waiter-*.json` beside the slots; a dead or stale one is ignored.
+- **Errored replays are retried once (#766, #778).** A replay that errored before opening a browser, as
+  on an admission timeout, runs once more and is listed in `mutations[].retries`. One that opened a
+  browser may have changed the app, so it is not retried. A failed replay or a stall is never retried.
+- **A proof with an errored replay is not proven (#766).** If any mutated, relaxed or targeted replay
+  errored, `journey verify --mutate` reads `inconclusive` (exit 2), even when
+  other mutations covered the same assertions. An insensitive assertion still reads `insensitive`.
+- **Source builds identify themselves (#784).** An unreleased build reports `x.y.z-source-<commit>` from
+  `--version`. Release builds are unchanged.
+- **Release plan (#782).** A staging Release run with pending changesets fails rather than concluding
+  success without publishing.
+- **Slow claims need a progress signal.** A step's own claim whose wait runs out of its cap (35 s by default)
+  counts as proof only if an unmutated control with the same cap passes, which adds one replay per such
+  mutation. A real job slower than the cap with no `progress` signal reads `cascade`, leaving the proof
+  `inconclusive`. A claim paired only with `block-write` whose `maxMs` is above the cap also reads `cascade`;
+  a derived `skip` pair can still prove it.
+- `verify-fix` and `journey verify` report an unexpected internal error as `E_TERMINAL_INTERNAL` on the
+  CLI, and `journey lint` refuses an invalid targets file as `journey review` does.
+
+## [0.28.3] – 2026-11-04
+
+### Fixed
+
+- **Targeted mutation-proof request pairing (#768, #778).** Automatic targeted proofs now
+  relax an earlier paired request assertion through the existing bounded request mask when a
+  page postcondition still proves the user-visible effect. Journeys no longer remain
+  inconclusive solely because that auxiliary request assertion is not a step postcondition.
+
+## [0.28.2] – 2026-11-04
+
+### Fixed
+
+- **Read-only query Journey linting (#763).** Journey lint and strict review now consistently
+  honor explicitly configured read-only request endpoints, so browser flows that only query data
+  are not incorrectly required to prove persistence.
+
+## [0.28.1] – 2026-11-03
+
+### Fixed
+
+- **Promoted Journey discovery (#770).** `journey find` and the matching MCP capability now find
+  promoted Journeys by exact ID and by search terms appearing anywhere across the Journey ID,
+  name, or description. Production regression runners no longer lose an approved Journey merely
+  because its terms are noncontiguous in the display name.
+
 ## [0.28.0] – 2026-11-01
 
 0.28.0 makes recorded create-then-edit Journeys replay, keeps ARIA tab postconditions replayable,

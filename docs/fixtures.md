@@ -34,7 +34,10 @@ jevitate explore --strategy goal --url http://localhost:3000/projects/new \
   refused.
 - A step can authenticate as a **named identity** (`"auth": {"from": "cookies", "identity": "owner"}`)
   instead of the mission's session. See [fixture identities](#fixture-identities-mint-as-one-user-run-as-another).
-  `secretOutputs` are redacted everywhere and never reach text a model sees.
+  `secretOutputs` are redacted everywhere and never reach text a model sees. An output named like
+  a credential ([which names count](./journeys.md#secret-parameters-on-a-replay)) is redacted the
+  same way even when it isn't listed: it is left out of the result's `fixtures.outputs`. It can still
+  be referenced, for example in a Journey's `--param`, and a listed secret output can't.
 - `${secretField.<VAR>}` puts a `--secret-field` value (read from `env:<VAR>`) into a step's
   `json`, `body` or `headers`, for example to log in to an app that keeps its token in memory.
   It is refused in a URL, never written to the step log, result or Recording, and redacted from

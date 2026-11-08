@@ -14,7 +14,8 @@ import { clock } from "@jevitate/domain";
  *
  *  1. MACHINE-WIDE BROWSER CAP — a process takes one machine slot (`MachineBrowserSlots`) while it
  *     has any browser session open; at most `maxBrowsers` jevitate processes run browsers at once
- *     (`--max-browsers`, `JEVITATE_MAX_BROWSERS`, default `defaultMaxBrowsers`).
+ *     (`--max-browsers`, `JEVITATE_MAX_BROWSERS`, default `defaultMaxBrowsers`). A multi-replay proof
+ *     may keep the slot between its sessions while nobody waits for it (`holdSlotBetweenSessions`).
  *  2. MEMORY CEILING — the memory of the browser processes this process launched (browser +
  *     renderers + helpers, Linux PSS) is sampled every `intervalMs`; past the ceiling
  *     (`--max-browser-memory`, `JEVITATE_MAX_BROWSER_MEMORY_MB`, default `defaultMemoryCeilingBytes`)
@@ -250,6 +251,15 @@ export interface ResourceGovernorOptions {
   readonly admissionTimeoutMs?: number;
 }
 
+/**
+ * How long a holder that yielded its slot leaves it to the waiter before competing again. Ten of the
+ * waiter's polls: it takes the slot far sooner on a healthy host, and the deferral ends the moment it does.
+ */
+const YIELD_GRACE_MS = 5_000;
+
+/** How often a kept slot with no open session looks for a waiter. */
+const KEPT_SLOT_WATCH_MS = 1_000;
+
 /** Ticket for one open session: release it when the session closes. */
 export interface GovernorTicket {
   release(): void;
@@ -290,6 +300,14 @@ export class ResourceGovernor {
   #slot: (MachineSlotLease & { at: number }) | undefined;
   readonly #slotHistory: Array<{ at: number; until: number | undefined; index: number; waitedMs: number; cap: number }> = [];
   #acquiring: Promise<void> | undefined;
+  /** Open `holdSlotBetweenSessions` scopes: while any is open, a slot outlives its last session unless someone waits. */
+  #holds = 0;
+  /** Enters past the acquire and not yet counted in `#open`: the slot they got must not be released under them. */
+  #admitting = 0;
+  /** The slot index a hold just yielded, for the next acquire to leave to the waiter. */
+  #yieldedIndex: number | undefined;
+  /** Looks for a waiter while a kept slot has no open session: a hook can fill that gap for as long as its limit allows. */
+  #keptWatch: ReturnType<typeof setInterval> | undefined;
 
   readonly #watched = new Map<MemoryWatchedPage, { ceiling: number; openedAt: number }>();
   readonly #memory: Array<{ at: number; bytes: number }> = [];
@@ -356,13 +374,17 @@ export class ResourceGovernor {
   async enter(limits: ResourceLimits = {}): Promise<GovernorTicket> {
     this.#limits = limits;
     const cap = limits.maxBrowsers ?? (this.config.enabled ? this.config.maxBrowsers : undefined);
+    this.#stopKeptWatch();
     if (this.config.enabled) await this.decide();
+    if (this.#open === 0 && this.#slot !== undefined) this.#settleKeptSlot(cap);
     if (cap !== undefined && this.#slot === undefined) {
       this.#acquiring ??= (async () => {
         try {
           const level = this.config.enabled ? (this.#decision?.value.level ?? "normal") : "normal";
           const effective = effectiveMaxBrowsers(cap, level);
-          const lease = await this.#slots.acquire(effective, this.#now() + this.#admissionTimeoutMs);
+          const yielded = this.#yieldedIndex;
+          this.#yieldedIndex = undefined;
+          const lease = await this.#slots.acquire(effective, this.#now() + this.#admissionTimeoutMs, yielded === undefined ? {} : { deferToWaiters: { index: yielded, forMs: YIELD_GRACE_MS } });
           const at = this.#now();
           this.#slot = { ...lease, at };
           this.#slotHistory.push({ at, until: undefined, index: lease.index, waitedMs: lease.waitedMs, cap: effective });
@@ -370,7 +392,12 @@ export class ResourceGovernor {
           this.#acquiring = undefined;
         }
       })();
-      await this.#acquiring;
+      this.#admitting += 1;
+      try {
+        await this.#acquiring;
+      } finally {
+        this.#admitting -= 1;
+      }
     }
     this.#open += 1;
     this.#startTicker();
@@ -383,14 +410,92 @@ export class ResourceGovernor {
         this.#stopTicker();
         if (this.#open > 0) return;
         const slot = this.#slot;
-        this.#slot = undefined;
-        if (slot !== undefined) {
-          slot.release();
-          const h = this.#slotHistory[this.#slotHistory.length - 1];
-          if (h !== undefined && h.until === undefined) h.until = this.#now();
+        if (this.#holds > 0 && slot !== undefined) {
+          if (!this.#someoneWaits(slot.index)) {
+            this.#startKeptWatch();
+            return;
+          }
+          this.#yieldedIndex = slot.index;
         }
+        this.#releaseSlot();
       },
     };
+  }
+
+  /**
+   * Scopes a multi-replay proof: until the returned function is called, this process's slot outlives
+   * its last open session, so the next session needs no new admission. It is given up as soon as another
+   * process waits for it (checked at each session's close, through the gap, and as the next one opens), and then
+   * competed for as before. The caller must end the scope however the proof ends. A slot's crash safety
+   * does not change: it stays a heartbeated file, removed on exit and reclaimed once its pid is gone.
+   */
+  holdSlotBetweenSessions(): () => void {
+    this.#holds += 1;
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      this.#holds -= 1;
+      if (this.#holds > 0) return;
+      this.#yieldedIndex = undefined;
+      if (this.#open === 0 && this.#admitting === 0) this.#releaseSlot();
+    };
+  }
+
+  /** Unknown means yes: a slot directory that cannot be read must not keep a slot from anyone. */
+  #someoneWaits(index: number): boolean {
+    try {
+      return this.#slots.hasWaiter(index);
+    } catch {
+      return true;
+    }
+  }
+
+  #startKeptWatch(): void {
+    if (this.#keptWatch !== undefined) return;
+    this.#keptWatch = clock.setInterval(() => {
+      const slot = this.#slot;
+      if (slot === undefined || !this.#someoneWaits(slot.index)) return;
+      this.#yieldedIndex = slot.index;
+      this.#releaseSlot();
+    }, KEPT_SLOT_WATCH_MS);
+    this.#keptWatch.unref();
+  }
+
+  #stopKeptWatch(): void {
+    clock.clearInterval(this.#keptWatch);
+    this.#keptWatch = undefined;
+  }
+
+  /** A slot kept across sessions, as the next session opens: reused, or given up as a new admission would decide. */
+  #settleKeptSlot(cap: number | undefined): void {
+    const slot = this.#slot!;
+    const level = this.config.enabled ? (this.#decision?.value.level ?? "normal") : "normal";
+    if (!slot.isHeld() || (cap !== undefined && slot.index >= effectiveMaxBrowsers(cap, level))) {
+      this.#releaseSlot();
+      return;
+    }
+    if (this.#someoneWaits(slot.index)) {
+      this.#yieldedIndex = slot.index;
+      this.#releaseSlot();
+      return;
+    }
+    // This session waited for nothing: its result must not report the wait of the session that took the slot.
+    const h = this.#slotHistory[this.#slotHistory.length - 1];
+    if (h === undefined) return;
+    const at = this.#now();
+    h.until = at;
+    this.#slotHistory.push({ at, until: undefined, index: h.index, waitedMs: 0, cap: h.cap });
+  }
+
+  #releaseSlot(): void {
+    this.#stopKeptWatch();
+    const slot = this.#slot;
+    this.#slot = undefined;
+    if (slot === undefined) return;
+    slot.release();
+    const h = this.#slotHistory[this.#slotHistory.length - 1];
+    if (h !== undefined && h.until === undefined) h.until = this.#now();
   }
 
   /**

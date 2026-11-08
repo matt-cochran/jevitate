@@ -4,6 +4,8 @@ import { resolve as resolvePath } from "node:path";
 import { homeDataRoot } from "./project-dir.js";
 import { CATALOG_EXPORT_FORMATS } from "./catalog-bundle-api.js";
 import type { McpCliRunner } from "./mcp-cli-runner.js";
+import { RunGuardRefusedError, runGuardRefusalBody } from "./mcp-run-guard.js";
+import { secretParamRefusalBody, secretParamsCarried } from "./secret-params.js";
 
 /**
  * #255 — MCP ⊇ CLI. Every CLI command an agent could run as `jevitate … --json` is reachable over
@@ -87,6 +89,11 @@ export interface CliCommandSpec {
   readonly params: Readonly<Record<string, CliParam>>;
   /** Every flag of the command that is NOT an MCP argument, with why (checked by the parity guard). */
   readonly omitted: Readonly<Record<string, string>>;
+  /**
+   * The Journeys a `--param` of this command goes to, so a secret parameter's value is refused before
+   * the command runs (secret-params.ts). Every command taking `--param` has one (checked by a guard).
+   */
+  readonly paramJourneys?: (args: McpArgs) => readonly unknown[];
 }
 
 export interface CliToolSpec {
@@ -95,6 +102,8 @@ export interface CliToolSpec {
   /** One command, or several selected by an `action` argument (a family of small commands). */
   readonly command?: CliCommandSpec;
   readonly actions?: Readonly<Record<string, CliCommandSpec>>;
+  /** #787: this call only reads, and must answer while a long call of the same server holds the queue. */
+  readonly answersWhileBusy?: (args: McpArgs) => boolean;
 }
 
 // ── Why a flag is not an MCP argument ──────────────────────────────────────────────────────────
@@ -104,7 +113,7 @@ export const OMIT = {
   browserBin: "which browser binary, channel and Chromium switches launch is the operator's setting (the server's own launch), never an MCP argument",
   storeDir: "store and results locations are the server's (the `jevitate mcp` defaults / --dir): an MCP argument never picks which directory is read or written as a store",
   envSecret: "binds an environment variable (or a literal secret) the run types or redacts: a request never chooses which of the operator's variables is read — secret fields come from targets.json (secretFields/personas)",
-  mcpOrigins: "#484: an MCP caller never names origins — a replay reaches only operator-configured origins; over MCP use 'env' (an environment in environments.json), or verify-fix --allow on the CLI",
+  mcpOrigins: "#484: a request adds no origin to a replay's allowlist by flag: over MCP use 'env' (an environment in environments.json), or verify-fix --allow on the CLI. Where a tool takes 'baseUrl', that argument can still name an origin the configuration doesn't know (docs/safety.md)",
   logCmd: "server-log sources can run commands and read arbitrary files: operator-declared only (targets.json logSources/allowLogCmd)",
   logTriage: "#313: sends the run's recorded log text (redacted) to the judgment model — an operator opt-in for their own logs, never a request's choice",
   hangWrites: "re-sending a paid/destructive write is the operator's call (targets.json safety.hangReplayWrites)",
@@ -348,6 +357,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "With approve: true, applies the reviewed draft (shows the diff; refused with E_JOURNEY_ANNOTATIONS_STALE if the Journey changed since the draft) — the same proposal/approval semantics as the CLI. Drafting needs real or fakeAi.",
     command: {
       path: "journey annotate",
+      paramJourneys: (a) => [a["id"]],
       params: { ...EXTENSION, id: pos(), approve: b("--approve"), params: { kind: "params", flag: "--param" }, storageState: session("--storage-state"), fixtures: path("--fixtures"), fixtureIdentity: FIXTURE_IDENTITY, screenshots: { kind: "screenshots", flag: "--screenshots" }, actionDeltas: b("--action-deltas"), ...ENVIRONMENT, ...EMULATION, ...AI },
       omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
@@ -358,6 +368,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "`jevitate journey demo <id>` (#248): replay a Journey as a narrated demo — a WebM video with .vtt subtitles (video: a .webm path) and/or a Markdown step-by-step guide with screenshots (guide: a .md path). A Journey that no longer replays fails (exit 1). Paths inside the project or ~/.jevitate.",
     command: {
       path: "journey demo",
+      paramJourneys: (a) => [a["id"]],
       params: {
         id: pos(),
         ...EXTENSION,
@@ -380,14 +391,17 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "verify_journey",
     description:
-      "`jevitate journey verify <id> --plan|--mutate` (#402): plan previews the exact mutations, assertion pairings, unpaired assertions and minimum replay count without opening a browser; mutate proves each assertion can fail by replaying the Journey once, then once per mutation. Mutations only skip steps, abort the app's own writes or alter checked non-secret inputs; nothing is fabricated. Set exactly one of plan or mutate.",
+      "`jevitate journey verify <id> --plan|--mutate|--status` (#402): plan previews the exact mutations, assertion pairings, unpaired assertions and minimum replay count without opening a browser; mutate proves each assertion can fail by replaying the Journey as recorded, then once per mutation, with independence, control and closing replays around them. Mutations only skip steps, abort the app's own writes or alter checked non-secret inputs; nothing is fabricated. status (#787) reads a proof's durable progress and whether its verifier is live, exited or stale: no browser, no hook, nothing of the app's. resume, with mutate, continues an interrupted proof of the same Journey and configuration, reusing finished pairs after the base replay passes again; any mismatch, a damaged or over-24h checkpoint, or a live verifier is refused by name (data.reason) and never starts over. Set exactly one of plan, mutate or status.",
     command: {
       path: "journey verify",
+      paramJourneys: (a) => [a["id"]],
       params: {
         id: pos(),
         ...EXTENSION,
         mutate: b("--mutate"),
         plan: b("--plan"),
+        status: b("--status"),
+        resume: b("--resume"),
         params: { kind: "params", flag: "--param" },
         storageState: session("--storage-state"),
         fixtures: path("--fixtures"),
@@ -397,6 +411,8 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       },
       omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--allow": OMIT.mcpOrigins, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
+    // The command takes `status` first and runs no proof, whatever else is set.
+    answersWhileBusy: (args) => args["status"] === true,
   },
   {
     name: "journey_readiness",
@@ -404,6 +420,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "`jevitate journey readiness <id> [--with <toId>] --json` (#581): one readiness receipt for a Journey or a linked pair — lint, schema, the #582 handoff, the #583 boundary, strict review, annotations, catalog links/approvals, the recorded mutation proof (fresh only while bound to the current review hash) and promotion, each pass / fail / inconclusive / stale / not-run / awaiting-human. mode: report (default; no browser, sends nothing) | replay (baseline run, or the chain for a pair with requests) | prove (replay plus verify --mutate). replay/prove need env or baseUrl, refuse an environment flagged production and refuse missing params by name, all before any browser. verdict: technically-ready (exit 0) | blocked (1) | inconclusive / incomplete (2); a passing replay never hides an inconclusive proof. Approvals are listed under awaitingHuman and never acted on; the receipt carries no param value, page text or secret.",
     command: {
       path: "journey readiness",
+      paramJourneys: (a) => [a["id"], a["with"]],
       params: {
         id: pos(),
         with: s("--with"),
@@ -440,6 +457,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "`jevitate journey chain --from <discover> --to <reply> --requests <file>` (#580): run a discover Journey once, then a prepare-only reply Journey once per approved request in the JSON Lines file ({commentId, account, replyText}) matched to a discovered record by commentId AND account. Both Journeys must be promoted. #608: params supplies explicit producer (discover) params, validated against the producer's schema before anything runs. Unmatched requests never run; an empty discovery stops the chain (no target is guessed). The result names ids and outcomes only, never record or reply text. Exit 0 only when every request matched and its run was ok.",
     command: {
       path: "journey chain",
+      paramJourneys: (a) => [a["from"], a["to"]],
       params: {
         from: s("--from", { required: true }),
         to: s("--to", { required: true }),
@@ -525,6 +543,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "For a PROMOTED target prefer queue_exploration (queue + poll). Model-driven strategies need real or fakeAi. Media: recordVideo, screenshots, evidenceVideo. Sessions: storageState, persona/actor entries 'name=<storageState path>'; authCheck (off/auto/urlExcludes:/selector:) ends a run on an expired session as auth-expired (inconclusive), re-signing a persona in once when its personas file declares login parameters.",
     command: {
       path: "explore",
+      paramJourneys: (a) => [a["fromJourney"]],
       params: { tags: TAGS, ...EXTENSION,
         url: s("--url"),
         targetId: s("--target"),
@@ -891,6 +910,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     description: "`jevitate load run <journeyId>`: replay a Journey concurrently (concurrency × iterations) against an authorized origin and report latency/errors.",
     command: {
       path: "load run",
+      paramJourneys: (a) => [a["journeyId"]],
       params: {
         tags: TAGS,
         journeyId: pos(),
@@ -1050,6 +1070,8 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       remove: { path: "source remove", params: { name: pos() }, omitted: JSON_FLAG },
       run: {
         path: "source run",
+        // The Journey is resolved through the source's run gate: runSourceJourney refuses there.
+        paramJourneys: () => [],
         params: { tags: TAGS, ...EXTENSION, name: pos(), journeyId: pos(), params: { kind: "params", flag: "--param" }, storageState: session("--storage-state"), ...EMULATION },
         omitted: { ...BROWSER_FLAGS, ...JSON_FLAG },
       },
@@ -1290,7 +1312,7 @@ function lastEnvelope(stdout: string): { ok: boolean; data?: unknown; error?: { 
  * Runs one CLI-backed tool call: argv from the typed arguments, the CLI in process, its envelope back.
  * `redact` strips credential values from the output text (belt-and-braces over the CLI's own redaction).
  */
-export async function runCliTool(spec: CliToolSpec, args: McpArgs, deps: { runCli?: McpCliRunner; roots: readonly string[]; redact: (text: string) => string }): Promise<CliToolOutcome> {
+export async function runCliTool(spec: CliToolSpec, args: McpArgs, deps: { runCli?: McpCliRunner; roots: readonly string[]; redact: (text: string) => string; journeysDir: string }): Promise<CliToolOutcome> {
   let argv: string[];
   try {
     argv = buildCliArgv(spec, args, deps.roots);
@@ -1299,12 +1321,21 @@ export async function runCliTool(spec: CliToolSpec, args: McpArgs, deps: { runCl
     if (body === undefined) throw err;
     return { isError: true, body };
   }
+  const paramJourneys = commandFor(spec, args).paramJourneys;
+  if (paramJourneys !== undefined) {
+    const carried = await secretParamsCarried(deps.journeysDir, paramJourneys(args), args["params"]);
+    if (carried.length > 0) return { isError: true, body: secretParamRefusalBody(carried) };
+  }
   if (deps.runCli === undefined) {
     return { isError: true, body: { error: "not_configured", message: `${spec.name} runs \`jevitate ${commandFor(spec, args).path}\` in process, which this server was not given` } };
   }
-  const { stdout: raw, exitCode } = await deps.runCli(argv);
+  const { stdout: raw, exitCode, refusal } = await (spec.answersWhileBusy?.(args) === true ? deps.runCli(argv, { unqueued: true }) : deps.runCli(argv));
   const stdout = deps.redact(raw);
   let envelope = lastEnvelope(stdout);
+  // #789: a refused replay is the answer, whatever the command made of it. What the command did report before it stays beside it.
+  if (refusal instanceof RunGuardRefusedError) {
+    return { isError: true, body: { ...runGuardRefusalBody(refusal), ...(envelope?.data === undefined || envelope.data === null ? {} : { partial: envelope.data }) } };
+  }
   if (envelope === undefined && exitCode === 0) {
     // A command without --json (`recording promote`) prints its result as plain JSON.
     try {
@@ -1315,7 +1346,7 @@ export async function runCliTool(spec: CliToolSpec, args: McpArgs, deps: { runCl
   }
   if (envelope === undefined) return { isError: true, body: { error: "internal", message: "the command printed no JSON envelope", exitCode } };
   if (!envelope.ok) {
-    return { isError: true, body: { error: exitCode === 64 ? "invalid_args" : "refused", code: envelope.error?.code ?? "E_UNKNOWN", message: envelope.error?.message ?? "refused", exitCode } };
+    return { isError: true, body: { error: exitCode === 64 ? "invalid_args" : "refused", code: envelope.error?.code ?? "E_UNKNOWN", message: envelope.error?.message ?? "refused", exitCode, ...(envelope.data === undefined ? {} : { data: envelope.data }) } };
   }
   // 0/1/3/4 are answers; 2 (proved nothing) is never a pass.
   return { isError: exitCode === 2 || exitCode >= 64, body: { exitCode, data: envelope.data ?? null } };
