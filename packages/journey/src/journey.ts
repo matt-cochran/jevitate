@@ -18,6 +18,7 @@ import {
 } from "@jevitate/recording";
 import { MAX_DECLARED_RELAXATIONS, mutationPairIssues, targetedProofPlanIssues } from "./mutation-proof.js";
 import { isLoadRefusedName, loadRefusedParamNames } from "./intent.js";
+import { ParameterEnumSchema, ParameterTypeSchema, parameterTypeIssues, type ParameterType } from "./parameters.js";
 import { ApprovalProposalSchema } from "./proposal-schema.js";
 import { ApprovalProvenanceSchema, type ApprovalProvenance } from "./approval-schema.js";
 import { anchorRuleIssues } from "./anchor-rules.js";
@@ -304,6 +305,10 @@ export interface JourneyParameter {
   description?: string;
   secret?: boolean;
   mutationValues?: string[];
+  /** #796: the value's type; absent = untyped (any string). */
+  type?: ParameterType;
+  /** #796: the accepted values; required with, and only allowed with, `type: "enum"`. */
+  enum?: string[];
 }
 
 export interface Journey { metadata: JourneyMetadata; recording: Recording }
@@ -349,7 +354,12 @@ const JourneyParameterSchema = z.object({
     .max(20)
     .refine((vs) => new Set(vs).size === vs.length, { message: "mutationValues: duplicate value" })
     .optional(),
-}).strict();
+  // #796: optional value type; `enum` lists the accepted values for `type: "enum"`.
+  type: ParameterTypeSchema.optional(),
+  enum: ParameterEnumSchema.optional(),
+}).strict().superRefine((p, ctx) => {
+  for (const message of parameterTypeIssues(p)) ctx.addIssue({ code: "custom", path: ["enum"], message });
+});
 
 /** #465: a catalog id (job, job step, desired outcome) — the catalog's id rule (`CATALOG_ID_RE`). */
 const CATALOG_REF_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;

@@ -5,6 +5,7 @@ import { clock } from "@jevitate/domain";
 import { flatJourneySteps, type Journey } from "@jevitate/journey";
 import type { BrowserSession } from "@jevitate/playwright";
 import type { BrowserContext, Request } from "playwright";
+import type { JourneyRunEvidenceWriter } from "./journey-run-evidence.js";
 import { journeyReviewHash } from "./journey-review.js";
 import { loadLogsRetention, pruneLogs } from "./logs-retention.js";
 import { artifactStamp } from "./mission-journal.js";
@@ -25,6 +26,12 @@ import { logDateOf, logsRoot } from "./project-dir.js";
  *
  * A failure to write it never changes a run's outcome: it is reported beside the result as
  * `runRecordError`, like `artifactError`.
+ *
+ * @deprecated since 0.30.0, in favour of the RunEvidence v1 record (journey-run-evidence.ts,
+ * docs/design/0.30.0-evidence-and-trust.md §2.3), which every run writes as
+ * `logs/<date>/journey-evidence-<stamp>-<suffix>/evidence.json` beside this file (same stamp and
+ * suffix). This record's output is unchanged, and on a run with evidence its writes are derived from
+ * what the evidence writer saw (`deriveFrom`), so the two never disagree about what was sent.
  */
 
 export type RunChannel = "mcp" | "cli";
@@ -131,13 +138,42 @@ export class JourneyRunRecorder {
   #origin: string | undefined;
   #literals: ReadonlySet<string> = new Set();
   readonly #extracted = new Set<string>();
+  /** `<stamp>-<suffix>`, decided once: the record's file and the evidence's directory share it. */
+  readonly #runKey = `${artifactStamp(this.#startedAt)}-${randomBytes(4).toString("hex")}`;
+  readonly #evidenceKeyFile: string | undefined;
+  #evidence: JourneyRunEvidenceWriter | undefined;
   #detach: (() => void) | undefined;
 
-  constructor(req: { readonly channel: RunChannel; readonly id: string; readonly params: Readonly<Record<string, string>>; readonly logsRoot?: string | undefined }) {
+  constructor(req: { readonly channel: RunChannel; readonly id: string; readonly params: Readonly<Record<string, string>>; readonly logsRoot?: string | undefined; readonly evidenceKeyFile?: string | undefined }) {
     this.#channel = req.channel;
     this.#id = req.id;
     this.#params = req.params;
     this.#root = req.logsRoot;
+    this.#evidenceKeyFile = req.evidenceKeyFile;
+  }
+
+  get channel(): RunChannel {
+    return this.#channel;
+  }
+
+  /** The key the run's evidence digest is keyed with (default `~/.jevitate/verify-checkpoint.key`). Testing seam. */
+  get evidenceKeyFile(): string | undefined {
+    return this.#evidenceKeyFile;
+  }
+
+  #dateDir(): string {
+    return join(this.#root ?? logsRoot(), logDateOf(this.#startedAt) ?? this.#startedAt.slice(0, 10));
+  }
+
+  /** This run's own evidence directory, beside its record; absent when run records are off (`JEVITATE_RUN_RECORD=off`). */
+  evidenceDir(): string | undefined {
+    if (process.env.JEVITATE_RUN_RECORD === "off") return undefined;
+    return join(this.#dateDir(), `journey-evidence-${this.#runKey}`);
+  }
+
+  /** From here on the record's writes and masked values are the evidence writer's, which watches the run instead of this recorder. */
+  deriveFrom(evidence: JourneyRunEvidenceWriter): void {
+    this.#evidence = evidence;
   }
 
   /** The Journey the run resolved to. Reading it never fails a run. */
@@ -179,11 +215,13 @@ export class JourneyRunRecorder {
 
   #record(end: RunEnd): JourneyRunRecord {
     const output = end.output !== null && typeof end.output === "object" ? Object.values(end.output as Record<string, unknown>).filter((v): v is string => typeof v === "string") : [];
-    const values = [...Object.values(this.#params), ...this.#extracted, ...output];
+    const observed = this.#evidence?.observed();
+    const values = [...Object.values(this.#params), ...this.#extracted, ...(observed?.values ?? []), ...output];
+    const writes: Iterable<SeenWrite> = observed?.writes ?? this.#writes.values();
     const shapes = new Map<string, { method: string; path: string; count: number; origin?: string; refused?: true }>();
     let count = 0;
     let refused = 0;
-    for (const w of this.#writes.values()) {
+    for (const w of writes) {
       if (w.refused) refused += 1;
       else count += 1;
       let url: URL;
@@ -224,10 +262,9 @@ export class JourneyRunRecorder {
     if (process.env.JEVITATE_RUN_RECORD === "off") return undefined;
     let tmp: string | undefined;
     try {
-      const root = this.#root ?? logsRoot();
-      const dir = join(root, logDateOf(this.#startedAt) ?? this.#startedAt.slice(0, 10));
+      const dir = this.#dateDir();
       mkdirSync(dir, { recursive: true });
-      const name = `journey-run-${artifactStamp(this.#startedAt)}-${randomBytes(4).toString("hex")}.json`;
+      const name = `journey-run-${this.#runKey}.json`;
       tmp = join(dir, `.${name}.tmp`);
       writeFileSync(tmp, `${JSON.stringify(this.#record(end), null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
       renameSync(tmp, join(dir, name));

@@ -59,7 +59,7 @@ function journey(id: string, last: "ok" | "fails"): Journey {
       ],
     },
   } as unknown as Journey;
-  j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z" };
+  j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z", provenance: { channel: "tty", agentSignals: [] } };
   return j;
 }
 
@@ -127,7 +127,7 @@ beforeAll(async () => {
   mkdirSync(mcpJourneysDir, { recursive: true });
   for (const name of ["good", "bad", "draft"]) {
     const j = JSON.parse(JSON.stringify(name === "draft" ? { ...journey("draft", "ok"), metadata: { ...journey("draft", "ok").metadata, promoted: false, approval: undefined } } : journey(name, name === "good" ? "ok" : "fails")).replaceAll('"apiKey"', '"note"').replace('"secret":true', '"secret":false')) as Journey;
-    if (name !== "draft") j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z" };
+    if (name !== "draft") j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z", provenance: { channel: "tty", agentSignals: [] } };
     writeFileSync(join(mcpJourneysDir, `${name}.json`), JSON.stringify(j));
   }
   writeFileSync(join(journeysDir, "draft.json"), JSON.stringify({ ...journey("draft", "ok"), metadata: { ...journey("draft", "ok").metadata, promoted: false, approval: undefined } }));
@@ -236,7 +236,7 @@ describe("#790 an extracted value, on a run the guard ends", () => {
         }],
       },
     } as unknown as Journey;
-    j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z" };
+    j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z", provenance: { channel: "tty", agentSignals: [] } };
     writeFileSync(join(journeysDir, "exfil.json"), JSON.stringify(j));
     const tool = buildMcpTools({ journeysDir, pathRoots: [root], runRecordLogsRoot: logs }).find((t) => t.name === "run_journey")!;
     const text = (await tool.handler({ id: "exfil", params: {} })).content[0]!.text;

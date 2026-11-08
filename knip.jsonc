@@ -8,8 +8,9 @@
   // @jevitate/cli is published; esbuild bundles every other package into it, so a private
   // package's export used by another package counts as used.
   "workspaces": {
+    // Experiment labs (scripts/<name>-lab/, scripts/nav-lab/) are run directly with node: each file is an entry.
     ".": {
-      "entry": ["scripts/*.mjs", "scripts/**/*.test.mjs", "scripts/codemods/*.mjs", "test/**/*.ts"],
+      "entry": ["scripts/*.mjs", "scripts/**/*.test.mjs", "scripts/codemods/*.mjs", "scripts/*-lab/*.mjs", "scripts/nav-lab/*.mjs", "test/**/*.ts"],
       "project": ["scripts/**/*.mjs", "test/**/*.ts"]
     },
     "packages/*": {

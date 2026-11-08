@@ -1,5 +1,6 @@
 import type { BrowserContext, Locator, Request, Route, WebSocketRoute } from "playwright";
 import { readControlIdentity, SafetyPolicy, type SafetyVerdict } from "@jevitate/explore";
+import type { DistParams, SitePolicy } from "@jevitate/domain";
 import { ReplayRefusal, type ReplayActionGuard } from "@jevitate/interpreter";
 import type { BrowserSession } from "@jevitate/playwright";
 import type { RecordedStep } from "@jevitate/recording";
@@ -8,6 +9,7 @@ import { maskValues } from "./mask-values.js";
 import { environmentsFilePath, loadEnvironmentsFile, type ResolvedJourneyEnvironment } from "./environments.js";
 import { EXIT_CODES } from "./exit-codes.js";
 import { canonicalOrigin, loadTargetsFile, type McpRunAllowances, type TargetConfig } from "./target-config.js";
+import type { RunMode } from "./run-mode.js";
 
 /**
  * #789 — the floor under an MCP-driven replay, until run modes exist (#792). By default such a run:
@@ -98,6 +100,28 @@ export interface McpRunGuardRequest {
   readonly environmentsFile?: string | undefined;
   /** For a replay with no write guard to arm (`verify_fix`): a production origin in the allowlist refuses the run, not just a write there. */
   readonly refuseProductionInAllowlist?: boolean;
+  /**
+   * 0.30.0 §5.4: the run's mode (journey-run-mode-gate.ts). With `authoredOrigins`, a Journey's own
+   * `allowedOrigins` join the write allowlist in test mode only; in automation mode a write there needs
+   * `mcpRun.allowOffAllowlistWrites`. Absent: as 0.29.0.
+   */
+  readonly mode?: RunMode | undefined;
+  /** The Journey's authored `metadata.allowedOrigins` (they are in `allowedOrigins` too). */
+  readonly authoredOrigins?: readonly string[] | undefined;
+}
+
+/**
+ * The write allowlist of an MCP run: in automation mode, `allowedOrigins` less the origins only the
+ * Journey's author added (the site and the environment's own origins stay). PURE.
+ */
+export function modeWriteAllowlist(req: Pick<McpRunGuardRequest, "site" | "allowedOrigins" | "environment" | "mode" | "authoredOrigins">): readonly string[] {
+  if (req.mode !== "automation" || (req.authoredOrigins ?? []).length === 0) return req.allowedOrigins;
+  const kept = allowedOriginSet([req.site, ...(req.environment?.allowedOrigins ?? [])]);
+  const authored = allowedOriginSet(req.authoredOrigins ?? []);
+  return req.allowedOrigins.filter((o) => {
+    const c = canonicalOrigin(o);
+    return c === undefined || kept.has(c) || !authored.has(c);
+  });
 }
 
 const productionRefusal = (origin: string, what: string): RunGuardRefusedError => {
@@ -118,8 +142,9 @@ export function prepareMcpRunGuard(req: McpRunGuardRequest): McpRunGuard | undef
   try {
     const targets = req.targetsFile === undefined ? loadTargetsFile() : loadTargetsFile(req.targetsFile);
     target = targetForOrigin(targets, origin);
-    const flagged = declaredProductionOrigins(req.environmentsFile ?? environmentsFilePath());
-    production = req.environment?.production === true || flagged.has(origin);
+    const flagged = new Set([...declaredProductionOrigins(req.environmentsFile ?? environmentsFilePath()), ...allowedOriginSet(Object.entries(targets).flatMap(([key, t]) => (t.trust === "production" ? [key] : [])))]);
+    // 0.30.0 §5: the operator's `trust: "production"` for the origin counts as `production: true`.
+    production = req.environment?.production === true || flagged.has(origin) || target?.trust === "production";
     heldBack = new Set([...flagged].filter((o) => targetForOrigin(targets, o)?.mcpRun?.allowProduction !== true));
   } catch (err) {
     throw refused(new RunGuardRefusedError("E_RUN_GUARD_CONFIG", `an MCP run could not read what allows it on ${origin}, so it does not run: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`, "targets.json / environments.json"));
@@ -133,7 +158,7 @@ export function prepareMcpRunGuard(req: McpRunGuardRequest): McpRunGuard | undef
       if (heldBack.has(allowed)) throw refused(productionRefusal(allowed, `${allowed} is in this replay's allowlist and flagged production: true, and an MCP run does not replay with it by default.`));
     }
   }
-  return new McpRunGuard(origin, req.allowedOrigins, allowances, target, heldBack, currentMcpInvocation());
+  return new McpRunGuard(origin, modeWriteAllowlist(req), allowances, target, heldBack, currentMcpInvocation());
 }
 
 function refused(err: RunGuardRefusedError): RunGuardRefusedError {
@@ -410,4 +435,123 @@ export class McpRunGuard implements ReplayActionGuard {
     await this.#dispose?.();
     this.#dispose = undefined;
   }
+}
+
+// --- The ratchet (0.30.0 §5.4, #799): over MCP a site policy may only tighten -----------------------
+
+export const E_POLICY_LOOSEN_OVER_MCP = "E_POLICY_LOOSEN_OVER_MCP" as const;
+export const E_TARGET_PROMOTE_OVER_MCP = "E_TARGET_PROMOTE_OVER_MCP" as const;
+
+const minutesOf = (hm: string): number => Number(hm.slice(0, 2)) * 60 + Number(hm.slice(3, 5));
+
+/** The minutes of the day a set of quiet-hours windows covers ([start, end), wrapping past midnight). */
+function quietMinutes(windows: readonly { readonly start: string; readonly end: string }[]): ReadonlySet<number> {
+  const out = new Set<number>();
+  for (const w of windows) {
+    const start = minutesOf(w.start);
+    const end = minutesOf(w.end);
+    for (let m = 0; m < 24 * 60; m++) if (start <= end ? m >= start && m < end : m >= start || m < end) out.add(m);
+  }
+  return out;
+}
+
+/** A pause distribution is looser when it waits less: a lower mean, a lower floor, or a lower ceiling. */
+function distLoosenings(path: string, was: DistParams | undefined, now: DistParams | undefined): string[] {
+  if (was === undefined) return [];
+  if (now === undefined) return [path];
+  const out: string[] = [];
+  if (now.mean < was.mean) out.push(`${path}.mean`);
+  if (was.min !== undefined && (now.min === undefined || now.min < was.min)) out.push(`${path}.min`);
+  if (was.max !== undefined && now.max !== undefined && now.max < was.max) out.push(`${path}.max`);
+  return out;
+}
+
+/** `was` is a floor: absent or lower is looser. */
+const floor = (path: string, was: number | undefined, now: number | undefined): string[] => (was !== undefined && (now === undefined || now < was) ? [path] : []);
+/** `was` is a limit: absent or higher is looser. */
+const limit = (path: string, was: number | undefined, now: number | undefined): string[] => (was !== undefined && (now === undefined || now > was) ? [path] : []);
+
+/**
+ * Every axis on which `proposed` is looser than the `effective` policy of the same site and account,
+ * as a path (`throttles.write.minIntervalSeconds`, `quietHours`, `interaction.typing.charsPerSecond`).
+ * Empty: at least as strict everywhere (pacing, interval, budget, quiet hours). No effective policy: any
+ * policy tightens. PURE. A field the effective policy does not set is not an axis it holds.
+ */
+export function policyLoosenings(effective: SitePolicy | null, proposed: SitePolicy): string[] {
+  if (effective === null) return [];
+  const out: string[] = [];
+  for (const [cls, was] of Object.entries(effective.throttles ?? {})) {
+    const now = proposed.throttles?.[cls];
+    out.push(
+      ...floor(`throttles.${cls}.minIntervalSeconds`, was.minIntervalSeconds, now?.minIntervalSeconds),
+      ...limit(`throttles.${cls}.hourlyLimit`, was.hourlyLimit, now?.hourlyLimit),
+      ...limit(`throttles.${cls}.dailyLimit`, was.dailyLimit, now?.dailyLimit),
+    );
+  }
+  const quiet = effective.quietHours;
+  if (quiet !== undefined && quiet.windows.length > 0) {
+    const now = proposed.quietHours;
+    if (now === undefined || now.timezone !== quiet.timezone) out.push("quietHours");
+    else {
+      const covered = quietMinutes(now.windows);
+      if ([...quietMinutes(quiet.windows)].some((m) => !covered.has(m))) out.push("quietHours.windows");
+    }
+  }
+  const pace = effective.interaction;
+  if (pace !== undefined) {
+    const now = proposed.interaction;
+    if (now === undefined) out.push("interaction");
+    else {
+      out.push(...distLoosenings("interaction.thinkBeforeActionMs", pace.thinkBeforeActionMs, now.thinkBeforeActionMs));
+      out.push(...distLoosenings("interaction.interInteractionMs", pace.interInteractionMs, now.interInteractionMs));
+      out.push(...floor("interaction.readingMsPerChar", pace.readingMsPerChar, now.readingMsPerChar));
+      // A reading cap: a lower one reads faster. No cap at all is the slowest.
+      if (pace.maxReadingMs !== undefined && now.maxReadingMs !== undefined && now.maxReadingMs < pace.maxReadingMs) out.push("interaction.maxReadingMs");
+      const typing = pace.typing;
+      if (typing !== undefined) {
+        const t = now.typing;
+        if (t === undefined) out.push("interaction.typing");
+        else {
+          if (t.charsPerSecond > typing.charsPerSecond) out.push("interaction.typing.charsPerSecond");
+          out.push(...distLoosenings("interaction.typing.wordPauseMs", typing.wordPauseMs, t.wordPauseMs));
+          out.push(...distLoosenings("interaction.typing.sentencePauseMs", typing.sentencePauseMs, t.sentencePauseMs));
+          if (typing.hesitation !== undefined) {
+            if (t.hesitation === undefined) out.push("interaction.typing.hesitation");
+            else {
+              if (t.hesitation.probability < typing.hesitation.probability) out.push("interaction.typing.hesitation.probability");
+              out.push(...distLoosenings("interaction.typing.hesitation.pauseMs", typing.hesitation.pauseMs, t.hesitation.pauseMs));
+            }
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** The MCP refusal body for a site policy looser than the effective one: the axes, never a value. */
+export function policyLoosenRefusalBody(site: string, axes: readonly string[]): Record<string, unknown> {
+  return {
+    error: "refused",
+    outcome: "refused",
+    code: E_POLICY_LOOSEN_OVER_MCP,
+    axes,
+    message: `${E_POLICY_LOOSEN_OVER_MCP}: over MCP a site policy may only be at least as strict as the effective one on every axis; this one for ${site} is looser on ${axes.join(", ")}, so nothing was set. A person loosens a policy at a terminal: jevitate site policy set ${site} --file <policy.json>. ${DO_NOT_RETRY}`,
+    setting: `jevitate site policy set ${site}`,
+    retryable: false,
+    exitCode: EXIT_CODES.inconclusive,
+  };
+}
+
+/** The MCP refusal body for promoting a mission target: a CLI act (docs/safety.md). */
+export function targetPromoteRefusalBody(id: string): Record<string, unknown> {
+  return {
+    error: "refused",
+    outcome: "refused",
+    code: E_TARGET_PROMOTE_OVER_MCP,
+    message: `${E_TARGET_PROMOTE_OVER_MCP}: promoting a mission target is a person's act, and an MCP call cannot do it; nothing was promoted. A person runs: jevitate mission target promote ${id}. ${DO_NOT_RETRY}`,
+    setting: `jevitate mission target promote ${id}`,
+    retryable: false,
+    exitCode: EXIT_CODES.inconclusive,
+  };
 }

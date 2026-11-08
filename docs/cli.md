@@ -888,7 +888,7 @@ the HITL inbox from the CLI — the same tools `jevitate mcp` serves (approve/ca
 jevitate inbox approve [options] <id>
 ```
 
-always refused (MCP approve_action): only a human can approve an inbox item, in `jevitate ui`
+a person at a terminal approves a held run (#793): shows what is held and asks for its id typed back; anything else is refused as MCP approve_action refuses — other inbox items are answered in `jevitate ui`
 
 **Arguments**
 
@@ -900,8 +900,10 @@ always refused (MCP approve_action): only a human can approve an inbox item, in 
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--holds-dir <path>` | the holds directory (default: .jevitate/logs/holds) |  |  |  |  |
 | `--inbox-dir <path>` | inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--reject` | answer the held run with a rejection instead (it then never resumes) |  |  |  |  |
 
 ### inbox cancel
 
@@ -1022,6 +1024,34 @@ ask a human to provide something back to the agent — a 'handback' item; only q
 | `--run <id>` | the run this item belongs to (required) |  |  |  |  |
 | `--step <step>` | the step it stopped at (required) |  |  |  |  |
 | `--target-url <url>` | the page it concerns |  |  |  |  |
+
+### inbox resume
+
+```
+jevitate inbox resume [options] <id>
+```
+
+continue a held run a person approved (#793), from the step it was held at — the steps before it are not run again; refused unless the Journey, the parameters, the target and the pending action all match the hold (E_HOLD_BINDING)
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
+| `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
+| `--headed` | show the browser |  |  |  |  |
+| `--holds-dir <path>` | the holds directory (default: .jevitate/logs/holds) |  |  |  |  |
+| `--inbox-dir <path>` | inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use) |  |  |  |  |
+| `--journeys-dir <path>` | where the Journey is (default: the project's journeys) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--param <name=value>` | a parameter the run was held with (repeatable): the same set, or the hold refuses | `{}` |  |  |  |
+| `--storage-state <file>` | seed the resumed session from this Playwright storageState file |  |  |  |  |
 
 ### inbox show
 
@@ -1754,10 +1784,12 @@ jevitate journey run [options] <id>
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
+| `--no-done-check` | #800: skip the linked job's done check (two fresh-session readings, before step 1 and after the end state); the job reads unverified (basis no-check), which exits 2 unless project.json doneCheckPolicy is advisory |  |  |  |  |
 | `--param <kv>` | param as key=value (repeatable); a secret one is on the command line: use --secret-field | `{}` |  |  |  |
 | `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--real` | use live Jev + OpenRouter gateways for self-heal (requires keys) | `false` |  |  |  |
 | `--record-video [dir]` | record a video of each browser context (works headless too); default: next to the run's result; listed as videoPaths |  |  |  |  |
+| `--require-done-check` | #800: an unverified job (no done check, or one already true) exits 2 even when project.json doneCheckPolicy is advisory |  |  |  |  |
 | `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
 | `--secret-field <binding>` | a secret parameter from the environment, off the command line: '<label\|testId\|id\|name>=<value>=env:<VAR>' (repeatable), matched on the recorded step that types it, e.g. 'label=Password=env:APP_PASSWORD'. The environment's secretFields in ~/.jevitate/targets.json apply the same way; --param wins | `[]` |  |  |  |
 | `--self-heal <mode>` | self-heal policy mode: fail-closed \| hybrid \| full (#453: hybrid/full need --changes and/or --change-note; a heal is proposed for review, exit 5 — never a pass) | `fail-closed` |  |  |  |

@@ -1,4 +1,5 @@
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
+import { warnParamNamesOnArgv } from "./regression-cli.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
 import { Command } from "commander";
 import { UnauthorizedExploreTargetError } from "@jevitate/explore";
@@ -143,6 +144,7 @@ export function registerVerifyFixCommands(
           human: (data) => formatVerifyFixHuman(data, { result: o.result }),
           ...(exitCode === undefined ? {} : { exitCode }),
         });
+      warnParamNamesOnArgv(program.configureOutput().writeErr, o.param);
       // #195: `--secret env:VAR`, as on explore.
       try {
         const resolved = resolveSecretArgs(o.secret, process.env, "--secret");

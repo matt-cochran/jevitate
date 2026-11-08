@@ -51,6 +51,7 @@
     "playwright": "^1.49.0"
   },
   "devDependencies": {
+    "@jevitate/adjudicator": "workspace:*",
     "@jevitate/ai-core": "workspace:*",
     "@jevitate/daemon": "workspace:*",
     "@jevitate/domain": "workspace:*",

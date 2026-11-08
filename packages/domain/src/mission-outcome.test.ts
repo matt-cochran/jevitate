@@ -1,6 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { GOAL_OUTCOMES, MISSION_EXIT_CODES, combineOutcomes, defectOutcomeOf, foldGoalOutcome, goalMissionOutcome, goalReasonOf, startedOutcome, worstOutcome, type MissionOutcome } from "./mission-outcome.js";
-import { journeyExitCode } from "./journey-outcome.js";
+import {
+  GOAL_ONLY_OUTCOMES,
+  GOAL_OUTCOME_FOLD,
+  GOAL_OUTCOMES,
+  MISSION_EXIT_CODES,
+  MUTATION_PROOF_VERDICTS,
+  combineOutcomes,
+  defectOutcomeOf,
+  foldGoalOutcome,
+  goalMissionOutcome,
+  goalReasonOf,
+  legacyProofVerdict,
+  outcomeExitCode,
+  startedOutcome,
+  worstOutcome,
+  type MissionOutcome,
+} from "./mission-outcome.js";
+import { JOURNEY_RUN_OUTCOMES, journeyExitCode, journeyMissionOutcome } from "./journey-outcome.js";
+import { DEFAULT_DONE_CHECK_POLICY, DONE_CHECK_POLICIES, JOB_ATTAINMENTS, JOB_BASES } from "./job-attainment.js";
 
 describe("defectOutcomeOf (#421/#423)", () => {
   it("no defects: status none, empty byKind, no advisoryByKind", () => {
@@ -22,7 +39,7 @@ describe("defectOutcomeOf (#421/#423)", () => {
 describe("goalMissionOutcome — THE goal × defect table (#423)", () => {
   // The 0.7.0 rule it replaces: a defect turned any goal ending but a broken run / hang into
   // `defects-found`, and the result folded that. The exit code must be the same for every combination.
-  const BROKEN = new Set(["inconclusive", "crashed", "hang", "intermittent", "not-started"]);
+  const BROKEN = new Set(["inconclusive", "crashed", "hang", "intermittent", "not-started", "boundary"]);
   const legacy = (goal: (typeof GOAL_OUTCOMES)[number], defects: boolean): MissionOutcome =>
     foldGoalOutcome(defects && !BROKEN.has(goal) ? "defects-found" : goal);
 
@@ -126,6 +143,90 @@ describe("pending-review (#453)", () => {
 
 describe("journeyExitCode (#453)", () => {
   it("maps ok/healed-pending-review/heal-exhausted/quarantined to 0/5/1/1", () => {
-    expect((["ok", "healed-pending-review", "heal-exhausted", "quarantined"] as const).map(journeyExitCode)).toEqual([0, 5, 1, 1]);
+    expect((["ok", "healed-pending-review", "heal-exhausted", "quarantined"] as const).map((o) => journeyExitCode(o))).toEqual([0, 5, 1, 1]);
+  });
+});
+
+describe("0.30.0 result vocabulary (#807, design §6)", () => {
+  it("MISSION_EXIT_CODES is unchanged from 0.29.0", () => {
+    expect(MISSION_EXIT_CODES).toMatchInlineSnapshot(`
+      {
+        "clean": 0,
+        "crashed": 2,
+        "defects-found": 1,
+        "hang": 3,
+        "inconclusive": 2,
+        "intermittent": 4,
+        "pending-review": 5,
+      }
+    `);
+    expect(Object.keys(MISSION_EXIT_CODES)).toMatchInlineSnapshot(`
+      [
+        "clean",
+        "pending-review",
+        "defects-found",
+        "inconclusive",
+        "crashed",
+        "hang",
+        "intermittent",
+      ]
+    `);
+  });
+
+  it("boundary is a goal-only outcome folding to inconclusive, exit 2 (owner decision 1)", () => {
+    expect(GOAL_ONLY_OUTCOMES).toContain("boundary");
+    expect(GOAL_OUTCOME_FOLD.boundary).toBe("inconclusive");
+    expect(foldGoalOutcome("boundary")).toBe("inconclusive");
+    expect(outcomeExitCode("boundary")).toBe(2);
+    expect(goalMissionOutcome("boundary", "defects")).toBe("inconclusive");
+    expect(goalReasonOf({ goalOutcome: "boundary" })).toBe("gave-up");
+  });
+
+  it("exports the job attainment, basis and policy vocabularies", () => {
+    expect(JOB_ATTAINMENTS).toEqual(["achieved", "not-achieved", "unverified"]);
+    expect(JOB_BASES).toEqual(["done-check", "already-true", "reading-unknown", "no-check", "harness"]);
+    expect(DONE_CHECK_POLICIES).toEqual(["require", "advisory"]);
+    expect(DEFAULT_DONE_CHECK_POLICY).toBe("require");
+  });
+
+  it("legacyProofVerdict maps sensitive to proven and is the identity otherwise (owner decision 4)", () => {
+    expect(MUTATION_PROOF_VERDICTS).toEqual(["sensitive", "insensitive", "inconclusive"]);
+    expect(legacyProofVerdict("sensitive")).toBe("proven");
+    expect(legacyProofVerdict("insensitive")).toBe("insensitive");
+    expect(legacyProofVerdict("inconclusive")).toBe("inconclusive");
+  });
+});
+
+describe("journeyExitCode with job info (0.30.0, owner decisions 2/3)", () => {
+  it("with no job info gives the 0.29.0 result for every outcome", () => {
+    for (const o of JOURNEY_RUN_OUTCOMES) {
+      expect(journeyExitCode(o, undefined), o).toBe(journeyExitCode(o));
+      expect(journeyExitCode(o, {}), o).toBe(journeyExitCode(o));
+    }
+  });
+
+  it("ok + not-achieved exits 1 (done-check-failed)", () => {
+    expect(journeyExitCode("ok", { attainment: "not-achieved" })).toBe(1);
+    expect(journeyExitCode("ok", { failureKind: "done-check-failed" })).toBe(1);
+    expect(journeyMissionOutcome("ok", { attainment: "not-achieved" })).toBe("defects-found");
+  });
+
+  it("not-achieved outranks a pending review, never changes an already failing run", () => {
+    expect(journeyExitCode("healed-pending-review", { attainment: "not-achieved" })).toBe(1);
+    expect(journeyExitCode("quarantined", { attainment: "not-achieved" })).toBe(1);
+    expect(journeyExitCode("heal-exhausted", { attainment: "not-achieved" })).toBe(1);
+  });
+
+  it("ok + unverified exits 2 under the default policy (require) and 0 under advisory", () => {
+    expect(journeyExitCode("ok", { attainment: "unverified" })).toBe(2);
+    expect(journeyExitCode("ok", { attainment: "unverified", doneCheckPolicy: "require" })).toBe(2);
+    expect(journeyExitCode("ok", { attainment: "unverified", doneCheckPolicy: "advisory" })).toBe(0);
+  });
+
+  it("unverified leaves a non-pass alone; achieved keeps the step outcome's code", () => {
+    expect(journeyExitCode("healed-pending-review", { attainment: "unverified" })).toBe(5);
+    expect(journeyExitCode("quarantined", { attainment: "unverified" })).toBe(1);
+    expect(journeyExitCode("ok", { attainment: "achieved" })).toBe(0);
+    expect(journeyExitCode("healed-pending-review", { attainment: "achieved" })).toBe(5);
   });
 });

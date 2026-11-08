@@ -1,4 +1,5 @@
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
+import { secretParamNamesArgvWarning, secretParamsCarriedBy } from "./secret-params.js";
 import { BranchReplayInputError, JourneyPrefixStaleError, prefixFromBranch, recordedBranchOf, type JourneyPrefix, type RecordedBranch } from "./journey-prefix.js";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
@@ -37,6 +38,12 @@ import {
 } from "./cli-shared.js";
 
 /** Registers `jevitate regression`: `capture` and `run`. */
+/** #809: the existing argv warning for a `--param` that names a secret, by name only (never the value). */
+export function warnParamNamesOnArgv(write: ((line: string) => void) | undefined, param: Readonly<Record<string, string>>): void {
+  const names = secretParamsCarriedBy(null, param);
+  if (names.length > 0) write?.(secretParamNamesArgvWarning(names));
+}
+
 export function registerRegressionCommands(program: Command, deps: CliDeps): void {
   // Additive: `@jevitate/regression` — reproduce -> minimize -> commit a
   // failing Recording into a committed regression artifact (Ticket #5).
@@ -111,6 +118,7 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
         json?: boolean;
       } & FixtureFlags & EmulationFlags>();
       const { from, id, dir, attempts, summary, result: resultPath, fingerprint, storageState, force, json, param } = flags;
+      warnParamNamesOnArgv(program.configureOutput().writeErr, param);
       if (refuseUnsafeName(program, id, "regression id")) return;
       // #218: unusable input is refused up front (64), never a capture that broke at runtime (2).
       for (const [flag, path] of [["--from", from], ["--result", resultPath]] as const) {
@@ -244,6 +252,7 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
       const { dir, attempts, storageState: storageStateFlag, json, env: envName, baseUrl, param, ...emulationFlags } = this.opts<
         { dir?: string; attempts?: string; storageState?: string; json?: boolean; param: Record<string, string> } & EmulationFlags & EnvironmentFlags
       >();
+      warnParamNamesOnArgv(program.configureOutput().writeErr, param);
       // #247: --env/--base-url choose where the regression replays (unknown env / bad file → 64).
       let environment: ResolvedJourneyEnvironment | undefined;
       try {

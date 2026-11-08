@@ -120,10 +120,34 @@ const USAGE_ERROR_CODES: ReadonlySet<string> = new Set([
   "E_READINESS_TARGET", // #581: replay/prove without a target
   "E_READINESS_PRODUCTION", // #581: replay/prove against an environment flagged production
   "E_READINESS_PARAMS", // #581: replay/prove missing a required param (named, never valued)
+  // 0.30.0 §5.4 holds: a hold that cannot be approved or resumed as asked — nothing ran. (E_RUN_HELD and E_HOLD_EXPIRED stay 2.)
+  "E_HOLD_BINDING",
+  "E_HOLD_NOT_APPROVED",
+  "E_HOLD_REJECTED",
+  "E_HOLD_ANSWERED",
+  "E_HOLD_INTEGRITY",
+  "E_HOLD_CHECKPOINT",
+  "E_JOURNEY_PARAM_TYPE", // #796: a parameter is not of its declared type (named, never valued) — nothing ran
+]);
+
+/**
+ * Refusals: the run was refused before it could prove anything, and is refused the same way until a
+ * person changes a setting → `inconclusive` (2), never a pass and never `usage`, whatever a suffix
+ * pattern above would say. The MCP bodies say `retryable: false`.
+ */
+const REFUSAL_ERROR_CODES: ReadonlySet<string> = new Set([
+  "E_RUN_REFUSED_DESTRUCTIVE", // #789
+  "E_RUN_REFUSED_OFF_ALLOWLIST_WRITE", // #789
+  "E_RUN_REFUSED_PRODUCTION", // #789
+  "E_APPROVAL_CHANNEL_FOR_MODE", // 0.30.0 §5: an automation-mode run of a Journey no person approved (tty / pr-review)
+  "E_HUMAN_STEP_IN_TEST_MODE", // 0.30.0 §5: a test-mode run never waits for a person
+  "E_POLICY_LOOSEN_OVER_MCP", // 0.30.0 §5.4: site_policy over MCP may only tighten
+  "E_TARGET_PROMOTE_OVER_MCP", // 0.30.0 §5.4: promoting a mission target is a CLI act
 ]);
 
 /** True when a refused command's error code is a usage/input error (exit 64). */
 export function isUsageErrorCode(code: string): boolean {
+  if (REFUSAL_ERROR_CODES.has(code)) return false;
   return USAGE_ERROR_CODES.has(code) || USAGE_ERROR_PATTERNS.some((p) => p.test(code));
 }
 

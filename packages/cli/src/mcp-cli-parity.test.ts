@@ -47,6 +47,8 @@ const EXCLUDED: Readonly<Record<string, string>> = {
   "hint journeeze enable": "#677: enabling local product hints is a person's interactive terminal preference; the command refuses MCP and CI before writing preferences",
   "acceptance audit": "a local, read-only release-evidence audit over operator-selected files; it produces CI artifacts but does not drive an authorized target or offer an agent capability",
   mcp: "the MCP server itself (it owns stdin/stdout); an MCP client is already connected to it",
+  "inbox resume":
+    "#793: continues a held run only on a person's terminal approval (`inbox approve` at a TTY): the approval is human-only like approve_action, and the resume acts on it; an agent sees the held outcome, never drives the approved action",
   ui: "the local human dashboard (loopback HTTP, opens a browser): where a person approves/cancels inbox items — human-only by design",
   where: "#585: reports where this shell's project, catalog and Journeys resolve; over MCP the stores are the server's (--dir/--project/--journeys-dir are never MCP arguments)",
   init: "local machine setup: writes the harness MCP config, installs skills and collects API keys interactively — the operator's, run once",
@@ -240,6 +242,9 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
     omitted: {
       "--secret-field": OMIT.envSecret,
       "--allow": OMIT.mcpOrigins,
+      // 0.30.0 (#800): temporary until the done-check hooks are registered for MCP run_journey (d-run-hooks-register).
+      "--no-done-check": "done checks are not yet read on MCP runs; the MCP argument lands with the hook registration",
+      "--require-done-check": "done checks are not yet read on MCP runs; the MCP argument lands with the hook registration",
       "--ignore-host-load": OMIT.hostLoad,
       "--dir": OMIT.storeDir,
       "--project": OMIT.storeDir,
@@ -371,5 +376,51 @@ describe("#544: author_journey maps the fixture arguments", () => {
     const { buildCliArgv } = await import("./mcp-cli-tools.js");
     const spec = CLI_TOOL_SPECS.find((t) => t.name === "author_journey")!;
     expect(() => buildCliArgv(spec, { url: "http://127.0.0.1:1/", fixtures: "/etc/passwd" }, [process.cwd()])).toThrow(/fixtures/);
+  });
+});
+
+describe("#800: find_capabilities carries the linked job's done check", () => {
+  it("a linked Journey's capability has job.done.at and job.done.check", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { vi } = await import("vitest");
+    const root = mkdtempSync(join(tmpdir(), "jev-done-find-"));
+    const journeysDir = join(root, ".jevitate", "journeys");
+    mkdirSync(journeysDir, { recursive: true });
+    writeFileSync(
+      join(root, ".jevitate", "jobs.json"),
+      JSON.stringify({ jobs: [{ id: "invite", trigger: "a colleague joins", motivation: "invite them", outcome: "work together", done: { version: 1, at: "/members", check: "textIncludes:#list|ada" } }] }),
+    );
+    writeFileSync(
+      join(journeysDir, "invite-admin.json"),
+      JSON.stringify({
+        metadata: { id: "invite-admin", name: "invite admin", description: "invite", promoted: true, params: [], createdAtIso: "2026-11-01T00:00:00Z", job: "invite" },
+        recording: { version: "1.0.0", site: "https://example.test", pages: [{ url: "/", steps: [{ step: { kind: "navigate", url: "/", expect: { kind: "urlIncludes", text: "/" } } }] }] },
+      }),
+    );
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(root);
+    try {
+      const tool = buildMcpTools({ journeysDir }).find((t) => t.name === "find_capabilities")!;
+      const res = await tool.handler({ query: "invite" });
+      const caps = JSON.parse((res.content[0] as { text: string }).text) as Array<{ id: string; job?: { id: string; done?: { at: string; check: string } } }>;
+      const cap = caps.find((c) => c.id === "invite-admin")!;
+      expect(cap.job?.id).toBe("invite");
+      expect(cap.job?.done?.at).toBe("/members");
+      expect(cap.job?.done?.check).toBe("textIncludes:#list|ada");
+      // The CLI exposes the same capability: `journey find --json` carries the same job.done.
+      const lines: string[] = [];
+      const cli = buildProgram({ profiles: new ProfileManager("/unused-in-parity"), journeysDir });
+      cli.configureOutput({ writeOut: (t) => lines.push(t), writeErr: () => {} });
+      cli.exitOverride();
+      await cli.parseAsync(["journey", "find", "invite", "--json"], { from: "user" });
+      const cliCaps = (JSON.parse(lines.join("")) as { data: Array<{ id: string; job?: { id: string; done?: { at: string; check: string } } }> }).data;
+      const cliCap = cliCaps.find((c) => c.id === "invite-admin")!;
+      expect(cliCap.job?.done?.at).toBe(cap.job?.done?.at);
+      expect(cliCap.job?.done?.check).toBe(cap.job?.done?.check);
+    } finally {
+      cwd.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

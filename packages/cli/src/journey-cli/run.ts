@@ -1,13 +1,13 @@
 import { type CliDeps, JEV_PROVIDER_FLAG_HELP, jevProviderArg, resolveDbPath, type BrowserLaunchFlags, withBrowserLaunchFlags, browserRunFromFlags, withDemoFlags, withScreenshotsFlag, type ScreenshotsFlags, type DemoFlags, type EmulationFlags, withEmulationFlags, emulationFromFlags, collectParam, emitJson, environmentSeams, writeRawResult, GatewaySelectionError, buildExploreGateways } from "../cli-shared.js";
 import { withProjectFlags } from "../project-layout.js";
-import { DEPRECATED_DIR_HELP, journeyLayout } from "./shared.js";
+import { DEPRECATED_DIR_HELP, flaggedCatalogDir, journeyLayout } from "./shared.js";
 import { HttpCheckOffAllowlistError } from "../http-probe.js";
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "../run-tags-cli.js";
 import { existsSync } from "node:fs";
 import { Command } from "commander";
 import { ParamValidationError } from "@jevitate/journey";
 import { MissingCredentialError, UsageTracker, type GenerationPort } from "@jevitate/ai-core";
-import { journeyExitCode, safeRunPolicy, type SelfHealMode } from "@jevitate/domain";
+import { DEFAULT_DONE_CHECK_POLICY, journeyExitCode, safeRunPolicy, type DoneCheckPolicy, type SelfHealMode } from "@jevitate/domain";
 import { makeEvidenceSelfHealer } from "../self-heal-adapter.js";
 import { CLI_HEAL_NAMES, JourneyHealArgsError, journeyHealBudget, journeyRunSummary, readJourneyChangeScope, validateJourneyHeal, type JourneyHealRequest } from "../journey-heal.js";
 import { ChangesArgsError, ChangesInputError } from "../change-context.js";
@@ -15,9 +15,12 @@ import { intArg, positiveIntArg } from "../cli-args.js";
 import { MAX_STEP_RESPONSE_TIMEOUT_MS } from "../journey-network-checks.js";
 import { type ChangeScope, SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
 import { ok, fail } from "../envelope.js";
-import { runJourneyProgrammatically, UnknownJourneyError, JourneyRequiresAuthError } from "../journey-api.js";
+import { evidenceErrorOf, runJourneyProgrammatically, UnknownJourneyError, JourneyRequiresAuthError } from "../journey-api.js";
 import { resolveCatalogDir } from "../catalog-api.js";
 import { journeyDraftWarning } from "../journey-stale-api.js";
+import { draftOnAutomationTargetWarning, RunModeRefusedError } from "../journey-run-mode-gate.js";
+import { ParamTypeError, paramTypeRefusalBody } from "../journey-param-types.js";
+import { heldOutcomeOf } from "../journey-hold.js";
 import { runRecordErrorOf, withJourneyRunRecord } from "../journey-run-record.js";
 import { ExtensionMismatchError } from "../browser-run-options.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "../run-screenshots.js";
@@ -31,6 +34,9 @@ import { BoundaryNoHealError, handbackExitCode, handbackLine } from "../journey-
 import { type EmulationSpec } from "@jevitate/playwright";
 import { SecretFieldSpecError } from "@jevitate/explore";
 import { BoundSecretOutsideFieldError, SecretFieldAmbiguousError, withSecretParams, warnSecretParamsOnArgv, type BoundSecretParams } from "../secret-params.js";
+import { DoneCheckRun } from "../journey-done-check-hook.js";
+import { DONE_CHECK_FAILED_MESSAGE, doneCheckExitInput } from "../journey-done-check.js";
+import { loadProjectConfig, ProjectConfigError } from "../project-config.js";
 import { environmentFromFlags, fixtureRebaseUrl, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
 
 /** Registers `jevitate journey run`. */
@@ -62,6 +68,8 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
     .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--step-response-timeout <ms>", "#486: how long a step's responseStatus check waits for a matching request that was sent but has no response yet, e.g. a cold start after a deploy (default 15000). A late 2xx is an advisory slow-step finding (slowSteps), not a quarantine; a non-2xx, or no response within the bound, fails. A step's own responseTimeoutMs overrides it; at most 300000", intArg({ min: 1, max: MAX_STEP_RESPONSE_TIMEOUT_MS }))
     .option("--action-deltas", "opt-in (#303): record what each replayed step changed on the page (redacted, a code verdict per step) and compare it with the delta its Recording stored — returned as actionDeltas")
+    .option("--no-done-check", "#800: skip the linked job's done check (two fresh-session readings, before step 1 and after the end state); the job reads unverified (basis no-check), which exits 2 unless project.json doneCheckPolicy is advisory")
+    .option("--require-done-check", "#800: an unverified job (no done check, or one already true) exits 2 even when project.json doneCheckPolicy is advisory")
     .option("--json", "emit a JSON envelope")
     .option(TAG_FLAG, TAG_HELP, collectTag, [])
     .action(taggedAction(program, "journey run", async function (this: Command, id: string) {
@@ -97,6 +105,8 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         fakeAi,
         jevProvider,
         json,
+        doneCheck,
+        requireDoneCheck,
         screenshots: _screenshots,
         actionDeltas,
         stepResponseTimeout,
@@ -126,6 +136,8 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         fakeAi?: boolean;
         jevProvider?: string;
         json?: boolean;
+        doneCheck: boolean;
+        requireDoneCheck?: boolean;
       } & EmulationFlags & ScreenshotsFlags>();
       // A secret parameter from the environment (--secret-field, targets.json), before any browser opens.
       let param: Record<string, string>;
@@ -178,6 +190,28 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         return;
       }
       const selfHealMode = selfHeal as SelfHealMode;
+      // #800: the job's done check — its policy from project.json, the flags over it (64 before any browser).
+      if (!doneCheck && requireDoneCheck === true) {
+        emitJson(program, fail("E_JOURNEY_RUN_ARGS", "--no-done-check and --require-done-check cannot be used together"));
+        return;
+      }
+      const catalogDir = resolveCatalogDir(deps.catalogDir, flaggedCatalogDir(layout));
+      let doneCheckPolicy: DoneCheckPolicy;
+      try {
+        doneCheckPolicy = requireDoneCheck === true ? "require" : (loadProjectConfig(catalogDir).doneCheckPolicy ?? DEFAULT_DONE_CHECK_POLICY);
+      } catch (err) {
+        if (!(err instanceof ProjectConfigError)) throw err;
+        emitJson(program, fail(err.code, err.message));
+        return;
+      }
+      const doneCheckRun = new DoneCheckRun({
+        catalogDir,
+        journeysDir: runJourneysDir,
+        ...(environment?.baseUrl === undefined ? {} : { origin: environment.baseUrl }),
+        ...(storageState === undefined ? {} : { storageState }),
+        skip: !doneCheck,
+        ...(deps.explore?.browserPortFactory === undefined ? {} : { sessionPortFactory: deps.explore.browserPortFactory }),
+      });
       // #453 Q1: a heal needs a change context, and the change/budget flags need a heal — refused
       // (64) before any Journey lookup, git read, model gateway or browser.
       const healRequest: JourneyHealRequest = {
@@ -237,9 +271,12 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         // #788: a draft runs here, as authoring needs, and says once what MCP would answer.
         const unapproved = await journeyDraftWarning(runJourneysDir, id, resolveCatalogDir(deps.catalogDir));
         if (unapproved !== undefined) program.configureOutput().writeErr?.(unapproved);
+        // 0.30.0 §5.7: a draft on an automation-mode target (anything not declared trust test or harness) says so once.
+        const draftOnAutomation = await draftOnAutomationTargetWarning({ journeysDir: runJourneysDir, id, environment, targetsFile: environmentSeams(deps).targetsFile });
+        if (draftOnAutomation !== undefined) program.configureOutput().writeErr?.(draftOnAutomation);
         let fixtureDrift: FixtureDrift | undefined;
         // #790: every run leaves one value-free record, whatever it comes to.
-        const result = await withJourneyRunRecord({ channel: "cli", id, params: param, logsRoot: deps.logs?.logsRoot }, (runRecorder) => withSiteGate(resolveDbPath(deps), (siteGate) => runJourneyProgrammatically({
+        const result = await doneCheckRun.run(() => withJourneyRunRecord({ channel: "cli", id, params: param, logsRoot: deps.logs?.logsRoot }, (runRecorder) => withSiteGate(resolveDbPath(deps), (siteGate) => runJourneyProgrammatically({
           runRecorder,
           ...(siteGate === undefined ? {} : { siteGate }),
           dir: runJourneysDir,
@@ -257,6 +294,8 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
           ...(actionDeltas === true ? { actionDeltas: true } : {}),
           ...(stepResponseTimeout === undefined ? {} : { stepResponseTimeoutMs: stepResponseTimeout }),
           ...(environment === undefined ? {} : { environment }),
+          // 0.30.0 §5: the operator's targets file the run's trust is read from (the #789 guard's seam).
+          ...(environmentSeams(deps).targetsFile === undefined ? {} : { runGuardTargetsFile: environmentSeams(deps).targetsFile }),
           ...(allow.length === 0 ? {} : { allow }),
           // #140: fixture HTTP steps may only reach the replay's allowlist (authenticated from --storage-state):
           // the journey's own site (#247: under an environment, its allowed origins), plus (#542/#543) its
@@ -276,8 +315,9 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
             checkSetupRefs({ "--param": Object.values(param) }, fx);
             return fx;
           },
-        }))).then((r) => withEngine(healUsage === undefined ? r : { ...r, usage: healUsage.snapshot() }));
+        })))).then((r) => withEngine(healUsage === undefined ? r : { ...r, usage: healUsage.snapshot() }));
         if (result.runRecordError !== undefined) program.configureOutput().writeErr?.(`warning: ${result.runRecordError}\n`);
+        if (result.evidenceError !== undefined) program.configureOutput().writeErr?.(`warning: ${result.evidenceError}\n`);
         if (fixtureDrift !== undefined && !json) program.configureOutput().writeErr?.(`warning: ${(fixtureDrift as FixtureDrift).message}\n`);
         // #246 (informational, never failing): how many steps say why — `journey annotate` drafts the rest.
         const intent = await journeyIntentCoverage(runJourneysDir, id);
@@ -286,10 +326,20 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
             `note: ${intent.withoutObjective} of ${intent.steps} step(s) have no objective — draft them with \`jevitate journey annotate ${id}\`\n`,
           );
         }
-        const envelope = ok({ ...result, ...(intent === undefined ? {} : { intent }), ...(fixtureDrift === undefined ? {} : { fixtureDrift }) });
+        // #800: the job verdict (absent while the done-check hooks are not registered: the run is unchanged).
+        const job = doneCheckRun.job;
+        const doneCheckFailed = job?.attainment === "not-achieved" && !("failure" in result);
+        const envelope = ok({
+          ...result,
+          ...(job === undefined ? {} : { job }),
+          ...(doneCheckFailed ? { failure: { kind: "done-check-failed", message: DONE_CHECK_FAILED_MESSAGE } } : {}),
+          ...(intent === undefined ? {} : { intent }),
+          ...(fixtureDrift === undefined ? {} : { fixtureDrift }),
+        });
         // #583: a declared prepare-only boundary decides the exit too — a run that sent a write is never
         // a pass (`submitted`), and only `prepared` keeps the run's own code.
-        const code = handbackExitCode(journeyExitCode(result.outcome), result.handback);
+        // #800 (owner decisions 2/3): a job not achieved exits 1; an unverified pass exits 2 under `require`.
+        const code = handbackExitCode(journeyExitCode(result.outcome, doneCheckExitInput(job, doneCheckPolicy)), result.handback);
         if (json) {
           emitJson(program, envelope);
           // #453: ok → 0; healed-pending-review → 5 (a proposed revision, never a pass); else 1.
@@ -304,7 +354,14 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
       } catch (err) {
         const recordProblem = runRecordErrorOf(err);
         if (recordProblem !== undefined) program.configureOutput().writeErr?.(`warning: ${recordProblem}\n`);
-        if (err instanceof SiteGateRefusedError || isEnvironmentError(err) || err instanceof HttpCheckOffAllowlistError) {
+        const evidenceProblem = evidenceErrorOf(err);
+        if (evidenceProblem !== undefined) program.configureOutput().writeErr?.(`warning: ${evidenceProblem}\n`);
+        const held = heldOutcomeOf(err);
+        if (held !== undefined) {
+          // 0.30.0 §5.4: held for a person (`jevitate inbox approve <holdId>`); it proves nothing yet (exit 2).
+          emitJson(program, ok(withEngine(held)));
+          process.exitCode = 2;
+        } else if (err instanceof SiteGateRefusedError || isEnvironmentError(err) || err instanceof HttpCheckOffAllowlistError) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof UnknownJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));
@@ -325,6 +382,13 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof ParamValidationError) {
           emitJson(program, fail("E_INVALID_PARAMS", String(err.message)));
+        } else if (err instanceof ParamTypeError) {
+          // #796: names and expected types only, never a value; exit 64.
+          const body = paramTypeRefusalBody(err);
+          emitJson(program, fail(body.code, body.message));
+        } else if (err instanceof RunModeRefusedError) {
+          // 0.30.0 §5: a test-mode target never waits for a person (exit 2, refused).
+          emitJson(program, fail(err.refusalCode, err.message));
         } else {
           emitJson(program, fail("E_JOURNEY_RUN", String(err)));
         }

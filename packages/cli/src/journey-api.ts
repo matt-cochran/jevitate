@@ -1,5 +1,7 @@
 import { NOT_A_CREDENTIAL_WAY_OUT, fixtureSecretNeeds, secretBoundNeeds, type BoundSecretParams } from "./secret-params.js";
 import type { JourneyRunRecorder } from "./journey-run-record.js";
+import { JourneyRunEvidenceWriter } from "./journey-run-evidence.js";
+import { hasRunHooks, resolveRunMode, runReadDoneCheckHooks, runValidateParamsHooks, withRunHookGuard, type RunHookContext, type RunMode } from "./journey-run-hooks.js";
 import { allowedOriginSet, offAllowlistWriteOrigin, prepareMcpRunGuard } from "./mcp-run-guard.js";
 import { FsJourneyStore, JourneyRegistry, ParamValidationError, declaredNonSecretParams, describeStep, isSecretName, loadRefusedParamNames, flatJourneySteps, journeyEndState, journeyParamSchema, journeyPrefix, lintJourney, lintUploadFixtures, secretNamedValues, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
 import { assertHttpChecksAllowed, createHttpProbe, httpCheckRefs } from "./http-probe.js";
@@ -9,10 +11,11 @@ import { checkProposal, deleteJourneyProposal, proposedJourney, rejectJourneyPro
 import { journeyReviewHash } from "./journey-review.js";
 import { readApprovedSnapshot, writeApprovedSnapshot } from "./journey-review-store.js";
 import { anchorRuleMode, assertAnchorRules, journeyAnchorIssues, refLintFindings } from "./journey-anchor-gate.js";
-import { journeyCatalogGate, resolveCatalogDir } from "./catalog-api.js";
+import { journeyCatalogGate, loadCatalog, resolveCatalogDir } from "./catalog-api.js";
+import { journeyDoneCheckFindings } from "./catalog-refs.js";
 import type { JevSetup } from "./jev-advisor.js";
 import { redactText } from "@jevitate/ai-core";
-import { safeRunPolicy, runTagsOf, type RunPolicy, clock } from "@jevitate/domain";
+import { safeRunPolicy, runTagsOf, type RunPolicy, clock, contentHash } from "@jevitate/domain";
 import { dirname, join } from "node:path";
 import { PlaywrightBrowserPort, type BrowserPort, type BrowserSession, type EmulationSpec } from "@jevitate/playwright";
 import { assertSameExtensionBuild, closeOnce, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
@@ -93,7 +96,7 @@ export interface RunJourneyProgrammaticallyOptions {
   assertRunnable?: (stored: Journey) => Promise<void>;
   /** #789: the `targets.json` an MCP run's guard reads (default: `~/.jevitate/targets.json`). */
   runGuardTargetsFile?: string;
-  /** #790: told what the run resolved to and watches its writes, for its value-free record. */
+  /** #790: told what the run resolved to and watches its writes, for its value-free record. With it the run also writes its RunEvidence (#812). */
   runRecorder?: JourneyRunRecorder;
   /**
    * The secret parameters an operator's binding supplied (secret-params.ts) → where each may be
@@ -363,7 +366,16 @@ export async function lintJourneyById(
   };
   // #498: with no project, every literal upload fixture is refused at run time — say so here too.
   const noRoot = baseDir === undefined ? lintUploadFixtures(journey, undefined) : [];
-  const findings = [...lintJourney(journey, lintOpts), ...noRoot, ...refLintFindings(refIssues)];
+  // #800: the linked job's done-check findings (missing / invalid / cannot be false), about this Journey.
+  const doneFindings: JourneyLintFinding[] = [];
+  if (journey.metadata.job !== undefined) {
+    const catalogDir = opts.catalogDir === undefined ? resolveCatalogDir(undefined) : opts.catalogDir;
+    const catalog = await loadCatalog(catalogDir, dir);
+    for (const f of journeyDoneCheckFindings(catalog, journey)) {
+      doneFindings.push({ rule: f.rule, level: f.level, message: f.message, ...(f.fix === undefined ? {} : { fix: f.fix }) });
+    }
+  }
+  const findings = [...lintJourney(journey, lintOpts), ...noRoot, ...refLintFindings(refIssues), ...doneFindings];
   return {
     id,
     findings,
@@ -564,10 +576,15 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
  * `ParamValidationError`, from `@jevitate/journey`) BEFORE any browser is
  * launched, then builds the real Actor + `JourneyRunner` and runs.
  */
-export async function runJourneyProgrammatically(
-  opts: RunJourneyProgrammaticallyOptions,
-  mutation: MutationReplayOptions = {},
-): Promise<JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[]; actionDeltas?: ReplayDeltaSummary; slowSteps?: SlowStep[]; offAllowlistWrites?: string[]; handback?: HandbackOutcome } & Partial<ScreenshotsResult> & MutationReplayFields & HealRunFields> {
+export type RunJourneyResult = JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[]; actionDeltas?: ReplayDeltaSummary; slowSteps?: SlowStep[]; offAllowlistWrites?: string[]; handback?: HandbackOutcome } & Partial<ScreenshotsResult> & MutationReplayFields & HealRunFields;
+
+/**
+ * #812/#800: a surface's run (one with a `runRecorder`: `journey run` and `run_journey`) writes its
+ * RunEvidence v1 record to its own directory beside the #790 record, whatever the outcome, refusals and
+ * errors included. Writing it never changes the outcome: why it could not be written is `evidenceError`
+ * on the result, or on the error the run threw, as `runRecordError` is.
+ */
+export async function runJourneyProgrammatically(opts: RunJourneyProgrammaticallyOptions, mutation: MutationReplayOptions = {}): Promise<RunJourneyResult & { evidenceError?: string }> {
   const store = new FsJourneyStore(opts.dir);
   const registry = new JourneyRegistry(store);
 
@@ -576,12 +593,119 @@ export async function runJourneyProgrammatically(
     throw new UnknownJourneyError(`unknown journey '${opts.id}'`);
   }
   opts.runRecorder?.noteJourney(stored);
+  const evidence = runEvidenceFor(opts, stored);
+  if (evidence !== undefined) opts.runRecorder?.deriveFrom(evidence.writer);
+  let result: RunJourneyResult;
+  try {
+    result = await runStoredJourney(opts, mutation, stored, evidence);
+  } catch (err) {
+    const problem = evidence?.finish(err);
+    if (problem !== undefined && err !== null && typeof err === "object") (err as { evidenceError?: string }).evidenceError = problem;
+    throw err;
+  }
+  const problem = evidence?.finish(undefined, result);
+  return problem === undefined ? result : { ...result, evidenceError: problem };
+}
+
+/** The `evidenceError` a run's thrown error carries, if any. */
+export function evidenceErrorOf(err: unknown): string | undefined {
+  const v = err !== null && typeof err === "object" ? (err as { evidenceError?: unknown }).evidenceError : undefined;
+  return typeof v === "string" ? v : undefined;
+}
+
+const STEP_KIND = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
+const ERROR_CODE = /^E_[A-Z0-9_]{1,62}$/;
+
+/** One run's evidence: the writer, the steps the replay reported, and how the record is finished. */
+interface RunEvidenceScope {
+  readonly writer: JourneyRunEvidenceWriter;
+  readonly hooks: { mode: RunMode | undefined };
+  /** A StepObserver feeding the writer: the step each write belongs to, and how each step ended. */
+  observer(): StepObserver;
+  /** The steps of the Journey that ran (a prefix or environment changes none of their kinds). */
+  ran(journey: Journey): void;
+  finish(err: unknown, result?: RunJourneyResult): string | undefined;
+}
+
+function runEvidenceFor(opts: RunJourneyProgrammaticallyOptions, stored: Journey): RunEvidenceScope | undefined {
+  const recorder = opts.runRecorder;
+  if (recorder === undefined) return undefined;
+  let dir: string;
+  let writer: JourneyRunEvidenceWriter;
+  try {
+    const at = recorder.evidenceDir();
+    // Run records are off (`JEVITATE_RUN_RECORD=off`): no evidence either, and the recorder watches for itself.
+    if (at === undefined) return undefined;
+    dir = at;
+    writer = new JourneyRunEvidenceWriter({
+      channel: recorder.channel,
+      journey: { id: opts.id, hash: contentHash(stored) },
+      params: opts.params,
+      secretParamNames: secretParamNames(stored),
+      origin: opts.environment?.baseUrl ?? stored.recording.site,
+      ...(opts.environment?.name === undefined ? {} : { environment: opts.environment.name }),
+      keyFile: recorder.evidenceKeyFile,
+    });
+  } catch {
+    // A record that cannot even start never fails the run: the #790 record still says what ran.
+    return undefined;
+  }
+  const reported = new Set<number>();
+  let kinds: string[] = flatJourneySteps(stored).map((s) => s.recorded.step.kind);
+  const kindOf = (index: number): string => {
+    const k = kinds[index - 1] ?? "unknown";
+    return STEP_KIND.test(k) ? k : "other";
+  };
+  const hooks: { mode: RunMode | undefined } = { mode: undefined };
+  return {
+    writer,
+    hooks,
+    observer: () => ({
+      beforeStep: async ({ index }) => writer.beginStep(index + 1),
+      afterStep: async ({ index, recorded, outcome }) => {
+        reported.add(index + 1);
+        writer.noteStep({
+          index: index + 1,
+          kind: kindOf(index + 1),
+          outcome: outcome === "done" ? "ok" : outcome === "failed" ? "failed" : "skipped",
+          // A failed step may have failed its action or its expect: which, this run does not tell.
+          postcondition: outcome === "failed" ? { known: false, reason: "not-gathered" } : outcome === "done" && "expect" in recorded.step && recorded.step.expect !== undefined ? "held" : "none",
+        });
+      },
+    }),
+    ran: (journey) => {
+      writer.noteJourney(journey);
+      kinds = flatJourneySteps(journey).map((s) => s.recorded.step.kind);
+    },
+    finish: (err, result) => {
+      if (err !== undefined) {
+        const e = err as { code?: unknown; extra?: { at?: unknown } } | null;
+        const code = typeof e?.code === "string" && ERROR_CODE.test(e.code) ? e.code : undefined;
+        const at = e?.extra?.at;
+        if (code !== undefined && typeof at === "number" && Number.isInteger(at) && at >= 1) {
+          reported.add(at);
+          writer.noteStep({ index: at, kind: kindOf(at), outcome: "refused", postcondition: "none", refusal: code });
+        }
+        writer.note(code === undefined ? "the run ended with an error" : `the run ended with ${code}`);
+      } else if (result !== undefined) writer.note(`the run ended ${STEP_KIND.test(result.outcome) ? result.outcome : "with an outcome"}`);
+      for (let i = 1; i <= kinds.length; i++) if (!reported.has(i)) writer.noteStep({ index: i, kind: kindOf(i), outcome: "not-reached", postcondition: "none" });
+      return writer.finish(dir);
+    },
+  };
+}
+
+async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutation: MutationReplayOptions, stored: Journey, evidence: RunEvidenceScope | undefined): Promise<RunJourneyResult> {
   await opts.assertRunnable?.(stored);
   // #247: onto the chosen environment (a step on an origin it does not allow is refused here).
   const full = applyJourneyEnvironment(stored, opts.environment);
   // #293: only the prefix up to the anchor runs (its params are the ones those steps take).
   const journey = opts.stopAfterStep === undefined ? full : journeyPrefix(full, opts.stopAfterStep);
   opts.runRecorder?.noteJourney(journey);
+  evidence?.ran(journey);
+  // 0.30.0 run hooks (journey-run-hooks.ts): what every hook is told; the mode once `resolveMode` decided it.
+  let mode: RunMode | undefined;
+  const target = { origin: opts.environment?.baseUrl ?? stored.recording.site, environment: opts.environment, targetsFile: opts.runGuardTargetsFile };
+  const hookCtx = (): RunHookContext => ({ journey: stored, params: opts.params, channel: opts.runRecorder?.channel, mode, evidence: evidence?.writer, target });
   const allowedOrigins = effectiveAllowedOrigins(journey, opts.environment, opts.allow);
   // #543: an http end-state check reads only an origin the replay allows — refused before any
   // fixture or browser (the probe re-checks every request after substitution).
@@ -600,12 +724,16 @@ export async function runJourneyProgrammatically(
   // Fail fast: validate BEFORE any browser launch, so bad params never pay
   // the cost (or risk) of opening a browser.
   const inputParams = journey === full ? opts.params : prefixParams(full, journey, opts.params);
+  mode = await resolveRunMode(hookCtx());
+  if (mode !== undefined) evidence?.writer.noteMode(mode);
   validateParams(journeyParamSchema(journey), inputParams);
+  await runValidateParamsHooks(hookCtx());
   // #402: the mutated copy replays (and is judged); the stored Journey still names, redacts and gates.
   const replayed = mutation.mutateJourney === undefined || journey !== full ? journey : mutation.mutateJourney(journey);
 
   // #789: under an MCP invocation, this run's guard: a production target is refused here, before anything opens.
-  const runGuard = prepareMcpRunGuard({ site: journey.recording.site, allowedOrigins, environment: opts.environment, targetsFile: opts.runGuardTargetsFile });
+  // 0.30.0 §5.4: the mode decides whether the Journey's own `allowedOrigins` join the write allowlist (test mode only).
+  const runGuard = prepareMcpRunGuard({ site: journey.recording.site, allowedOrigins, environment: opts.environment, targetsFile: opts.runGuardTargetsFile, ...(mode === undefined ? {} : { mode }), authoredOrigins: journey.metadata.allowedOrigins ?? [] });
 
   const policy = opts.policy ?? safeRunPolicy();
   // #583 §3: a prepare-only boundary never self-heals — refused before any fixture or browser opens.
@@ -622,6 +750,8 @@ export async function runJourneyProgrammatically(
       await fx.setup();
       const b = fx.bindings();
       params = Object.fromEntries(Object.entries(inputParams).map(([k, v]) => [k, substituteSetupRefs(v, b, { where: `--param ${k}` })]));
+      // #812: a fixture's outputs, and the params they were bound into, are masked from the evidence's write shapes.
+      for (const v of [...Object.values(b.values), ...fx.secrets(), ...Object.values(params)]) evidence?.writer.noteValue(v);
     }
     // #140 order: fixture setup (above) → open the browser (#137 launch options, #118 storageState) → run → restore.
     // #250/#251: a recorded or screenshotted run carries the live pixel mask from its first paint.
@@ -673,8 +803,10 @@ export async function runJourneyProgrammatically(
     // #485: the origins outside the run's allow list that the page sent a write to (origins only —
     // never a path, query or body). The campaign preflight reads them for an allow-list slip.
     const offAllowlist = watchOffAllowlistWrites(session, allowedOrigins);
-    opts.runRecorder?.attach(session);
-    await runGuard?.arm(session, params, opts.runRecorder?.noteRefusedWrite);
+    // #812: with evidence the writer watches the run, and the #790 record is derived from what it saw.
+    if (evidence === undefined) opts.runRecorder?.attach(session);
+    else evidence.writer.attach(session);
+    await runGuard?.arm(session, params, evidence === undefined ? opts.runRecorder?.noteRefusedWrite : (request) => evidence.writer.noteRefusedWrite(request, request.method(), request.url()));
     // #583 §3: a declared boundary watches every first-party write for the whole run (aborting them
     // only with `blockWrites`), so the typed handback state is decided from the run's own evidence.
     const handbackObserver =
@@ -707,6 +839,7 @@ export async function runJourneyProgrammatically(
       // Context-level (popups, WebSockets), no write exemptions; see heal-probe-guard.ts.
       const healGuard = opts.heal === undefined || policy.selfHeal.mode === "fail-closed" ? undefined : await installHealProbeGuard(session.page, runGuard === undefined ? undefined : (ws) => runGuard.claimSocket(ws));
       const observer = composeObservers(
+        evidence?.observer(),
         mutation.earliestObserver,
         outcomeChecks.observer(),
         blocker?.observer,
@@ -723,13 +856,16 @@ export async function runJourneyProgrammatically(
       const nonSecretParams = declaredNonSecretParams(stored);
       const onExtracted = async (value: string, name?: string): Promise<void> => {
         opts.runRecorder?.noteValue(value);
+        evidence?.writer.noteValue(value);
         if (name === undefined || !isSecretName(name) || nonSecretParams.has(name) || value.trim() === "") return;
         extractedCredentials.add(value);
         await mask.addSecret(value);
       };
+      // The #789 guard, then any `beforeWrite` run hook: exactly `runGuard` while none is registered.
+      const actionGuard = withRunHookGuard(runGuard, hookCtx);
       const interpreter =
         opts.interpreter ??
-        (opts.observer === undefined && shots === undefined && replayDeltas === undefined && outcomeChecks.observer() === undefined && blocker === undefined && healGuard === undefined && skipStep === undefined && selectAlternative === undefined && runGuard === undefined
+        (evidence === undefined && opts.observer === undefined && shots === undefined && replayDeltas === undefined && outcomeChecks.observer() === undefined && blocker === undefined && healGuard === undefined && skipStep === undefined && selectAlternative === undefined && actionGuard === undefined
           ? new RecordingInterpreter({ fixtureBaseDir, refLookup: refs, onExtracted, ...boundOption })
           : new RecordingInterpreter({
               ...boundOption,
@@ -737,7 +873,7 @@ export async function runJourneyProgrammatically(
               fixtureBaseDir,
               refLookup: refs,
               onExtracted,
-              ...(runGuard === undefined ? {} : { actionGuard: runGuard }),
+              ...(actionGuard === undefined ? {} : { actionGuard }),
               ...(skipStep === undefined ? {} : { skipStep: (i: number) => skipStep(i) }),
               ...(selectAlternative === undefined ? {} : { selectAlternative: (i: number) => (i === selectAlternative.index ? { avoid: selectAlternative.avoid } : undefined) }),
             }));
@@ -764,6 +900,9 @@ export async function runJourneyProgrammatically(
         });
         runGuard?.check();
         if ("output" in raw) opts.onRawOutput?.(raw.output);
+        if ("output" in raw && raw.output !== null && typeof raw.output === "object") for (const v of Object.values(raw.output as Record<string, unknown>)) if (typeof v === "string") evidence?.writer.noteValue(v);
+        // The page is still open: a done check reads it here (#800, a later deliverable's hook).
+        if (hasRunHooks("readDoneCheck")) await runReadDoneCheckHooks({ ...hookCtx(), page: session.page, result: raw });
         runSecrets = [...new Set([...runSecretValues(secrets, raw, nonSecretParams), ...extractedCredentials])];
         result = redactSecretValues(raw, runSecrets);
       } finally {

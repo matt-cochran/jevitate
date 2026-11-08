@@ -1,10 +1,16 @@
 import { argErrorBody, McpArgError, optRecordVideo, optScreenshots, optViewport, type McpArgs } from "./mcp-args.js";
 import { confineMcpPath, McpPathError } from "./mcp-paths.js";
-import { resolve as resolvePath } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 import { homeDataRoot } from "./project-dir.js";
 import { CATALOG_EXPORT_FORMATS } from "./catalog-bundle-api.js";
 import type { McpCliRunner } from "./mcp-cli-runner.js";
-import { RunGuardRefusedError, runGuardRefusalBody } from "./mcp-run-guard.js";
+import { policyLoosenings, policyLoosenRefusalBody, RunGuardRefusedError, runGuardRefusalBody, targetPromoteRefusalBody } from "./mcp-run-guard.js";
+import { RunModeRefusedError, runModeRefusalBody } from "./journey-run-mode-gate.js";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { SitePolicySchema, type SitePolicy } from "@jevitate/domain";
+import { withSitePolicyRepository } from "./cli-shared.js";
+import { sitePolicyKey } from "./site-gate-cli.js";
 import { secretParamRefusalBody, secretParamsCarried } from "./secret-params.js";
 
 /**
@@ -954,7 +960,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "mission_targets",
     description:
-      "`jevitate mission target add | list | update | promote`: the targets queue_exploration may enqueue against (only PROMOTED ones). add/update may set the target's session (storageState / saveStorageState paths); which environment variables a target's secret fields read is the operator's (`--secret-field` on the CLI, or targets.json), never an MCP argument.",
+      "`jevitate mission target add | list | update | promote`: the targets queue_exploration may enqueue against (only PROMOTED ones). 0.30.0: promote over MCP is refused ({error: refused, code: E_TARGET_PROMOTE_OVER_MCP}): promoting a target is a person's act, `jevitate mission target promote <id>` at a terminal. add/update may set the target's session (storageState / saveStorageState paths); which environment variables a target's secret fields read is the operator's (`--secret-field` on the CLI, or targets.json), never an MCP argument.",
     actions: {
       add: {
         path: "mission target add",
@@ -1050,7 +1056,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   },
   {
     name: "site_policy",
-    description: "`jevitate site policy get | set | rules` and `site simulate`: per-origin pacing, throttles, budgets and quiet hours (run_journey honours them); `rules` lists the control safety rules (ids, what they match, whether --allow-control can waive them).",
+    description: "`jevitate site policy get | set | rules` and `site simulate`: per-origin pacing, throttles, budgets and quiet hours (run_journey honours them); `rules` lists the control safety rules (ids, what they match, whether --allow-control can waive them). 0.30.0: set over MCP only tightens: a policy looser than the effective one on any axis (pacing, interval, budget, quiet hours) is refused ({error: refused, code: E_POLICY_LOOSEN_OVER_MCP, axes}); a person loosens one at a terminal.",
     actions: {
       get: { path: "site policy get", params: { site: pos(), account: s("--account") }, omitted: { "--db": OMIT.storeDir, ...JSON_FLAG } },
       rules: { path: "site policy rules", params: {}, omitted: JSON_FLAG },
@@ -1289,6 +1295,49 @@ export function buildCliArgv(spec: CliToolSpec, args: McpArgs, roots: readonly s
   return [...command.path.split(" "), ...flags, ...(command.omitted["--json"] === undefined ? [] : ["--json"]), "--", ...positionals];
 }
 
+/**
+ * 0.30.0 §5.4 (#799), the ratchet: what an MCP call may not do that the CLI command it mirrors may.
+ * - `mission_targets promote` refuses (`E_TARGET_PROMOTE_OVER_MCP`): promoting a target is a CLI act.
+ * - `site_policy set` sets only a policy at least as strict as the effective one on every axis
+ *   (`E_POLICY_LOOSEN_OVER_MCP`). The file is read once, here: the command is handed a private copy of
+ *   exactly what was judged, so the file cannot change between the check and the write.
+ * Returns a refusal body, or the argv to run (possibly with the copy's path), and a cleanup.
+ */
+async function mcpRatchet(
+  spec: CliToolSpec,
+  args: McpArgs,
+  argv: string[],
+  deps: { readonly sitePolicyDbPath?: string | undefined },
+): Promise<{ readonly refusal: Record<string, unknown> } | { readonly argv: string[]; readonly cleanup: () => void }> {
+  const none = { argv, cleanup: () => undefined };
+  if (spec.name === "mission_targets" && args.action === "promote") return { refusal: targetPromoteRefusalBody(typeof args.id === "string" ? args.id : "<id>") };
+  if (spec.name !== "site_policy" || args.action !== "set") return none;
+  const fileFlag = argv.find((a) => a.startsWith("--file="));
+  const site = typeof args.site === "string" ? args.site : undefined;
+  if (fileFlag === undefined || site === undefined) return none;
+  let proposed: SitePolicy;
+  let raw: string;
+  try {
+    raw = readFileSync(fileFlag.slice("--file=".length), "utf8");
+    proposed = SitePolicySchema.parse(JSON.parse(raw));
+  } catch {
+    // Unreadable or invalid: the command refuses it on its own (E_INVALID_POLICY), and nothing is set.
+    return none;
+  }
+  if (deps.sitePolicyDbPath === undefined) {
+    return { refusal: { error: "refused", outcome: "refused", code: "E_POLICY_LOOSEN_OVER_MCP", message: "site_policy set over MCP compares the policy with the effective one, and this server was not given the policy database, so nothing was set", retryable: false, exitCode: 2 } };
+  }
+  const account = typeof args.account === "string" ? args.account : "primary";
+  const key = sitePolicyKey(site);
+  const effective = await withSitePolicyRepository(deps.sitePolicyDbPath, (repository) => repository.get(key, account));
+  const axes = policyLoosenings(effective, proposed);
+  if (axes.length > 0) return { refusal: policyLoosenRefusalBody(key, axes) };
+  const dir = mkdtempSync(join(tmpdir(), "jev-mcp-policy-"));
+  const copy = join(dir, "policy.json");
+  writeFileSync(copy, raw, { encoding: "utf8", mode: 0o600 });
+  return { argv: argv.map((a) => (a === fileFlag ? `--file=${copy}` : a)), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
 export interface CliToolOutcome {
   readonly isError: boolean;
   readonly body: Record<string, unknown>;
@@ -1312,7 +1361,7 @@ function lastEnvelope(stdout: string): { ok: boolean; data?: unknown; error?: { 
  * Runs one CLI-backed tool call: argv from the typed arguments, the CLI in process, its envelope back.
  * `redact` strips credential values from the output text (belt-and-braces over the CLI's own redaction).
  */
-export async function runCliTool(spec: CliToolSpec, args: McpArgs, deps: { runCli?: McpCliRunner; roots: readonly string[]; redact: (text: string) => string; journeysDir: string }): Promise<CliToolOutcome> {
+export async function runCliTool(spec: CliToolSpec, args: McpArgs, deps: { runCli?: McpCliRunner; roots: readonly string[]; redact: (text: string) => string; journeysDir: string; sitePolicyDbPath?: string }): Promise<CliToolOutcome> {
   let argv: string[];
   try {
     argv = buildCliArgv(spec, args, deps.roots);
@@ -1326,15 +1375,27 @@ export async function runCliTool(spec: CliToolSpec, args: McpArgs, deps: { runCl
     const carried = await secretParamsCarried(deps.journeysDir, paramJourneys(args), args["params"]);
     if (carried.length > 0) return { isError: true, body: secretParamRefusalBody(carried) };
   }
+  const ratchet = await mcpRatchet(spec, args, argv, deps);
+  if ("refusal" in ratchet) return { isError: true, body: ratchet.refusal };
   if (deps.runCli === undefined) {
+    ratchet.cleanup();
     return { isError: true, body: { error: "not_configured", message: `${spec.name} runs \`jevitate ${commandFor(spec, args).path}\` in process, which this server was not given` } };
   }
-  const { stdout: raw, exitCode, refusal } = await (spec.answersWhileBusy?.(args) === true ? deps.runCli(argv, { unqueued: true }) : deps.runCli(argv));
+  const runCli = deps.runCli;
+  let ran: Awaited<ReturnType<McpCliRunner>>;
+  try {
+    ran = await (spec.answersWhileBusy?.(args) === true ? runCli(ratchet.argv, { unqueued: true }) : runCli(ratchet.argv));
+  } finally {
+    ratchet.cleanup();
+  }
+  const { stdout: raw, exitCode, refusal } = ran;
   const stdout = deps.redact(raw);
   let envelope = lastEnvelope(stdout);
   // #789: a refused replay is the answer, whatever the command made of it. What the command did report before it stays beside it.
-  if (refusal instanceof RunGuardRefusedError) {
-    return { isError: true, body: { ...runGuardRefusalBody(refusal), ...(envelope?.data === undefined || envelope.data === null ? {} : { partial: envelope.data }) } };
+  // 0.30.0 §5: so is a run the run mode refused.
+  const refusedBody = refusal instanceof RunGuardRefusedError ? runGuardRefusalBody(refusal) : refusal instanceof RunModeRefusedError ? runModeRefusalBody(refusal) : undefined;
+  if (refusedBody !== undefined) {
+    return { isError: true, body: { ...refusedBody, ...(envelope?.data === undefined || envelope.data === null ? {} : { partial: envelope.data }) } };
   }
   if (envelope === undefined && exitCode === 0) {
     // A command without --json (`recording promote`) prints its result as plain JSON.

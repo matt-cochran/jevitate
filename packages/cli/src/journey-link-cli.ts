@@ -11,6 +11,9 @@ function renderLink(r: JourneyLinkResult, out: ((s: string) => void) | undefined
   const job = r.job === undefined ? "no job" : `job '${r.job}'${r.jobStatus === undefined ? "" : ` (${r.jobStatus})`}`;
   const persona = r.persona === undefined ? "no persona" : `persona '${r.persona}'${r.personaStatus === undefined ? "" : ` (${r.personaStatus})`}`;
   out?.(`${r.changed ? "linked" : "unchanged:"} journey '${r.journeyId}' → ${job}, ${persona}\n`);
+  if (r.job !== undefined) {
+    out?.(r.jobDone === undefined ? `  job '${r.job}' has no done check: its Journeys read unverified (add one in jobs.json)\n` : `  done check: at ${r.jobDone.at}, ${r.jobDone.check}\n`);
+  }
   for (const note of r.needsApproval) out?.(`  needs approval: ${note}\n`);
   if (r.needsReapproval) {
     out?.(`journey '${r.journeyId}' is promoted: its approval is now stale (kept for the review diff; \`journey review --stale\` lists it, \`check --require-approvals\` fails it)\n`);

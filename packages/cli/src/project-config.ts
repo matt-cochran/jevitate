@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isDoneCheckPolicy, type DoneCheckPolicy } from "@jevitate/domain";
 
 /**
  * The project's own settings: `<repo>/.jevitate/project.json`, committed with the app (unlike the
@@ -12,6 +13,8 @@ import { join } from "node:path";
  * - `testIdAttributes` (#470): the attributes that count as the team's test-id convention, in
  *   preference order (the first is the one a locator-health fix suggests). Default `data-testid`,
  *   `data-test`. `data-tflow-id` (#468) is tracking metadata and is refused.
+ * - `doneCheckPolicy` (#800, 0.30.0): how a `journey run` pass whose job is `unverified` (no done
+ *   check, or one already true) exits: `require` (the default when absent) exits 2; `advisory` keeps 0.
  */
 
 export const PROJECT_CONFIG_FILE = "project.json";
@@ -34,6 +37,8 @@ export class ProjectConfigError extends Error {
 export interface ProjectConfig {
   readonly testIdAttributes: readonly string[];
   readonly mutationProofPolicy?: "advisory" | "require-attempt" | "require-proven";
+  /** #800: absent means the default, `require` (`DEFAULT_DONE_CHECK_POLICY`). */
+  readonly doneCheckPolicy?: DoneCheckPolicy;
 }
 
 /** Validates a `testIdAttributes` value; throws `ProjectConfigError` naming `where`. */
@@ -83,5 +88,13 @@ export function loadProjectConfig(projectDir: string | null): ProjectConfig {
   if (policy !== undefined && policy !== "advisory" && policy !== "require-attempt" && policy !== "require-proven") {
     throw new ProjectConfigError(`${path}: mutationProofPolicy must be advisory, require-attempt or require-proven`);
   }
-  return { testIdAttributes: value === undefined ? DEFAULT_TEST_ID_ATTRIBUTES : parseTestIdAttributes(value, path), ...(policy === undefined ? {} : { mutationProofPolicy: policy }) };
+  const doneCheckPolicy = (parsed as Record<string, unknown>).doneCheckPolicy;
+  if (doneCheckPolicy !== undefined && !isDoneCheckPolicy(doneCheckPolicy)) {
+    throw new ProjectConfigError(`${path}: doneCheckPolicy must be require or advisory`);
+  }
+  return {
+    testIdAttributes: value === undefined ? DEFAULT_TEST_ID_ATTRIBUTES : parseTestIdAttributes(value, path),
+    ...(policy === undefined ? {} : { mutationProofPolicy: policy }),
+    ...(doneCheckPolicy === undefined ? {} : { doneCheckPolicy }),
+  };
 }

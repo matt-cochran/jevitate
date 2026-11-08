@@ -1,4 +1,4 @@
-import type { CatalogRefIssue, Finding, GtwrSetCharacteristic, Metric, OutcomeTarget } from "@jevitate/journey";
+import { isDoneCheckIssues, lintDoneCheck, parseDoneCheck, type CatalogRefIssue, type DoneCheckLintFinding, type DoneCheckSpec, type Finding, type GtwrSetCharacteristic, type Journey, type Metric, type OutcomeTarget } from "@jevitate/journey";
 import { BrokenJobRefsError, findJob, journeysForJob, type Catalog, type CatalogJob, type CatalogJourney } from "./catalog.js";
 
 /**
@@ -29,6 +29,7 @@ export type CatalogRefCode =
   | "job.parent-cycle"
   | "job.unmeasurable-metric"
   | "job.target-unit-mismatch"
+  | "job.done-check-unparseable"
   | "journey.unknown-serves"
   | "journey.serves-without-job"
   | "journey.unknown-job-step"
@@ -133,6 +134,15 @@ export function jobRefIssues(catalog: Catalog, jobId: string, opts: RefCheckOpti
       }
     }
   });
+  // #800 (0.30.0 §3): a done check that does not parse can never be read; a gap, not structural.
+  if (job.done !== undefined) {
+    const parsed = parseDoneCheck(job.done);
+    if (isDoneCheckIssues(parsed)) {
+      for (const d of parsed) {
+        out.push(issue(owner, `done.${d.field}`, "job.done-check-unparseable", `done check: ${d.message} (${d.code})`, "fix the job's `done` in jobs.json: { \"version\": 1, \"at\": \"/path\", \"check\": \"textIncludes:<target>|<text>\" }", opts));
+      }
+    }
+  }
   if (job.parent !== undefined) {
     if (findJob(catalog, job.parent) === undefined) {
       out.push(issue(owner, "parent", "job.unknown-parent", `parent '${job.parent}' is not a declared job`, "name a job in jobs.json, or leave `parent` out", opts));
@@ -220,4 +230,27 @@ export function refIssueFindings(issues: readonly CatalogRefIssue[], analyzer = 
     items: [i.jobId !== undefined ? `job:${i.jobId}` : `journey:${i.journeyId ?? ""}`],
     characteristic: characteristicOf(i),
   }));
+}
+
+/** #800: what a linked job's done check looks like to `journey link` and `find_capabilities`: the stored spec, never a resolved value. */
+export interface JobDoneView {
+  readonly id: string;
+  readonly status: CatalogJob["status"];
+  readonly done?: DoneCheckSpec;
+}
+
+/** #800: the job a Journey links, with its done check (`done.at`, `done.check`), or undefined when it links no declared job. */
+export function linkedJobDone(catalog: Catalog, journey: Journey): JobDoneView | undefined {
+  const id = journey.metadata.job;
+  if (id === undefined) return undefined;
+  const cj = findJob(catalog, id);
+  if (cj === undefined) return undefined;
+  return { id: cj.id, status: cj.status, ...(cj.job.done === undefined ? {} : { done: cj.job.done }) };
+}
+
+/** #800: the done-check lint findings (`missing-done-check`, `done-check-invalid`, `done-check-cannot-be-false`) of the job a Journey links, about that Journey. */
+export function journeyDoneCheckFindings(catalog: Catalog, journey: Journey): DoneCheckLintFinding[] {
+  const id = journey.metadata.job;
+  const cj = id === undefined ? undefined : findJob(catalog, id);
+  return cj === undefined ? [] : lintDoneCheck(cj.job, [journey]);
 }

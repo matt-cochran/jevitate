@@ -7,6 +7,7 @@ import { redactText } from "@jevitate/ai-core";
 import { BrowseTheWebToken } from "@jevitate/screenplay";
 import { parseSecretField, secretFieldSecrets } from "@jevitate/explore";
 import type { Locator } from "playwright";
+import { secretParamNamesArgvWarning, secretParamsCarriedBy } from "./secret-params.js";
 import { runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 
 /**
@@ -41,6 +42,8 @@ export interface MigrateLabelsRequest {
    * are redacted from every label and the report.
    */
   readonly params?: Readonly<Record<string, string>>;
+  /** #809: where the argv secret warning (secret `--param` names, never values) goes: stderr. */
+  readonly warn?: (line: string) => void;
   /** How long a step's target may take to appear before it is left unlabelled. Default 5s. */
   readonly targetTimeoutMs?: number;
   /**
@@ -251,6 +254,8 @@ async function migrateOne(store: FsJourneyStore, journey: Journey, req: MigrateL
 
 /** Backfills step labels by replaying each Journey (see the module doc). Journeys run one at a time. */
 export async function migrateLabels(req: MigrateLabelsRequest): Promise<MigrateLabelsResult> {
+  const onArgv = secretParamsCarriedBy(null, req.params ?? {});
+  if (onArgv.length > 0) req.warn?.(secretParamNamesArgvWarning(onArgv));
   const store = new FsJourneyStore(req.journeysDir);
   const ids = req.ids ?? (await store.list()).map((m) => m.id);
   const journeys: LabelledJourney[] = [];

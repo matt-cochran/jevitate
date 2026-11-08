@@ -395,6 +395,8 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "inbox queue-action": { cases: [[], ["--run", "r", "--journey", "j", "--step", "s", "--reason", "x", "--agent", "a", "--kind", "bogus"]] },
   "inbox approve": { cases: [["x"]] },
   "inbox cancel": { cases: [["x"]] },
+  // #793: a resume of an unknown or unsafe hold id refuses before any key or browser (E_HOLD_NOT_FOUND).
+  "inbox resume": { cases: [["nope"], ["../x"]] },
   mcp: { cases: [["--print-config", "bogus"]] },
   ui: { exempt: "no file or id input (its --port is covered by the numeric sweep)" },
   ux: {

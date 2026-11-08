@@ -116,6 +116,35 @@ persona with no session yet (no `storageState`, no `login`) is a catalog-only pe
 }
 ```
 
+### The job's done check
+
+A job can say how to tell, from the application's state alone, that the job is done: a `done`
+check that is false before the job and true after, whichever path got there (0.30.0 design §3).
+It is read in a fresh session, so a page that says "Saved" with nothing stored reads false.
+
+```json
+{
+  "id": "invite",
+  "trigger": "a colleague joins my team",
+  "motivation": "invite them by email",
+  "outcome": "work together from their first day",
+  "done": { "version": 1, "at": "/members", "check": "textIncludes:#member-list|${email}", "distinguishedBy": ["email"] }
+}
+```
+
+| Field | What |
+|---|---|
+| `version` | `1`. |
+| `at` | a path on the target origin, opened in a fresh session. `${param}` placeholders are allowed; a secret is refused. |
+| `check` | a state-naming reading in the `--success` syntax: `textIncludes`, `count`, `attr`, `valueEquals` or `http`. Never a step or an anchor. |
+| `session` | `fresh` (the default and only value). |
+| `distinguishedBy` | optional: the placeholders whose value makes the "before" reading false for a Journey that creates its own data. |
+
+`done` is part of the job's content hash: editing it makes an approved job stale. A `done` that
+does not parse is reported as `job.done-check-unparseable` (a gap, a warning). MCP `find_capabilities`
+shows the linked job's check (`job.done.at`, `job.done.check`), and lint
+warns `missing-done-check` on a promoted Journey whose job has none.
+
 ## Linking a Journey
 
 Set the Journey's `metadata.job` to a job id and `metadata.persona` to a persona id. A
@@ -180,6 +209,7 @@ stable code, a path into the item and a fix:
 | `journey.unknown-job-step` | an anchor's `jobStep` is not a step of the linked job | structural |
 | `journey.job-step-without-job` | an anchor's `jobStep` on a Journey that links no job | structural |
 | `job.unmeasurable-metric` | a metric's `from`/`to`/`at` is neither `job_start`/`job_end` nor an anchor some Journey linked to the job declares | gap |
+| `job.done-check-unparseable` | the job's `done` check does not parse (bad kind or syntax, a secret or path-bound reference) | gap |
 | `job.target-unit-mismatch` | a target's unit does not fit its metric (a duration is `s`, a `share_under` duration is `percent`, an `error` is `count` or `percent`, the rest `percent`) | gap |
 
 **Severity.** On data as loaded, every problem is a `warning`: nothing here blocks a load, a run,

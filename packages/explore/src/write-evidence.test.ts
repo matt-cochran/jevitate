@@ -22,7 +22,7 @@ const scoped = (effects: SideEffect[], goalIsWrites: number | null = 0.9, blocke
 describe("#514 groundDone — the job's succeeded writes", () => {
   it("accepts a done whose every write succeeded although the page judgment says not met", () => {
     const v = groundDone({ unsubmitted: [], goalMetProbability: 0.24, writes: scoped([write(201), write(200)]) });
-    expect(v).toEqual({ accept: true, outcome: { status: "completed", verifiedBy: "succeeded-writes", note: WRITES_DONE_NOTE } });
+    expect(v).toEqual({ accept: true, outcome: { status: "completed", verifiedBy: "succeeded-writes", note: WRITES_DONE_NOTE }, attainment: "unverified", basis: "no-check" });
   });
 
   it("rejects a done when one of the job's writes failed", () => {
@@ -112,7 +112,7 @@ describe("#514 jobWriteEvidence — only the job's own actions' writes count", (
 describe("#645 groundDone — writes the app was seen to keep (read back, #649)", () => {
   it("accepts a done whose writes were read back when the page judgment is more likely than not", () => {
     const v = groundDone({ unsubmitted: [], goalMetProbability: 0.62, writes: scoped([write(200)], 0.11), readBack: true });
-    expect(v).toEqual({ accept: true, outcome: { status: "completed", verifiedBy: "succeeded-writes", note: READ_BACK_DONE_NOTE } });
+    expect(v).toEqual({ accept: true, outcome: { status: "completed", verifiedBy: "succeeded-writes", note: READ_BACK_DONE_NOTE }, attainment: "unverified", basis: "no-check" });
   });
 
   it("rejects it when the page judgment is below even odds", () => {

@@ -65,7 +65,7 @@ beforeAll(async () => {
   await store.put(journey);
   // #788: MCP runs a promoted Journey whose approval is current: approved as stored (saving mints step ids).
   const saved = (await store.get("home"))!;
-  await store.put({ ...saved, metadata: { ...saved.metadata, approval: { contentHash: journeyReviewHash(saved), at: "2026-09-29T00:00:00.000Z" } } });
+  await store.put({ ...saved, metadata: { ...saved.metadata, approval: { contentHash: journeyReviewHash(saved), at: "2026-09-29T00:00:00.000Z", provenance: { channel: "tty", agentSignals: [] } } } });
 });
 
 afterAll(async () => {

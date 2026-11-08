@@ -99,6 +99,13 @@ async function promoteLinked(): Promise<void> {
 }
 
 describe("#523 journey link", () => {
+  it("#800: the JSON carries the linked job's done check, and the human render shows it", async () => {
+    await writeFile(join(catalogDir, "jobs.json"), JSON.stringify([{ id: "publish-post", trigger: "a draft is ready", motivation: "publish it", outcome: "readers see it", personas: ["editor"], done: { version: 1, at: "/posts", check: "textIncludes:testId=row|hello" } }]));
+    const r = await cli(["journey", "link", "loose", "--job", "publish-post", "--json"]);
+    expect(r.json.data.jobDone).toEqual({ version: 1, at: "/posts", check: "textIncludes:testId=row|hello" });
+    expect((await cli(["journey", "link", "loose", "--job", "publish-post"])).out).toContain("done check: at /posts, textIncludes:testId=row|hello");
+  });
+
   it("sets metadata.job", async () => {
     await cli(["journey", "link", "loose", "--job", "publish-post", "--json"]);
     expect((await stored("loose")).metadata.job).toBe("publish-post");

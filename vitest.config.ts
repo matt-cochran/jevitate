@@ -7,6 +7,7 @@ const pkg = (name: string) =>
 export default defineConfig({
   resolve: {
     alias: {
+      "@jevitate/adjudicator": pkg("adjudicator"),
       "@jevitate/domain": pkg("domain"),
       "@jevitate/secrets": pkg("secrets"),
       "@jevitate/application": pkg("application"),

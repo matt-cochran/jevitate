@@ -101,6 +101,7 @@ import { viewPage } from "./goal-loop/page-view.js";
 import { decideStep } from "./goal-loop/decide-step.js";
 import { finishRun } from "./goal-loop/finish.js";
 import { openRun } from "./goal-loop/start.js";
+import type { DoneCheckReader } from "./goal-loop/read-back.js";
 
 export type { TranscriptEntry } from "./transcript.js";
 export type { RunOutcome } from "./conversation.js";
@@ -164,6 +165,8 @@ export function isActionOrChromeName(c: Control, chrome: ChromeTracker): boolean
  */
 
 export interface ExploreConfig {
+  /** 0.30.0 (#800): the job done check, read in a fresh session after the model proposes done; its reading decides attainment. */
+  readonly doneCheck?: DoneCheckReader;
   readonly actor: Actor;
   readonly judge: JudgmentPort;
   readonly gen: GenerationPort;

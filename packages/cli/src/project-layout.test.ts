@@ -159,6 +159,24 @@ describe("log retention", () => {
     expect(existsSync(join(logs, "2026-09-20", "explore-2026-09-20T10-00-00-000Z.result.json"))).toBe(true);
   });
 
+  it("0.30.0: a run's evidence folder counts with its journey-run record, as one run", () => {
+    const logs = join(root, "logs");
+    const stamp = "2026-09-20T10-00-00-000Z-ab12";
+    run(logs, "2026-09-20", `journey-run-${stamp}`, 30, [".json"]);
+    mkdirSync(join(logs, "2026-09-20", `journey-evidence-${stamp}`), { recursive: true });
+    const ev = join(logs, "2026-09-20", `journey-evidence-${stamp}`, "evidence.json");
+    writeFileSync(ev, "{}");
+    const t = (NOW - 30 * DAY) / 1000;
+    utimesSync(ev, t, t);
+    utimesSync(join(logs, "2026-09-20", `journey-evidence-${stamp}`), t, t);
+    run(logs, "2026-09-21", "explore-2026-09-21T10-00-00-000Z", 1);
+    const r = pruneLogs(logs, { ttlDays: 14, keepLatest: 1 }, { nowMs: NOW, dryRun: true });
+    expect(r.removed).toEqual(["2026-09-20/journey-run-2026-09-20T10-00-00-000Z"]);
+    expect(r.keptRuns).toBe(1);
+    pruneLogs(logs, { ttlDays: 14, keepLatest: 1 }, { nowMs: NOW });
+    expect(existsSync(join(logs, "2026-09-20"))).toBe(false);
+  });
+
   it("a quiet project is never wiped: the newest N survive however old", () => {
     const logs = join(root, "logs");
     run(logs, "2026-06-01", "explore-2026-06-01T10-00-00-000Z", 116);
