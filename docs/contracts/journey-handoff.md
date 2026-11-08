@@ -134,3 +134,27 @@ stale and requires re-review. Absent fields are not hashed, so 0.17.0 hashes do 
 
 Approval of reply text (Bizops owns copy, version and expiry), sending, and any new authority. No
 binding can enable a submit step.
+
+## 8. Parameter types (#796, 0.30.0)
+
+A declared parameter (`metadata.parameters[]`) may carry an optional `type`. Run and chain handoff
+check bound params against these same types (§4, step 6; wired after this contract). The types are
+`ParameterType` in `packages/journey/src/parameters.ts`, exactly these:
+
+| Type | Accepts |
+| --- | --- |
+| `string` | any string (the same as no `type`) |
+| `number` | a decimal number: optional sign, digits, optional fraction and exponent (`-12.5e3`) |
+| `boolean` | `true` or `false`, exactly |
+| `enum` | one of the parameter's `enum` values, compared byte for byte |
+| `email` | `local@domain.tld`, no whitespace |
+| `url` | an absolute `http(s)` URL |
+| `date` | a calendar date `YYYY-MM-DD` |
+
+- A parameter with no `type` is untyped: any string, as before 0.30.0. Adding `type` is additive.
+- `enum` is a list of 1–100 distinct non-empty strings. `type: "enum"` without `enum`, or `enum` on
+  any other type, is refused at load (`E_PARAM_ENUM_VALUES`). `enum` values are reviewed and
+  non-secret.
+- `validateParamTypes(journey, params)` returns `ParamIssue[]`, each `{ name, expected }`: the param
+  name and its declared type. An issue never carries the supplied value, which may be a secret.
+  Presence and unknown names stay with `validateParams` (`param-schema.ts`).
