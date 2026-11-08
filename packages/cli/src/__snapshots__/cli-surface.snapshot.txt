@@ -536,12 +536,14 @@
   description: the HITL inbox from the CLI — the same tools `jevitate mcp` serves (approve/cancel stay human-only in `jevitate ui`)
 
 # inbox approve
-  description: always refused (MCP approve_action): only a human can approve an inbox item, in `jevitate ui`
+  description: a person at a terminal approves a held run (#793): shows what is held and asks for its id typed back; anything else is refused as MCP approve_action refuses — other inbox items are answered in `jevitate ui`
   arguments:
     - name=id required=true variadic=false default=null
   options:
+    - flags=--holds-dir <path> required=true mandatory=false negate=false variadic=false default=null description=the holds directory (default: .jevitate/logs/holds)
     - flags=--inbox-dir <path> required=true mandatory=false negate=false variadic=false default=null description=inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use)
     - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--reject required=false mandatory=false negate=false variadic=false default=null description=answer the held run with a rejection instead (it then never resumes)
 
 # inbox cancel
   description: always refused (MCP cancel_command): only a human can cancel an inbox item, in `jevitate ui`
@@ -600,6 +602,28 @@
     - flags=--run <id> required=true mandatory=false negate=false variadic=false default=null description=the run this item belongs to (required)
     - flags=--step <step> required=true mandatory=false negate=false variadic=false default=null description=the step it stopped at (required)
     - flags=--target-url <url> required=true mandatory=false negate=false variadic=false default=null description=the page it concerns
+
+# inbox resume
+  description: continue a held run a person approved (#793), from the step it was held at — the steps before it are not run again; refused unless the Journey, the parameters, the target and the pending action all match the hold (E_HOLD_BINDING)
+  arguments:
+    - name=id required=true variadic=false default=null
+  options:
+    - flags=--base-url <origin> required=true mandatory=false negate=false variadic=false default=null description=run against this origin (an ad-hoc environment; with --env, replaces its baseUrl)
+    - flags=--browser-arg <arg> required=true mandatory=false negate=false variadic=false default=[] description=extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage
+    - flags=--browser-channel <name> required=true mandatory=false negate=false variadic=false default=null description=Playwright browser channel to launch, e.g. chrome | msedge
+    - flags=--browser-executable <path> required=true mandatory=false negate=false variadic=false default=null description=launch this Chromium binary instead of Playwright's pinned one
+    - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site)
+    - flags=--extension <dir> required=true mandatory=false negate=false variadic=false default=[] description=load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless
+    - flags=--headed required=false mandatory=false negate=false variadic=false default=null description=show the browser
+    - flags=--holds-dir <path> required=true mandatory=false negate=false variadic=false default=null description=the holds directory (default: .jevitate/logs/holds)
+    - flags=--ignore-host-load required=false mandatory=false negate=false variadic=false default=null description=start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it
+    - flags=--inbox-dir <path> required=true mandatory=false negate=false variadic=false default=null description=inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use)
+    - flags=--journeys-dir <path> required=true mandatory=false negate=false variadic=false default=null description=where the Journey is (default: the project's journeys)
+    - flags=--json required=false mandatory=false negate=false variadic=false default=null description=emit a JSON envelope
+    - flags=--max-browser-memory <MiB> required=true mandatory=false negate=false variadic=false default=null description=memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM)
+    - flags=--max-browsers <n> required=true mandatory=false negate=false variadic=false default=null description=machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded)
+    - flags=--param <name=value> required=true mandatory=false negate=false variadic=false default={} description=a parameter the run was held with (repeatable): the same set, or the hold refuses
+    - flags=--storage-state <file> required=true mandatory=false negate=false variadic=false default=null description=seed the resumed session from this Playwright storageState file
 
 # inbox show
   description: an inbox item's conversation thread — never its secret input (MCP get_thread)

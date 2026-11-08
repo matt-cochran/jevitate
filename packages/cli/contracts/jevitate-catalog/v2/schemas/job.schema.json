@@ -591,6 +591,41 @@
         "pattern": "^[a-z][a-z0-9-]{0,31}$"
       },
       "additionalProperties": {}
+    },
+    "done": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "number",
+          "const": 1
+        },
+        "at": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "check": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "session": {
+          "type": "string",
+          "const": "fresh"
+        },
+        "distinguishedBy": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          }
+        }
+      },
+      "required": [
+        "version",
+        "at",
+        "check"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [

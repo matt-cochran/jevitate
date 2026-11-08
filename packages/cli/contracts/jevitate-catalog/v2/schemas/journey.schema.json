@@ -547,6 +547,28 @@
                   "minLength": 1,
                   "maxLength": 2000
                 }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "enum",
+                  "email",
+                  "url",
+                  "date"
+                ]
+              },
+              "enum": {
+                "minItems": 1,
+                "maxItems": 100,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                }
               }
             },
             "required": [
