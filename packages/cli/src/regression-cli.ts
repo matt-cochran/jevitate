@@ -16,6 +16,7 @@ import { positiveIntArg } from "./cli-args.js";
 import { formatRegressionCaptureHuman, formatRegressionRunHuman } from "./cli-output.js";
 import { type EmulationSpec } from "@jevitate/playwright";
 import { prepareMcpRunGuard } from "./mcp-run-guard.js";
+import { guardRequestWithMode, resolveSurfaceRunMode, runModeRecord } from "./run-surface-mode.js";
 import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "./environments.js";
 import {
   type CliDeps,
@@ -151,8 +152,12 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
             : recording.emulation.device !== undefined
               ? { device: recording.emulation.device }
               : { viewport: recording.emulation.viewport });
+        // 0.30.0 §5: the run mode of the Recording's site, from the person-written files only. A regression is
+        // no Journey (no approval to check); the mode reaches the #789 guard (test mode's relaxation) and the result.
+        const decided = resolveSurfaceRunMode({ surface: "regression", origin: recording.site, ...environmentSeams(deps) });
+        const modeNotes: string[] = [];
         // #789: the MCP floor, decided before a fixture or a browser. Undefined on the CLI.
-        const runGuard = prepareMcpRunGuard({ site: recording.site, allowedOrigins: [recording.site], ...environmentSeams(deps) });
+        const runGuard = prepareMcpRunGuard(guardRequestWithMode({ site: recording.site, allowedOrigins: [recording.site], ...environmentSeams(deps) }, decided, modeNotes));
         // #144: every reproduce/minimize replay restores the fixture state the Recording started from.
         fx = regressionFixtures(
           flags,
@@ -197,7 +202,8 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
           const meta = JSON.parse(await readFile(result.metaPath, "utf8")) as Record<string, unknown>;
           await writeFile(result.metaPath, `${JSON.stringify({ ...meta, branch }, null, 2)}\n`);
         }
-        const envelope = ok(fx === undefined ? result : { ...result, fixtures: fx.record() });
+        const withMode = { ...result, run: runModeRecord(decided, modeNotes) };
+        const envelope = ok(fx === undefined ? withMode : { ...withMode, fixtures: fx.record() });
         if (json) {
           emitJson(program, envelope);
         } else {
@@ -303,8 +309,12 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
             : recording.emulation.device !== undefined
               ? { device: recording.emulation.device }
               : { viewport: recording.emulation.viewport });
+        // 0.30.0 §5: the run mode of where the regression replays, from the person-written files only (a
+        // regression is no Journey: no approval to check); it reaches the #789 guard and the report.
+        const decided = resolveSurfaceRunMode({ surface: "regression", origin: environment?.baseUrl ?? recording.site, environment, ...environmentSeams(deps) });
+        const modeNotes: string[] = [];
         // #789: the MCP floor, decided before a browser. Undefined on the CLI.
-        const runGuard = prepareMcpRunGuard({ site: environment?.baseUrl ?? recording.site, allowedOrigins: environment?.allowedOrigins ?? [recording.site], environment, ...environmentSeams(deps) });
+        const runGuard = prepareMcpRunGuard(guardRequestWithMode({ site: environment?.baseUrl ?? recording.site, allowedOrigins: environment?.allowedOrigins ?? [recording.site], environment, ...environmentSeams(deps) }, decided, modeNotes));
         const report = await runRegressionRun({
           id,
           regressionsDir,
@@ -328,7 +338,7 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
           },
         });
         runGuard?.check();
-        const envelope = ok(withEngine(report));
+        const envelope = ok(withEngine({ ...report, run: runModeRecord(decided, modeNotes) }));
         if (json) {
           emitJson(program, envelope);
         } else {

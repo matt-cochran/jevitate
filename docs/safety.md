@@ -303,8 +303,10 @@ What does not guard a run today:
   automation-mode target.
 - `verify_fix` has only the production refusal of those above. Its replay stays on the origins the finding's mission
   was allowed: it can't be moved onto another one.
-- `load run` (the API load test), `regression run`, `verify-fix` and `source run` do not go through the
-  run hooks, so they get no run mode, no hold and no mode refusal.
+- `load run`, `explore`, a queued mission's run, `regression run`/`capture`, `verify-fix` and `source run`
+  decide a run mode from the same files and record it, but do not go through the run hooks: they never
+  hold. A load test applies the mode's Journey refusals before any browser; the others have no Journey
+  approval to check (see [which runs have a mode](./run-modes.md#which-runs-have-a-mode)).
 - The `targets.json` secret route covers `run_journey` and holds. It is not read by every tool that can run
   a Journey.
 - An agent with write access to `.jevitate/` or `~/.jevitate/` can forge a target's `trust`, an approval's

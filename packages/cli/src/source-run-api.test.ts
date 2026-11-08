@@ -111,6 +111,24 @@ describe("#26 runSourceJourney (run-gate wired)", () => {
     expect(spy.calls[0].file.declaredOrigins).toEqual([ORIGIN]);
   });
 
+  test("0.30.0 §5: decides the run mode of the Journey's site, hands it to the runner and records run.mode / run.target.trust", async () => {
+    const s = await makeStores();
+    const { git } = makeFakeGit((d) => seedRemote(d, [sharedJourney("checkout")]));
+    const modes: unknown[] = [];
+    const runJourney: RunResolvedJourney = async (_file, _params, _policy, _storageState, _emulation, _browser, _siteGate, runMode) => {
+      modes.push(runMode?.mode);
+      return { outcome: "ok", output: {} } satisfies JourneyRunResult;
+    };
+    const deps: SourceApiDeps & { runJourney: RunResolvedJourney } = { sourcesDir: s.sourcesDir, lockPath: s.lockPath, trust: s.trust, ack: s.ack, git, runJourney };
+    await addSource(deps, { name: "shop", gitUrl: "https://git.test/shop.git", acceptTou: true, ackedBy: "matthew" });
+
+    // Over MCP too: a source Journey runs once a person trusted it (`source trust`), so no approval-channel refusal.
+    const result = await runAsMcpInvocation(() => runSourceJourney(deps, { sourceName: "shop", journeyId: "checkout", params: {} }));
+
+    expect(modes).toEqual(["automation"]);
+    expect((result as { run?: unknown }).run).toMatchObject({ mode: "automation", target: { origin: ORIGIN } });
+  });
+
   test("#118: passes an optional storageState PATH through to the runner seam", async () => {
     const s = await makeStores();
     const { git } = makeFakeGit((d) => seedRemote(d, [sharedJourney("checkout")]));

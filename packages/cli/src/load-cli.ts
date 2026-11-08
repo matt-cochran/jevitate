@@ -6,6 +6,8 @@ import { Command } from "commander";
 import { ok, fail } from "./envelope.js";
 import { JourneyRequiresAuthError } from "./journey-api.js";
 import { runJourneyLoadTest, UnknownLoadJourneyError } from "./load-api.js";
+import { RunModeRefusedError } from "./journey-run-mode-gate.js";
+import { RunGuardRefusedError } from "./mcp-run-guard.js";
 import { withSiteGate } from "./site-gate-cli.js";
 import { withEngine } from "./engine.js";
 import { finiteNumberArg, positiveIntArg } from "./cli-args.js";
@@ -107,6 +109,7 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
           ...(loadRunEmulation === undefined ? {} : { emulation: loadRunEmulation }),
           ...(storageState !== undefined ? { storageState } : {}),
           ...(environment === undefined ? {} : { environment }),
+          ...environmentSeams(deps),
         })).then((r) => withEngine(r));
         const envelope = ok(report);
         if (json) {
@@ -119,6 +122,11 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
         if (isEnvironmentError(err)) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof JourneyRunRefusedError) {
+          emitJson(program, fail(err.code, err.message));
+        } else if (err instanceof RunModeRefusedError) {
+          // 0.30.0 §5: refused by the target's run mode before any browser; never a failed run to retry.
+          emitJson(program, fail(err.refusalCode, err.message));
+        } else if (err instanceof RunGuardRefusedError) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof UnknownLoadJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));

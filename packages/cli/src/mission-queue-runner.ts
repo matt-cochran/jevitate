@@ -32,6 +32,10 @@ import { parseCorrelationHeaders, parseLogIdPatterns } from "./log-trace.js";
 import { buildMissionFixtures, checkSetupRefs } from "./fixture-cli.js";
 import { substituteSetupRefs, type MissionFixtures } from "./mission-fixtures.js";
 import { clock } from "@jevitate/domain";
+import { inMcpInvocation } from "./approval-provenance.js";
+import { prepareMcpRunGuard } from "./mcp-run-guard.js";
+import { withRunMetadata } from "./run-metadata.js";
+import { guardedPortFactory, guardRequestWithMode, resolveSurfaceRunMode, runModeRecord } from "./run-surface-mode.js";
 
 /**
  * The queue drain behind `jevitate mission run` (#117). `queue_exploration` (MCP) only ENQUEUES —
@@ -280,6 +284,10 @@ export interface RealExecutorOptions {
    * Never a request's choice: a queued mission cannot turn it off.
    */
   readonly authCheck?: AuthCheck;
+  /** 0.30.0 §5: `~/.jevitate/targets.json` (default), read for the target's trust and the #789 guard. */
+  readonly targetsFile?: string;
+  /** 0.30.0 §5: `.jevitate/environments.json` (default: the project's). */
+  readonly environmentsFile?: string;
 }
 
 /** The operator-declared auth for one queued mission's target (#175). */
@@ -402,12 +410,32 @@ export function serverLogFromTargetConfig(targets: Readonly<Record<string, Targe
  * target's `baseUrl`; `route` is an in-scope glob for coverage/adversarial/feature.
  */
 export function realQueuedMissionExecutor(opts: RealExecutorOptions): QueuedMissionExecutor {
-  const common = {
-    outDir: opts.outDir,
-    ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
-    ...(opts.browser === undefined ? {} : { browser: opts.browser }),
+  const seams = { ...(opts.targetsFile === undefined ? {} : { targetsFile: opts.targetsFile }), ...(opts.environmentsFile === undefined ? {} : { environmentsFile: opts.environmentsFile }) };
+  const run = runQueuedMission(opts);
+  // 0.30.0 §5: the run a queued mission starts decides its mode NOW, from the person-written files for the
+  // target's origin (never from the queued request, which names no trust): stamped on its result as `run`.
+  // Under an MCP call (`run_queued_missions`) every session of it is armed with the #789 guard, given that
+  // mode, as `run_exploration`'s are.
+  return async (job) => {
+    const decided = resolveSurfaceRunMode({ surface: "mission", origin: job.target.baseUrl, ...seams });
+    const notes: string[] = [];
+    let browserPortFactory = opts.browserPortFactory;
+    if (inMcpInvocation()) {
+      const guardFor = () => prepareMcpRunGuard(guardRequestWithMode({ site: job.target.baseUrl, allowedOrigins: job.allowlist, ...seams }, decided, notes));
+      guardFor();
+      browserPortFactory = guardedPortFactory(opts.browserPortFactory ?? (() => new PlaywrightBrowserPort()), guardFor);
+    }
+    return withRunMetadata({ runMode: () => runModeRecord(decided, notes) }, () => run(job, browserPortFactory));
   };
-  return async ({ mission, target, allowlist }) => {
+}
+
+function runQueuedMission(opts: RealExecutorOptions): (job: Parameters<QueuedMissionExecutor>[0], browserPortFactory: (() => BrowserPort) | undefined) => ReturnType<QueuedMissionExecutor> {
+  return async ({ mission, target, allowlist }, browserPortFactory) => {
+    const common = {
+      outDir: opts.outDir,
+      ...(browserPortFactory === undefined ? {} : { browserPortFactory }),
+      ...(opts.browser === undefined ? {} : { browser: opts.browser }),
+    };
     const bounds = mission.budget;
     // Re-checked against the target as it is NOW (its origins may have changed since the enqueue):
     // a probe may only ever read one of the run's own authorized origins.

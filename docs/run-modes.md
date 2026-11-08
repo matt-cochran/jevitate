@@ -56,8 +56,24 @@ A CLI run records `run.mode` and `run.target.trust` in its evidence. The person 
 guard: the CLI does not refuse an MCP-channel approval, and it prints one stderr warning when a draft Journey
 runs on an automation-mode target.
 
-Load tests (`load run`), `regression run`, `verify-fix` and `source run` do not go through the run hooks, so
-they have no mode.
+## Which runs have a mode
+
+Every run that opens a browser on a target decides its mode the same way, from the same two files, before
+the browser opens, and records it in what it writes as `run.mode` and `run.target.trust` (test mode's
+relaxations are listed in `run.notes`):
+
+| Run | CLI | MCP | What the mode does there |
+| --- | --- | --- | --- |
+| A Journey run | `journey run`, `journey chain`, `journey verify`, `journey readiness` | `run_journey`, `chain_journeys`, `verify_journey`, `journey_readiness` | Everything on this page: the approval rule, the human-step refusal, holds, the guard's relaxation in test mode |
+| A load test | `load run` | `run_load_test` | It runs a Journey, so the approval rule (MCP) and the human-step refusal apply before any browser; every actor's session has the guard with the mode |
+| An exploration | `explore` (every strategy) | `run_exploration` | Over MCP each session is armed with the same guard a Journey run has: a production target is refused before anything opens, and a write off the run's allowlist is refused at the browser context unless test mode allows it inside the declared environment. `allowDestructive` is refused on an automation-mode target (`E_RUN_REFUSED_DESTRUCTIVE`) unless `mcpRun.allowDestructive` lifts it, and allowed in test mode. A `--from-journey` prefix is a Journey run |
+| A queued exploration | `mission queue`, then `mission run` | `queue_exploration`, then `run_queued_missions` | The queue result shows the mode the run will have; the run decides it again from the files when it starts, so a file changed in between counts. Over MCP its sessions carry the guard, as an exploration's do |
+| A regression | `regression run`, `regression capture` | `regressions` | The mode reaches the guard and the result. A regression is not a Journey, so there is no approval to check |
+| A finding's replay | `verify-fix` | `verify_fix` | The mode is recorded on the report. Its sessions carry no write guard, so test mode has nothing to relax, and a production origin is still refused over MCP |
+| A source Journey | `source run` | `sources run` | The mode reaches the guard and the result. The approval rule does not apply: a source Journey runs only after a person trusted it with `source trust`, which no MCP tool can do |
+
+No argument chooses the mode on any of them. A queued request names a target by id and cannot carry a trust,
+and an exploration's `--allow` widens what it may visit, not its mode.
 
 ## What an MCP promotion authorises
 
@@ -73,9 +89,9 @@ promote <id>` typed at a terminal, or a verified PR review of the Journey.
 | `ci`, `non-interactive` | a scripted promote | test-mode runs only |
 | `mcp` | `promote_journey` over MCP | test-mode runs only |
 
-This changes 0.29.0, where an MCP approval authorised an MCP run anywhere. The rule applies to every run that
-goes through the run hooks inside an MCP call: `run_journey`, `chain_journeys`, `verify_journey` and
-`journey_readiness`. The channel is a record, not a proof: the tool that made the approval writes it, and it
+This changes 0.29.0, where an MCP approval authorised an MCP run anywhere. The rule applies to every MCP run
+of a local Journey: `run_journey`, `chain_journeys`, `verify_journey`, `journey_readiness`, `run_load_test`,
+and the Journey prefix of `run_exploration` with `fromJourney`. The channel is a record, not a proof: the tool that made the approval writes it, and it
 is not signed.
 
 ## How a secret comes back over MCP

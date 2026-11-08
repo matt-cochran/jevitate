@@ -4,12 +4,14 @@ import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProfileManager } from "@jevitate/daemon";
 import { FsJourneyStore, type Journey } from "@jevitate/journey";
+import { FsMissionTargetStore, MissionTargetRegistry } from "@jevitate/missions";
 import { buildMcpTools, type McpApiDeps, type McpTool } from "./mcp-api.js";
 import { makeInProcessCliRunner } from "./mcp-cli-runner.js";
 import { buildProgram } from "./program.js";
 import { journeyReviewHash } from "./journey-review.js";
 import { registerRunHooks } from "./journey-run-hooks.js";
 import { resolveRunTarget } from "./journey-run-mode-gate.js";
+import { observeSurfaceRunModes } from "./run-surface-mode.js";
 import type { CliDeps } from "./cli-shared.js";
 
 /**
@@ -18,12 +20,14 @@ import type { CliDeps } from "./cli-shared.js";
  * declared, the mode the run resolves is 'automation', whatever the arguments claim (a `trust`, a `mode`, a
  * forged environment name) and whatever the process environment says. No browser opens: the port factory throws,
  * and the mode is read from a spy hook placed after the run-mode hook (the mode `resolveRunMode` decided) or from
- * the refusal body's own `mode`.
+ * the refusal body's own `mode`, or (for the surfaces that do not replay through the run hooks: a load test, an
+ * exploration, a queued exploration, a regression, a finding's verify-fix) from the mode the surface decided
+ * (run-surface-mode.ts `observeSurfaceRunModes`).
  *
- * FINDING cells: a tool that starts a run but never reaches `resolveRunMode` resolves no mode at all, so the cell
- * cannot assert 'automation'. They are `it.fails` (they pass while the mode is unresolved, and fail the day a mode
- * is wired, which is the cue to turn them into plain cells). run_load_test, run_exploration and queue_exploration
- * (and load-api, regression, verify-fix and source runs) are the findings; see the report.
+ * The 0.30.0 gap 4 cells (run_load_test, run_exploration, queue_exploration) were `it.fails` FINDING cells while
+ * those tools resolved no mode; they now assert 'automation' like the rest. `regressions run` and `verify_fix`
+ * were added with them. `sources run` decides its mode the same way; its gate needs a trusted git source, so it
+ * is covered in source-run-api.test.ts instead.
  */
 
 const UNDECLARED = "https://undeclared.example.test";
@@ -32,6 +36,17 @@ const DECLARED = "https://declared.example.test";
 
 type TargetKind = "declared production" | "declared unknown" | "undeclared baseUrl";
 const TARGETS: readonly TargetKind[] = ["declared production", "declared unknown", "undeclared baseUrl"];
+/** The origin of each target kind, for a tool that takes a URL or a target record rather than an environment. */
+const KIND_ORIGIN: Readonly<Record<TargetKind, string>> = { "declared production": PROD, "declared unknown": DECLARED, "undeclared baseUrl": UNDECLARED };
+/** A promoted mission target per kind (queue_exploration takes a target id, never a URL). */
+const KIND_MISSION_TARGET: Readonly<Record<TargetKind, string>> = { "declared production": "prod-shop", "declared unknown": "declared-shop", "undeclared baseUrl": "undeclared-shop" };
+/** A mission result per kind, with one finding (verify_fix takes a result id and a fingerprint). */
+const KIND_RESULT: Readonly<Record<TargetKind, string>> = {
+  "declared production": "explore-2026-11-08T00-00-00-001Z",
+  "declared unknown": "explore-2026-11-08T00-00-00-002Z",
+  "undeclared baseUrl": "explore-2026-11-08T00-00-00-003Z",
+};
+const FINGERPRINT = "0123456789abcdef";
 
 /** What each target kind is, as arguments: a forged environment NAME ("test") holding a production target; a declared environment without trust; a bare baseUrl. */
 const TARGET_ARGS: Readonly<Record<TargetKind, Record<string, string>>> = {
@@ -69,6 +84,7 @@ function buildTools(): Map<string, McpTool> {
     environmentsFile: join(root, "environments.json"),
     logs: { logsRoot: join(root, "logs") },
     explore: { browserPortFactory: factory, targetsConfigPath: join(root, "targets.json") },
+    missionTargetsDir: join(root, "mission-targets"),
   } as unknown as CliDeps;
   const deps: McpApiDeps = {
     journeysDir,
@@ -78,6 +94,9 @@ function buildTools(): Map<string, McpTool> {
     targetsConfigPath: join(root, "targets.json"),
     sitePolicyDbPath: join(root, "site.sqlite"),
     browserPortFactory: factory,
+    missionTargetsDir: join(root, "mission-targets"),
+    missionQueueDir: join(root, "mission-queue"),
+    recordingsDir: join(root, "recordings"),
     runCli: makeInProcessCliRunner(() => buildProgram(cliDeps)),
   };
   return new Map(buildMcpTools(deps).map((t) => [t.name, t]));
@@ -96,9 +115,26 @@ beforeAll(async () => {
   const stored = (await store.get("j1"))!;
   // Approved as a person at a terminal would: the approval is not what is under test, the mode is.
   await store.put({ ...stored, metadata: { ...stored.metadata, promoted: true, approval: { contentHash: journeyReviewHash(stored), at: "2026-11-08T00:00:00.000Z", provenance: { channel: "tty", agentSignals: [] } } } } as Journey);
+  // A person registered and promoted a mission target per kind.
+  const missionTargets = new MissionTargetRegistry(new FsMissionTargetStore(join(root, "mission-targets")));
+  for (const kind of TARGETS) {
+    await missionTargets.put({ id: KIND_MISSION_TARGET[kind], name: kind, authorizedOrigin: KIND_ORIGIN[kind], baseUrl: `${KIND_ORIGIN[kind]}/`, promoted: true, createdAtIso: "2026-11-08T00:00:00.000Z" });
+  }
+  // A mission result per kind, each with one finding to verify.
+  mkdirSync(join(root, "recordings"), { recursive: true });
+  for (const kind of TARGETS) {
+    const recording = { version: "1", site: KIND_ORIGIN[kind], pages: [{ url: "/", steps: [{ step: { kind: "navigate", url: "/", expect: { kind: "urlIncludes", text: "/" } } }] }] };
+    const result = { target: { seedUrl: `${KIND_ORIGIN[kind]}/`, allowlist: [KIND_ORIGIN[kind]] }, recording, defects: [{ fingerprint: FINGERPRINT, kind: "console-error", repro: { recordingStepIndex: 0 } }] };
+    writeFileSync(join(root, "recordings", `${KIND_RESULT[kind]}.result.json`), JSON.stringify({ missionOutcome: "defects-found", exitCode: 1, result }));
+  }
+  // A committed regression, under the project's .jevitate (regression run reads the project's regressions dir).
+  mkdirSync(join(root, "project", ".jevitate", "regressions"), { recursive: true });
+  writeFileSync(join(root, "project", ".jevitate", "regressions", "r1.recording.json"), JSON.stringify(journey().recording));
   tools = buildTools();
   // After the run-mode hook: validateParams runs with the mode `resolveRunMode` decided.
   registerRunHooks("trust-escape-spy", { validateParams: (ctx) => void seen.push(ctx.mode) });
+  // The surfaces outside the run hooks: the mode each decided.
+  observeSurfaceRunModes((decided) => void seen.push(decided.mode));
 });
 
 afterAll(() => {
@@ -115,9 +151,9 @@ beforeEach(() => {
 interface ToolCase {
   readonly name: string;
   /** The tool's own arguments for a run to `target` (the attack arguments are added by the caller). */
-  readonly args: (target: Record<string, string>) => Record<string, unknown>;
-  /** The tool starts a run but resolves no mode at all (a FINDING). */
-  readonly finding?: string;
+  readonly args: (target: Record<string, string>, kind: TargetKind) => Record<string, unknown>;
+  /** The tool reads the project dir from the working directory (regression run): run the cell there. */
+  readonly inProject?: true;
 }
 
 const suitePath = (): string => join(root, "suite.json");
@@ -136,9 +172,13 @@ const TOOL_CASES: readonly ToolCase[] = [
       return { suite: suitePath(), out: join(root, "check-out") };
     },
   },
-  { name: "run_load_test", args: (t) => ({ journeyId: "j1", ...t }), finding: "run_load_test never reaches resolveRunMode (load-api.ts has no run hook)" },
-  { name: "run_exploration", args: (t) => ({ url: UNDECLARED, ...t }), finding: "run_exploration (explore, missions) never reaches resolveRunMode" },
-  { name: "queue_exploration", args: () => ({ target: "demo-shop", goal: "g", successAssertion: { kind: "urlIncludes", text: "/x" }, strategy: "goal-based" }), finding: "queue_exploration queues a mission whose later run resolves no mode" },
+  { name: "run_load_test", args: (t) => ({ journeyId: "j1", authorizedOrigin: [PROD, DECLARED, UNDECLARED], ...t }) },
+  // An exploration takes a URL (an environment only with fromJourney): the kind's origin.
+  { name: "run_exploration", args: (_t, kind) => ({ url: `${KIND_ORIGIN[kind]}/`, goal: "g", fakeAi: true }) },
+  // A queued exploration names a promoted target; the mode is the one its later run decides from the same files.
+  { name: "queue_exploration", args: (_t, kind) => ({ target: KIND_MISSION_TARGET[kind], goal: "g", successAssertion: { kind: "urlIncludes", text: "/x" }, strategy: "goal-based" }) },
+  { name: "regressions", args: (t) => ({ action: "run", id: "r1", ...t }), inProject: true },
+  { name: "verify_fix", args: (_t, kind) => ({ id: KIND_RESULT[kind], fingerprint: FINGERPRINT, replays: 1 }) },
 ];
 
 interface Observed {
@@ -171,11 +211,19 @@ async function invoke(tool: ToolCase, kind: TargetKind): Promise<Observed> {
     return { text, body };
   };
   let attackRefused = false;
-  let r = await call({ ...tool.args(target), ...ATTACK_ARGS });
-  if (r.body["error"] === "invalid_args" && /unknown argument/.test(String(r.body["message"] ?? ""))) {
-    attackRefused = true;
-    seen.length = 0;
-    r = await call(tool.args(target));
+  const cwd = tool.inProject === true ? vi.spyOn(process, "cwd").mockReturnValue(join(root, "project")) : undefined;
+  let r: Awaited<ReturnType<typeof call>>;
+  try {
+    r = await call({ ...tool.args(target, kind), ...ATTACK_ARGS });
+    const message = String(r.body["message"] ?? "");
+    // An unknown argument refused by name: by the CLI tools' arg check, or a queued request's closed schema.
+    if ((r.body["error"] === "invalid_args" && /unknown argument/.test(message)) || (r.body["error"] === "queue_exploration_refused" && /unrecognized key/i.test(message))) {
+      attackRefused = true;
+      seen.length = 0;
+      r = await call(tool.args(target, kind));
+    }
+  } finally {
+    cwd?.mockRestore();
   }
   const modes = [...seen];
   if (typeof r.body["mode"] === "string" && r.body["trust"] !== undefined) modes.push(r.body["mode"]);
@@ -195,26 +243,22 @@ describe("MCP trust escape: every run-starting tool resolves 'automation' on a t
   for (const tool of TOOL_CASES) {
     describe(tool.name, () => {
       for (const kind of TARGETS) {
-        const cell = `${kind}: mode is 'automation' whatever the arguments and environment claim`;
-        if (tool.finding === undefined) {
-          it(cell, { timeout: 60_000 }, async () => {
-            const o = await invoke(tool, kind);
-            expect(o.text).not.toContain('"mode":"test"');
-            expect(resolvedMode(o, kind), o.text.slice(0, 300)).toBe("automation");
-          });
-        } else {
-          // FINDING: no mode is resolved, so this cannot assert 'automation'. It passes while that is true.
-          it.fails(`FINDING (${tool.finding}) ${cell}`, { timeout: 60_000 }, async () => {
-            const o = await invoke(tool, kind);
-            expect(resolvedMode(o, kind), o.text.slice(0, 300)).toBe("automation");
-          });
-        }
+        it(`${kind}: mode is 'automation' whatever the arguments and environment claim`, { timeout: 60_000 }, async () => {
+          const o = await invoke(tool, kind);
+          expect(o.text).not.toContain('"mode":"test"');
+          expect(resolvedMode(o, kind), o.text.slice(0, 300)).toBe("automation");
+        });
       }
     });
   }
 
-  it("the matrix is 10 tools x 3 targets", () => {
-    expect(TOOL_CASES).toHaveLength(10);
+  it("queue_exploration records the mode its run will be in, as run.mode and run.target.trust", async () => {
+    const o = await invoke(TOOL_CASES.find((t) => t.name === "queue_exploration")!, "declared production");
+    expect(JSON.parse(o.text)).toMatchObject({ status: "queued", run: { mode: "automation", target: { origin: PROD, trust: "production" } } });
+  });
+
+  it("the matrix is 12 tools x 3 targets", () => {
+    expect(TOOL_CASES).toHaveLength(12);
     expect(TARGETS).toHaveLength(3);
     for (const t of TOOL_CASES) expect(tools.has(t.name), t.name).toBe(true);
   });
