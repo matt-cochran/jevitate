@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { JobSchema, type Job, type Journey } from "@jevitate/journey";
-import { catalogJobOf, catalogJourney, type Catalog } from "./catalog.js";
-import { BrokenJobRefsError, assertJobRefs, catalogRefIssues, jobRefIssues, journeyRefIssues, refIssueFindings } from "./catalog-refs.js";
+import { catalogJobOf, catalogJourney, jobContentHash, type Catalog } from "./catalog.js";
+import { BrokenJobRefsError, assertJobRefs, catalogRefIssues, journeyDoneCheckFindings, linkedJobDone, jobRefIssues, journeyRefIssues, refIssueFindings } from "./catalog-refs.js";
 
 /** #465 — the catalog reference checks: steps, desired outcomes, metric anchors, parents, `serves`, anchor `jobStep`. */
 
@@ -171,5 +171,38 @@ describe("#465 severity", () => {
 
   it("as findings they never need an acknowledgment", () => {
     expect(refIssueFindings(catalogRefIssues(broken)).some((f) => f.requiresAcknowledgment)).toBe(false);
+  });
+});
+
+describe("#800 job done check", () => {
+  const DONE = { version: 1, at: "/members", check: "textIncludes:#list|${email}", distinguishedBy: ["email"] };
+
+  it("reports job.done-check-unparseable (a gap, never structural) for a done that does not parse", () => {
+    const bad = job({ done: { version: 1, at: "/members", check: "clickThen:#x" } });
+    const issues = catalogRefIssues(catalog([bad]));
+    const hit = issues.filter((i) => i.code === ("job.done-check-unparseable" as never));
+    expect(hit.length).toBeGreaterThan(0);
+    expect(hit.every((i) => i.severity === "warning" && !i.structural && i.jobId === "invite" && i.path.startsWith("done."))).toBe(true);
+    expect(catalogRefIssues(catalog([job({ done: DONE })])).some((i) => i.code === ("job.done-check-unparseable" as never))).toBe(false);
+  });
+
+  it("an approved job whose done is edited reports status stale", () => {
+    const original = job({ done: DONE });
+    const approved = { ...original, approval: { contentHash: jobContentHash(original), at: "2026-11-01T00:00:00Z" } } as Job;
+    expect(catalogJobOf(approved).status).toBe("approved");
+    const edited = { ...approved, done: { ...DONE, at: "/team" } } as Job;
+    expect(catalogJobOf(edited).status).toBe("stale");
+    expect(jobContentHash(edited)).not.toBe(jobContentHash(approved));
+  });
+
+  it("linkedJobDone carries the done check; journeyDoneCheckFindings warns missing-done-check on a promoted Journey", () => {
+    const withDone = catalog([job({ done: DONE })]);
+    const j = journey("invite-admin", { promoted: true });
+    expect(linkedJobDone(withDone, j)?.done).toEqual(DONE);
+    expect(journeyDoneCheckFindings(withDone, j).map((f) => f.rule)).not.toContain("missing-done-check");
+    const without = catalog([job()]);
+    expect(linkedJobDone(without, j)?.done).toBeUndefined();
+    expect(journeyDoneCheckFindings(without, j).map((f) => `${f.rule}:${f.level}`)).toContain("missing-done-check:warning");
+    expect(journeyDoneCheckFindings(without, journey("draft-one")).map((f) => f.rule)).not.toContain("missing-done-check");
   });
 });

@@ -25,6 +25,8 @@ import { McpArgError, argErrorBody, optBool, optEnum, optInt, optNamedSessions, 
 import { resourcePreflight } from "../resource-preflight.js";
 import { runRecordErrorOf } from "../journey-run-record.js";
 import { RunGuardRefusedError, runGuardRefusalBody } from "../mcp-run-guard.js";
+import { loadCatalog, resolveCatalogDir } from "../catalog-api.js";
+import { linkedJobDone } from "../catalog-refs.js";
 import type { McpToolCtx, McpToolGroup } from "./shared.js";
 import { jsonResult, errorResult, governanceArgs, withJourneyExitCode, SetupRequired, redactCredentials, tagsArg } from "./shared.js";
 import type { McpJourneyRunOptions } from "../mcp-api.js";
@@ -32,9 +34,32 @@ import type { McpJourneyRunOptions } from "../mcp-api.js";
 /** `find_capabilities` and `run_journey`: the promoted-Journey tools. */
 export function journeyTools(ctx: McpToolCtx): McpToolGroup {
   const { deps, pathRoots, credentialStore, runJourney } = ctx;
-  const findCaps =
+  const baseFindCaps =
     deps.findCapabilities ??
     ((query: string) => findCapabilities(new JourneyRegistry(new FsJourneyStore(deps.journeysDir)), query));
+  /**
+   * #800: each capability that links a catalog job carries `job: { id, status, done?: { at, check } }`,
+   * the job's done check as stored (placeholders, never values). Best effort: no project or an
+   * unreadable catalog leaves the capability as it was.
+   */
+  const findCaps = async (query: string): Promise<unknown> => {
+    const caps = await baseFindCaps(query);
+    if (!Array.isArray(caps) || caps.length === 0) return caps;
+    try {
+      const store = new FsJourneyStore(deps.journeysDir);
+      const catalog = await loadCatalog(resolveCatalogDir(undefined), deps.journeysDir);
+      return await Promise.all(
+        caps.map(async (c: unknown) => {
+          const id = c !== null && typeof c === "object" ? (c as { id?: unknown }).id : undefined;
+          const journey = typeof id === "string" ? await store.get(id) : null;
+          const job = journey === null ? undefined : linkedJobDone(catalog, journey);
+          return job === undefined ? c : { ...(c as object), job };
+        }),
+      );
+    } catch {
+      return caps;
+    }
+  };
 
   /**
    * #255: `run_journey`'s CLI-parity options, resolved exactly as `journey run` resolves its flags
