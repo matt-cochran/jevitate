@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir as osHomedir, userInfo } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { clock } from "@jevitate/domain";
 
 /**
@@ -47,6 +47,25 @@ function realHomeUnderTest(cwd: string): string | null {
   return home === cwd || findGitRoot(cwd) === home ? null : home;
 }
 
+/**
+ * The run-private temp dir while a test run is going (`test/global-temp-cleanup.ts` sets
+ * `JEVITATE_TEST_RUN_TMPDIR`, which every process the run spawns inherits). Never set otherwise. A walk
+ * that starts inside it stops at it: what sits above it — a sandbox's empty `/tmp/.git`, a stray
+ * `/tmp/.jevitate` left by an older jevitate, a checkout when TMPDIR is inside one — belongs to the
+ * machine, not to the fixture, so it can't become a fixture's project or repository.
+ */
+function testRunCeiling(start: string): string | null {
+  const run = process.env.JEVITATE_TEST_RUN_TMPDIR;
+  if (run === undefined || run === "") return null;
+  const roots = [resolve(run)];
+  try {
+    roots.push(realpathSync(run));
+  } catch {
+    // the run dir is gone (teardown); the resolved spelling is all there is
+  }
+  return roots.find((r) => start === r || start.startsWith(r + sep)) ?? null;
+}
+
 /** The account's home in the passwd database, whatever `HOME` says; null when it has no entry (a container's arbitrary uid). */
 function passwdHome(): string | null {
   try {
@@ -74,18 +93,19 @@ function isAccountHomeProject(dir: string, cwd: string): boolean {
   return !PER_USER_MARKERS.some((m) => existsSync(join(candidate, m)));
 }
 
-/** The nearest `.jevitate/` walking up from the working directory — never the per-user one. */
+/** The nearest `.jevitate/` walking up from the working directory — never the per-user one, never above a test run's temp dir. */
 export function findProjectDir(deps: LayoutDeps = {}): string | null {
   const home = homeDataRoot(deps);
   const cwd = resolve((deps.cwd ?? (() => process.cwd()))());
   const realHome = realHomeUnderTest(cwd);
   const account = passwdHome();
+  const ceiling = testRunCeiling(cwd);
   let dir = cwd;
   for (;;) {
     const candidate = join(dir, ".jevitate");
     if (candidate !== home && dir !== realHome && isDir(candidate) && (dir !== account || isAccountHomeProject(dir, cwd))) return candidate;
     const parent = dirname(dir);
-    if (parent === dir) return null;
+    if (parent === dir || dir === ceiling) return null;
     dir = parent;
   }
 }
@@ -149,15 +169,17 @@ export function allResultDirs(deps: LayoutDeps = {}): string[] {
 /**
  * The nearest directory holding a real `.git`, walking up from `cwd`: a worktree/submodule pointer
  * (a file), or a directory containing a `HEAD` entry. An empty `.git` directory (e.g. a sandbox
- * placeholder under /tmp) is not a repository, so the walk continues past it.
+ * placeholder under /tmp) is not a repository, so the walk continues past it. Under a test run it
+ * never climbs above the run's temp dir (`testRunCeiling`).
  */
 export function findGitRoot(cwd: string): string | null {
   let dir = resolve(cwd);
+  const ceiling = testRunCeiling(dir);
   for (;;) {
     const git = join(dir, ".git");
     if (existsSync(git) && (!isDir(git) || existsSync(join(git, "HEAD")))) return dir;
     const parent = dirname(dir);
-    if (parent === dir) return null;
+    if (parent === dir || dir === ceiling) return null;
     dir = parent;
   }
 }
