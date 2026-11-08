@@ -449,7 +449,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (720 exports)
+# @jevitate/explore (722 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -517,6 +517,8 @@
   BlockedWrite: interface
   BlockedWriteCause: interface
   blockedWriteCauses: function
+  BoundaryEvidence: other
+  BoundarySignal: other
   boundaryValueCandidates: function
   Bounds: interface
   boundSecretField: function
