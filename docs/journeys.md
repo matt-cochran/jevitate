@@ -973,6 +973,25 @@ the value is still refused.
 Provenance is detection, not proof: whoever can edit the Journey file can also write the channel. What
 enforces it is git review of `.jevitate/` (see [catalog.md](./catalog.md)).
 
+### Parameter types
+
+A parameter in `metadata.parameters` may declare a `type` and, for `enum`, its accepted values. Both
+are optional: an untyped parameter takes any string, as before. `journey find` (`--json`) and MCP
+`find_capabilities` list them under `parameters` for a Journey that types at least one parameter.
+
+| Key | Meaning |
+|---|---|
+| `name` | the `--param` name |
+| `type` | one of `string`, `number`, `boolean`, `enum`, `email`, `url`, `date`; absent = untyped |
+| `enum` | the accepted values (1-100 distinct, non-empty, non-secret strings); required with `type: "enum"` and refused without it |
+
+```json
+"parameters": [{ "name": "plan", "type": "enum", "enum": ["free", "pro"] }]
+```
+
+A value that does not match its type is refused before any browser opens. Values are never listed,
+only names, types and the reviewed `enum` list.
+
 ### Parameters in a `navigate` URL
 
 A `navigate` step's `url` may hold `${name}` placeholders, for single-use links whose secret lives

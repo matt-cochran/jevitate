@@ -3,6 +3,7 @@ import { findCapabilities, JourneyRunRefusedError } from "@jevitate/mcp-facade";
 import { FsJourneyStore, JourneyRegistry, type Journey } from "@jevitate/journey";
 import { type GenerationPort } from "@jevitate/ai-core";
 import { existsSync } from "node:fs";
+import { capabilityParameters } from "../journey-find-api.js";
 import { ParamValidationError } from "@jevitate/journey";
 import type { UsageTracker } from "@jevitate/ai-core";
 import type { SelfHealer } from "@jevitate/runtime";
@@ -49,11 +50,23 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
   const findCaps = async (query: string): Promise<unknown> => {
     const caps = await baseFindCaps(query);
     if (!Array.isArray(caps) || caps.length === 0) return caps;
+    const store = new FsJourneyStore(deps.journeysDir);
+    // #796: each capability lists its typed parameters (type, enum values); untyped ones add nothing.
+    const withParameters = await Promise.all(
+      caps.map(async (c: unknown) => {
+        try {
+          const id = c !== null && typeof c === "object" ? (c as { id?: unknown }).id : undefined;
+          const parameters = capabilityParameters(typeof id === "string" ? await store.get(id) : null);
+          return parameters === undefined ? c : { ...(c as object), parameters };
+        } catch {
+          return c;
+        }
+      }),
+    );
     try {
-      const store = new FsJourneyStore(deps.journeysDir);
       const catalog = await loadCatalog(resolveCatalogDir(undefined), deps.journeysDir);
       return await Promise.all(
-        caps.map(async (c: unknown) => {
+        withParameters.map(async (c: unknown) => {
           const id = c !== null && typeof c === "object" ? (c as { id?: unknown }).id : undefined;
           const journey = typeof id === "string" ? await store.get(id) : null;
           const job = journey === null ? undefined : linkedJobDone(catalog, journey);
@@ -61,7 +74,7 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
         }),
       );
     } catch {
-      return caps;
+      return withParameters;
     }
   };
 
