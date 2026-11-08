@@ -2,6 +2,7 @@ import { afterEach, describe, it, expect, vi } from "vitest";
 import { DEFAULT_HEAL_BUDGET, EMPTY_CHANGE_SCOPE, JourneyRunner, PolicyEnforcementError, flattenRecording, retargetRecording, type ChangeEvidence, type ChangeScope, type HealWriteGuard } from "./index.js";
 import type { SelfHealer } from "./self-heal.js";
 import type { Recording, RecordedStep, Step } from "@jevitate/recording";
+import { StubSecretManager, SecretUnresolvableError } from "@jevitate/secrets";
 import { FakeClock, installClock, resetClock, safeRunPolicy, type HealBudget, type RunPolicy } from "@jevitate/domain";
 
 const journeyNoVars = {
@@ -85,6 +86,47 @@ describe("JourneyRunner invariants", () => {
     expect(res).toMatchObject({ outcome: "quarantined", at: 2 });
     // #398: `at` stays the 0-based flat index; the reason names the step 1-based, as a person counts it.
     expect((res as any).reason).toBe("step 3 failed: boom");
+  });
+});
+
+describe("JourneyRunner — 0.30.0 resume from a hold (§5.3, §5.4)", () => {
+  const handbackPolicy: RunPolicy = { ...safeRunPolicy(), secret: { secretMode: "visible-handback" } };
+
+  it("resumeAt continues at the held step with resumeFrom; nothing before it runs again", async () => {
+    const interp = fakeInterpreter({ outcome: "completed", vars: {} });
+    const r = new JourneyRunner(fakeActor, interp);
+    const res = await r.run({ journey: journeyNoVars, params: {}, policy: safeRunPolicy(), resumeAt: 2 });
+    expect(res).toEqual({ outcome: "ok", output: {} });
+    expect(interp.run).not.toHaveBeenCalled();
+    expect(interp.resumeFrom).toHaveBeenCalledWith(fakeActor, journeyNoVars.recording, 2, {});
+  });
+
+  it("refuses a resumeAt that is not a step index, before any step", async () => {
+    const interp = fakeInterpreter({ outcome: "completed", vars: {} });
+    const r = new JourneyRunner(fakeActor, interp);
+    await expect(r.run({ journey: journeyNoVars, params: {}, policy: safeRunPolicy(), resumeAt: -1 })).rejects.toBeInstanceOf(PolicyEnforcementError);
+    expect(interp.resumeFrom).not.toHaveBeenCalled();
+  });
+
+  it("tells the handback handler the held step's index; a handler that throws (a hold) ends the run with that error", async () => {
+    const interp = fakeInterpreter({ outcome: "awaiting_human", at: 3, prompt: "pw", resume: { kind: "urlIncludes", text: "/home" } });
+    const held = new Error("held");
+    const present = vi.fn().mockRejectedValue(held);
+    const r = new JourneyRunner(fakeActor, interp, { present });
+    await expect(r.run({ journey: journeyNoVars, params: {}, policy: handbackPolicy })).rejects.toBe(held);
+    expect(present).toHaveBeenCalledWith("pw", { index: 3 });
+    expect(interp.resumeFrom).not.toHaveBeenCalled();
+  });
+
+  it("vault-autofill preflights the caller's secretRefs (an operator's binding), not only the Journey's own", async () => {
+    const interp = fakeInterpreter({ outcome: "completed", vars: {} });
+    const manager = new StubSecretManager({ known: "v" });
+    const r = new JourneyRunner(fakeActor, interp, undefined, manager);
+    const policy: RunPolicy = { ...safeRunPolicy(), secret: { secretMode: "vault-autofill" } };
+    const ref = (key: string) => ({ manager: "targets.json", key, origin: "https://a.example", field: "label=Password" });
+    await expect(r.run({ journey: journeyNoVars, params: {}, policy, secretRefs: [ref("unknown")] })).rejects.toBeInstanceOf(SecretUnresolvableError);
+    expect(interp.run).not.toHaveBeenCalled();
+    expect(await r.run({ journey: journeyNoVars, params: {}, policy, secretRefs: [ref("known")] })).toMatchObject({ outcome: "ok" });
   });
 });
 

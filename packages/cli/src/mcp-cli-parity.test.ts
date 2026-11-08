@@ -241,6 +241,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
     },
     omitted: {
       "--secret-field": OMIT.envSecret,
+      "--secret-mode": "an agent never picks how a secret is met: over MCP the run mode and the operator's targets.json decide (vault-autofill, a hold, or a refusal)",
       "--allow": OMIT.mcpOrigins,
       // 0.30.0 (#800): temporary until the done-check hooks are registered for MCP run_journey (d-run-hooks-register).
       "--no-done-check": "done checks are not yet read on MCP runs; the MCP argument lands with the hook registration",

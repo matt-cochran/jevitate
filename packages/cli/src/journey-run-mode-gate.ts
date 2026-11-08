@@ -30,7 +30,11 @@ export const RUN_MODE_HOOK_OWNER = "run-mode";
 
 export const E_APPROVAL_CHANNEL_FOR_MODE = "E_APPROVAL_CHANNEL_FOR_MODE" as const;
 export const E_HUMAN_STEP_IN_TEST_MODE = "E_HUMAN_STEP_IN_TEST_MODE" as const;
-export type RunModeRefusalCode = typeof E_APPROVAL_CHANNEL_FOR_MODE | typeof E_HUMAN_STEP_IN_TEST_MODE;
+/** §5.3 (journey-secret-mode.ts): a secret the operator bound to another origin than the run's. */
+export const E_SECRET_ORIGIN_REFUSED = "E_SECRET_ORIGIN_REFUSED" as const;
+/** §5.3 (journey-secret-mode.ts): `--secret-mode` asked for a mode this run's target cannot give. */
+export const E_SECRET_MODE_UNAVAILABLE = "E_SECRET_MODE_UNAVAILABLE" as const;
+export type RunModeRefusalCode = typeof E_APPROVAL_CHANNEL_FOR_MODE | typeof E_HUMAN_STEP_IN_TEST_MODE | typeof E_SECRET_ORIGIN_REFUSED | typeof E_SECRET_MODE_UNAVAILABLE;
 
 /** The approval channels that authorise an automation-mode run: a person made them. */
 export const AUTOMATION_APPROVAL_CHANNELS: readonly ApprovalChannel[] = Object.freeze(["tty", "pr-review"]);

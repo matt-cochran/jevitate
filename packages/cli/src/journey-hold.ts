@@ -8,6 +8,7 @@ import { clock, contentHash } from "@jevitate/domain";
 import { FsInboxStore, HoldKindSchema, InboxItemAlreadyResolvedError, InboxItemNotFoundError, type BuildIdentity, type InboxItem } from "@jevitate/inbox";
 import { ApprovalProvenanceSchema, FsJourneyStore, describeStep, flatJourneySteps, secretParamNames, type ApprovalProvenance, type Journey } from "@jevitate/journey";
 import { PlaywrightBrowserPort, type BrowserPort, type BrowserSession } from "@jevitate/playwright";
+import type { Page } from "playwright";
 import { detectAgentSignals, inMcpInvocation, osUserName, type ApprovalDeps } from "./approval-provenance.js";
 import { sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { currentEngineInfo } from "./engine.js";
@@ -19,6 +20,7 @@ import { readRunCheckpoint, readSignedFile, restoreCheckpointUrl, maskCheckpoint
 import { RunHeldError, RunHookError, registerRunHooks, type PendingAction, type RunHookContext, type RunHoldRequest, type RunHooks } from "./journey-run-hooks.js";
 import { checkpointKeyPath } from "./journey-verify-checkpoint.js";
 import { logsRoot } from "./project-dir.js";
+import { missingSecretParams } from "./secret-params.js";
 import type { TargetTrust } from "./run-mode.js";
 
 /**
@@ -297,14 +299,24 @@ async function persistHold(opts: HoldHookOptions, ctx: RunHookContext & PendingA
 
 // --- Resume scope -------------------------------------------------------------------------------------
 
+/**
+ * §5.3: the person completing a resumed handback or secret hold, in the headed browser the resume opened.
+ * Returns once they are done; the runner then checks the step's own `resume` assertion. Never given a value.
+ */
+export type HandbackPresenter = (prompt: string, page: Page) => Promise<void>;
+
 interface ResumeScope {
   readonly id: string;
+  readonly kind: HoldRecord["kind"];
   readonly journeyHash: string;
   readonly step: number;
   readonly control: string | undefined;
   /** Removes the hold: called once, as the approved action is about to act. */
   readonly consume: () => void;
+  /** A handback or secret hold's person. */
+  readonly presenter?: HandbackPresenter;
   firstWrite: number | undefined;
+  taken?: boolean;
 }
 
 const resumeScope = new AsyncLocalStorage<ResumeScope>();
@@ -319,6 +331,20 @@ export function isApprovedResumeStep(ctx: RunHookContext & PendingAction): boole
   return s !== undefined && ctx.step === s.step && contentHash(ctx.journey) === s.journeyHash && pendingControlOf(ctx.journey, ctx.step) === s.control;
 }
 
+/**
+ * §5.3: the handback or secret hold this resume continues, at its pending step: consumes the hold (one
+ * resume, one completion) and returns the person who completes it. Undefined anywhere else, so the
+ * caller holds again (a later handback is a new hold).
+ */
+export function takeApprovedHandback(ctx: Pick<RunHookContext, "journey"> & { readonly step: number }): HandbackPresenter | undefined {
+  const s = resumeScope.getStore();
+  if (s === undefined || s.kind === "approval" || s.taken === true || s.presenter === undefined) return undefined;
+  if (ctx.step !== s.step || contentHash(ctx.journey) !== s.journeyHash || pendingControlOf(ctx.journey, ctx.step) !== s.control) return undefined;
+  s.taken = true;
+  s.consume();
+  return s.presenter;
+}
+
 let registrations = 0;
 
 function holdHooks(opts: HoldHookOptions): RunHooks {
@@ -326,7 +352,8 @@ function holdHooks(opts: HoldHookOptions): RunHooks {
     // During a resume, the first action that acts must be the approved one; it consumes the hold.
     beforeWrite: (ctx) => {
       const s = resumeScope.getStore();
-      if (s === undefined || s.firstWrite !== undefined) return undefined;
+      // A handback or secret hold is consumed at its own step (`takeApprovedHandback`), which is not a write.
+      if (s === undefined || s.kind !== "approval" || s.firstWrite !== undefined) return undefined;
       s.firstWrite = ctx.step;
       if (!isApprovedResumeStep(ctx)) throw new HoldError("E_HOLD_BINDING", `the hold '${s.id}' cannot resume: ${BINDING_TEXT.pending}`, ["pending"]);
       s.consume();
@@ -465,6 +492,10 @@ export interface ResumeHoldRequest {
   readonly run?: Omit<Partial<RunJourneyProgrammaticallyOptions>, "session" | "dir" | "id" | "params" | "environment">;
   /** For a later hold the resumed run reaches. */
   readonly hooks?: HoldHookOptions;
+  /** The terminal seam (`CliDeps.approval`): a handback or secret hold resumes only for a person at a terminal. */
+  readonly approval?: ApprovalDeps;
+  /** Testing seam: completes a handback or secret step in place of the person (default: asks them at the terminal, in a headed browser). */
+  readonly presentHandback?: HandbackPresenter;
 }
 
 export type ResumeHoldResult =
@@ -478,9 +509,14 @@ export async function checkHoldForResume(req: ResumeHoldRequest): Promise<{ read
   const key = keyOf(req.keyFile ?? checkpointKeyPath());
   const record = readHoldRecord(holdsDir, req.id, key);
   if (isExpired(record)) throw new HoldError("E_HOLD_EXPIRED", `the hold '${req.id}' expired at ${record.expiresAt}; the run ends inconclusive. Run the Journey again to be asked again`);
-  if (record.answer === undefined) throw new HoldError("E_HOLD_NOT_APPROVED", `the hold '${req.id}' has no answer yet: a person approves it with \`jevitate inbox approve ${req.id}\` at a terminal`);
-  if (record.answer.decision === "rejected") throw new HoldError("E_HOLD_REJECTED", `the hold '${req.id}' was rejected at ${record.answer.at}; the held action does not run`);
-  if (record.answer.provenance.channel !== "tty") throw new HoldError("E_HOLD_NOT_APPROVED", `the hold '${req.id}' was not approved by a person at a terminal (channel ${record.answer.provenance.channel})`);
+  // §5.3: a handback or secret hold is answered by a person completing it, so it needs one at a terminal, not an approval first.
+  const completedByPerson = record.kind !== "approval" && record.answer === undefined;
+  if (completedByPerson && !holdApprovalInteractive(req.approval)) {
+    throw new HoldError("E_HUMAN_APPROVAL_REQUIRED", `the hold '${req.id}' waits for a person to complete a ${record.kind} step: run \`jevitate inbox resume ${req.id}\` in your own terminal, which opens the browser for you. An agent over MCP never completes it, and a command without a TTY on stdin and stdout is refused`);
+  }
+  if (record.answer === undefined && !completedByPerson) throw new HoldError("E_HOLD_NOT_APPROVED", `the hold '${req.id}' has no answer yet: a person approves it with \`jevitate inbox approve ${req.id}\` at a terminal`);
+  if (record.answer !== undefined && record.answer.decision === "rejected") throw new HoldError("E_HOLD_REJECTED", `the hold '${req.id}' was rejected at ${record.answer.at}; the held action does not run`);
+  if (record.answer !== undefined && record.answer.provenance.channel !== "tty") throw new HoldError("E_HOLD_NOT_APPROVED", `the hold '${req.id}' was not approved by a person at a terminal (channel ${record.answer.provenance.channel})`);
   const cp = readRunCheckpoint(join(holdsDir, record.checkpoint), key);
   if (cp.kind === "none") throw new HoldError("E_HOLD_CHECKPOINT", `the hold '${req.id}' has no checkpoint to resume from`);
   if (cp.kind === "bad") throw new HoldError("E_HOLD_INTEGRITY", `the checkpoint of the hold '${req.id}' cannot be trusted: ${cp.detail}`);
@@ -515,14 +551,26 @@ export async function resumeHold(req: ResumeHoldRequest): Promise<ResumeHoldResu
   const env = req.environment;
   const allowedOrigins = effectiveAllowedOrigins(applyJourneyEnvironment(stored, env), env, req.run?.allow ?? []);
   const port = (req.browserPortFactory ?? (() => new PlaywrightBrowserPort()))();
+  // §5.3: a person completes a handback or secret step in a browser they can see.
+  const handback = record.kind !== "approval";
+  const presenter: HandbackPresenter | undefined = !handback
+    ? undefined
+    : (req.presentHandback ??
+      (async (prompt) => {
+        const ask = req.approval?.prompt ?? terminalQuestion;
+        await ask(`${prompt}\nComplete this step in the browser window, then press Enter here: `);
+      }));
+  const browser: BrowserRunOptions | undefined = handback && req.presentHandback === undefined ? { ...req.browser, headed: true } : req.browser;
   const session: BrowserSession = await port.open({
-    ...sessionLaunchOptions(req.browser),
+    ...sessionLaunchOptions(browser),
     allowedOrigins,
     baseUrl: env?.baseUrl ?? stored.recording.site,
     ...(req.storageState === undefined ? {} : { storageState: req.storageState }),
   });
   const scope: ResumeScope = {
     id: req.id,
+    kind: record.kind,
+    ...(presenter === undefined ? {} : { presenter }),
     journeyHash: record.journey.hash,
     step: fromStep,
     control: record.pending.control,
@@ -542,10 +590,18 @@ export async function resumeHold(req: ResumeHoldRequest): Promise<ResumeHoldResu
   try {
     await session.page.goto(url, { waitUntil: "load" });
     const result = await resumeScope.run(scope, () =>
-      runJourneyProgrammatically(
-        { ...req.run, dir: req.journeysDir, id: record.journey.id, params: { ...req.params }, session, ...(env === undefined ? {} : { environment: env }) },
-        { skipStep: (i) => i < fromStep - 1 },
-      ),
+      runJourneyProgrammatically({
+        ...req.run,
+        dir: req.journeysDir,
+        id: record.journey.id,
+        params: { ...req.params },
+        session,
+        // The runner continues at the held step; the steps before it are not run again (journey-runner.ts `resumeAt`).
+        resumeAtStep: fromStep,
+        // A secret hold: the secret parameters nobody supplied are still the person's to type.
+        ...(record.kind === "secret" ? { heldSecretParams: missingSecretParams(stored, req.params) } : {}),
+        ...(env === undefined ? {} : { environment: env }),
+      }),
     );
     return { outcome: "resumed", holdId: req.id, fromStep, result };
   } catch (err) {
