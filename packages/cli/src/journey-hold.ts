@@ -20,6 +20,7 @@ import { readRunCheckpoint, readSignedFile, restoreCheckpointUrl, maskCheckpoint
 import { RunHeldError, RunHookError, registerRunHooks, type PendingAction, type RunHookContext, type RunHoldRequest, type RunHooks } from "./journey-run-hooks.js";
 import { checkpointKeyPath } from "./journey-verify-checkpoint.js";
 import { logsRoot } from "./project-dir.js";
+import { reconcileLinkedJob, type ReconcileInput } from "./journey-reconcile.js";
 import { missingSecretParams } from "./secret-params.js";
 import type { TargetTrust } from "./run-mode.js";
 
@@ -88,7 +89,9 @@ export type HoldErrorCode =
   | "E_HOLD_BINDING"
   | "E_HOLD_CHECKPOINT"
   | "E_HUMAN_APPROVAL_REQUIRED"
-  | "E_APPROVAL_NOT_CONFIRMED";
+  | "E_APPROVAL_NOT_CONFIRMED"
+  | "E_RECONCILE_ALREADY_DONE"
+  | "E_RECONCILE_UNREADABLE";
 
 /** A hold could not be answered or resumed. Every message is code-templated: names and steps, never a value. */
 export class HoldError extends Error {
@@ -101,9 +104,9 @@ export class HoldError extends Error {
   ) {
     super(message);
   }
-  /** `E_HOLD_EXPIRED` ends the run `inconclusive`; every other code refuses before anything ran. */
+  /** `E_HOLD_EXPIRED` and the #795 reconcile stops end the run `inconclusive` (2); every other code refuses before anything ran. */
   get outcome(): "inconclusive" | "refused" {
-    return this.code === "E_HOLD_EXPIRED" ? "inconclusive" : "refused";
+    return this.code === "E_HOLD_EXPIRED" || this.code === "E_RECONCILE_ALREADY_DONE" || this.code === "E_RECONCILE_UNREADABLE" ? "inconclusive" : "refused";
   }
 }
 
@@ -496,6 +499,12 @@ export interface ResumeHoldRequest {
   readonly approval?: ApprovalDeps;
   /** Testing seam: completes a handback or secret step in place of the person (default: asks them at the terminal, in a headed browser). */
   readonly presentHandback?: HandbackPresenter;
+  /** #795: the project data dir holding `jobs.json` (default: none, so no done check is read). */
+  readonly catalogDir?: string | null;
+  /** #795 testing seam: the fresh-context reader of the job's done check. */
+  readonly reconcileRead?: ReconcileInput["read"];
+  /** #795: the browser port the reconcile reading opens its fresh context from. */
+  readonly reconcileBrowserPort?: ReconcileInput["browserPort"];
 }
 
 export type ResumeHoldResult =
@@ -549,6 +558,21 @@ export async function resumeHold(req: ResumeHoldRequest): Promise<ResumeHoldResu
   const { record, url, stored, holdsDir } = await checkHoldForResume(req);
   const fromStep = record.pending.step;
   const env = req.environment;
+  // #795: the job's done check is read first, in a fresh context. A job that already reads true is not resumed
+  // (the pending write would be repeated); a job with no done check resumes as before. The hold is left in place.
+  if (req.catalogDir !== undefined) {
+    const reconciled = await reconcileLinkedJob({
+      catalogDir: req.catalogDir,
+      journeysDir: req.journeysDir,
+      journey: stored,
+      auth: req.storageState === undefined ? {} : { storageState: req.storageState },
+      origin: env?.baseUrl ?? stored.recording.site,
+      params: req.params,
+      browserPort: req.reconcileBrowserPort,
+      read: req.reconcileRead,
+    });
+    if (!reconciled.proceed) throw new HoldError(reconciled.code, reconciled.message);
+  }
   const allowedOrigins = effectiveAllowedOrigins(applyJourneyEnvironment(stored, env), env, req.run?.allow ?? []);
   const port = (req.browserPortFactory ?? (() => new PlaywrightBrowserPort()))();
   // §5.3: a person completes a handback or secret step in a browser they can see.
