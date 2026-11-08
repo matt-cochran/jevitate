@@ -103,6 +103,9 @@ importers:
         specifier: ^1.49.0
         version: 1.63.0
     devDependencies:
+      '@jevitate/adjudicator':
+        specifier: workspace:*
+        version: link:../adjudicator
       '@jevitate/ai-core':
         specifier: workspace:*
         version: link:../ai-core
