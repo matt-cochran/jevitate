@@ -134,7 +134,7 @@
 # @jevitate/daemon (1 exports)
   ProfileManager: class
 
-# @jevitate/domain (102 exports)
+# @jevitate/domain (106 exports)
   DEFAULT_HEAP_GROWTH_RULE: object
   DEFAULT_JEVITATE_REPO: const (string)
   DEFECT_OUTCOME_STATUSES: array
@@ -151,6 +151,7 @@
   JOURNEY_MISSION_OUTCOME: object
   JOURNEY_RUN_OUTCOMES: array
   LogClassCauseSchema: object
+  MAX_GLOB_ALTERNATIVES: const (number)
   MAX_RUN_TAGS: const (number)
   MAX_RUN_TAG_VALUE: const (number)
   MAX_SAFE_NAME_LENGTH: const (number)
@@ -191,6 +192,7 @@
   currentClock: function
   defectOutcomeOf: function
   evaluateGate: function
+  expandBraces: function
   externalSchemeOf: function
   fileDraft: function
   fingerprintMarker: function
@@ -205,6 +207,7 @@
   isBrokenRun: function
   isExternalSchemeUrl: function
   isGoalOutcome: function
+  isInScope: function
   isNodeError: function
   isPlainObject: function
   isRecord: function
@@ -216,6 +219,7 @@
   legacyContentHash: function
   looksLikeRendererOom: function
   makeRng: function
+  matchGlob: function
   matchesRunTags: function
   nextOpenAfter: function
   occurrenceComment: function
@@ -791,7 +795,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (184 exports)
+# @jevitate/journey (186 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -915,6 +919,7 @@
   journeyBranchPoint: function
   journeyEndState: function
   journeyLegacyReviewHash: function
+  journeyMutationSteps: function
   journeyParamSchema: function
   journeyPrefix: function
   journeyProofHash: function
@@ -932,6 +937,7 @@
   mutationProofVerdict: function
   mutationReplay: function
   mutationWait: function
+  mutationWriteMatches: function
   needsRelaxedReplay: function
   nextTargetedRelaxation: function
   outputKeyFields: function

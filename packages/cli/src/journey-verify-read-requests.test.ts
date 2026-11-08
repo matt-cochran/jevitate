@@ -75,7 +75,8 @@ async function plan(targets: string): Promise<{ ok: boolean; data?: { mutations:
 
 test("--plan plans no write mutation for a POST the target declares a read", async () => {
   const report = await plan(await targetsFile(READS));
-  expect(report.data?.mutations.map((m) => m.id)).toEqual([]);
+  // No block-write: only the click's own checked UI effect keeps its skip (#811).
+  expect(report.data?.mutations.map((m) => m.id)).toEqual(["skip:1"]);
 });
 
 test("--plan still plans them with no such target", async () => {
@@ -115,7 +116,8 @@ async function mutate(targets: string): Promise<{ ok: boolean; data?: { mutation
 
 test("--mutate runs no write mutation for a POST the target declares a read", async () => {
   const report = await mutate(await targetsFile(READS));
-  expect(report.data?.mutations.map((m) => m.id)).toEqual([]);
+  // No block-write: only the click's own checked UI effect keeps its skip (#811).
+  expect(report.data?.mutations.map((m) => m.id)).toEqual(["skip:1"]);
 });
 
 test("--mutate refuses an invalid targets file before any replay", async () => {

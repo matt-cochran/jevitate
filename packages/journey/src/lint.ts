@@ -166,19 +166,28 @@ function writeRequestsOf(recorded: RecordedStep, classify: WriteClassifier): Wri
   return out;
 }
 
-const READ_METHODS = /^(?:GET|HEAD|OPTIONS)$/i;
+/** A request method that can carry a configured read (read RPCs are POSTs). Any other text is unknown evidence, never a read. */
+const BODY_METHODS = /^(?:POST|PUT|PATCH|DELETE)$/i;
+
+/**
+ * Does a request check's glob name a write? The classifier reads paths, and `Get*` is not a method name:
+ * read it as a path the glob stands for, so `/pkg.Items/Get*` is a read RPC and `/pkg.Items/*` stays unknown.
+ */
+function checkNamesWrite(check: { readonly method: string; readonly pathGlob: string }, classify: WriteClassifier): boolean {
+  return classify({ method: check.method, path: check.pathGlob.replaceAll("*", "X") });
+}
 
 function isWriteStep(recorded: RecordedStep, classify: WriteClassifier, requests: readonly WriteRequest[]): boolean {
   if (requests.length > 0) return true;
   // (b) a step's own request expectation names a write method for its path.
-  if ((recorded.expectRequests ?? []).some((check) => classify({ method: check.method, path: check.pathGlob }))) return true;
+  if ((recorded.expectRequests ?? []).some((check) => checkNamesWrite(check, classify))) return true;
   // A request the configuration calls a read outranks a page delta: loading data changes the page,
   // and that must not turn a configured read POST back into a write. Only such a request does: a GET
   // says nothing about what else the step did, so it keeps the conservative fallback below (#763).
-  const configuredRead = (method: string, path: string): boolean => !READ_METHODS.test(method) && !classify({ method, path });
+  const configuredRead = (method: string, path: string): boolean => BODY_METHODS.test(method) && !classify({ method, path });
   const recordedLines = (recorded.delta?.requests ?? []).map((line) => REQUEST_LINE.exec(line.trim()));
   if (recordedLines.some((m) => m !== null && configuredRead(m[1]!, m[2]!))) return false;
-  if ((recorded.expectRequests ?? []).some((check) => configuredRead(check.method, check.pathGlob))) return false;
+  if ((recorded.expectRequests ?? []).some((check) => configuredRead(check.method, check.pathGlob.replaceAll("*", "X")))) return false;
   // (c) a state-changing step whose delta changed the page, even if the request was not recorded.
   return recorded.delta?.verdict === "relevant-change" && STATE_CHANGING.has(recorded.step.kind);
 }
@@ -257,10 +266,35 @@ export interface JourneyWriteStep {
   readonly requests: readonly string[];
 }
 
+/** Internal mutation applicability, independent of write authorization and persistence proof. */
+export interface JourneyMutationStep {
+  readonly step: number;
+  readonly requests: readonly { readonly method: string; readonly pathGlob: string; readonly literal?: true }[];
+  /** Positive write evidence only; absence still means unknown network coverage. */
+  readonly knownHttpWrite: boolean;
+}
+
+export function journeyMutationSteps(journey: Journey, opts: JourneyLintOptions = {}): JourneyMutationStep[] {
+  const classify = writeClassifier({ readRequests: opts.readRequests });
+  return flattenSteps(journey).flatMap((recorded, i) => {
+    const observed = writeRequestsOf(recorded, classify).map(({ method, path }) => ({ method, pathGlob: path, literal: true as const }));
+    const declared = (recorded.expectRequests ?? []).filter((check) => checkNamesWrite(check, classify));
+    const requests = [...observed, ...declared.map(({ method, pathGlob }) => ({ method, pathGlob }))];
+    const knownHttpWrite = requests.length > 0;
+    const action = recorded.step;
+    const checkedUiEffect = STATE_CHANGING.has(action.kind) &&
+      "expect" in action && action.expect.kind !== "count" && !isNoClaimExpect(action) && !isOwnTargetVisible(action);
+    return knownHttpWrite || checkedUiEffect || isWriteStep(recorded, classify, [])
+      ? [{ step: i + 1, requests, knownHttpWrite }]
+      : [];
+  });
+}
+
 /**
  * #402: the Journey's write steps, by the SAME rule the lint's `write-without-effect` uses (a recorded
  * write request, a write `expectRequests`, or a state-changing step whose delta changed the page).
- * The mutation proof (`journey verify --mutate`) skips or blocks exactly these.
+ * This conservative lint view includes changed actions with unknown network coverage.
+ * Mutation applicability is separate: only positively evidenced HTTP writes get automatic blocks.
  */
 export function journeyWriteSteps(journey: Journey, opts: JourneyLintOptions = {}): JourneyWriteStep[] {
   const classify = writeClassifier({ readRequests: opts.readRequests });

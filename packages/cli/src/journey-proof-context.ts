@@ -71,3 +71,9 @@ export function currentJourneyProofHash(journey: Journey, context: JourneyProofC
   const current = { ...rest, ...(reads === undefined ? {} : { readRequests: reads }) };
   return journeyProofHashForContext(journey, Object.keys(current).length === 0 ? undefined : current);
 }
+
+/** Unknown planner identity or a different effective read policy cannot be fresh evidence. */
+export function currentJourneyProof(journey: Journey, record: { readonly journeyId: string; readonly proofHash?: string; readonly proofContext?: JourneyProofContext }, readRequests: readonly string[] | undefined): boolean {
+  return record.journeyId === journey.metadata.id && record.proofHash !== undefined &&
+    record.proofHash === currentJourneyProofHash(journey, record.proofContext, readRequests);
+}

@@ -28,6 +28,7 @@ import {
   mutationErrored,
   mutationProofVerdict,
   mutationReplay,
+  mutationWriteMatches,
   needsRelaxedReplay,
   paceBeforeMutationMs,
   paceEndStateFloorMs,
@@ -48,6 +49,7 @@ import {
   thinSites,
   validateParams,
   type AssertionVerdict,
+  type AssertionProof,
   type Journey,
   type JourneyMutation,
   type JourneyTargetedProofPlan,
@@ -391,6 +393,14 @@ async function readStorageCounts(page: BrowserSession["page"]): Promise<StorageC
     return null;
   } finally {
     clock.clearTimeout(timer);
+  }
+}
+
+function pathOf(p: string): string {
+  try {
+    return /^https?:\/\//i.test(p) ? new URL(p).pathname : p.split("?")[0]!;
+  } catch {
+    return p;
   }
 }
 
@@ -876,6 +886,7 @@ export interface JourneyVerifyAssertion {
   readonly targetedRefusal?: string;
   /** #616: the proving targeted proof came from a declared `metadata.targetedProofs` plan. */
   readonly declaredProof?: true;
+  readonly obligations?: readonly (NonNullable<AssertionProof["obligations"]>[number] & { readonly declaredProof?: true })[];
 }
 
 export interface JourneyVerifyReport {
@@ -976,30 +987,26 @@ type Run = typeof runJourneyProgrammatically;
 
 const REQUEST_LINE = /^(\S+)\s+(\S+)/;
 
-function pathOf(p: string): string {
-  try {
-    return /^https?:\/\//i.test(p) ? new URL(p).pathname : p.split("?")[0]!;
-  } catch {
-    return p;
-  }
-}
-
-/** Was the step's own recorded write among the blocked? With no recorded request, any blocked write counts. */
-function blockedOwnWrite(recorded: readonly string[], blocked: readonly BlockedWrite[]): boolean {
-  if (recorded.length === 0) return blocked.length > 0;
-  return recorded.some((line) => {
+/**
+ * Only a positively matching recorded or declared write establishes applicability. A step with no write
+ * evidence at all gets a block-write only from a declared `mutationPairs` entry: any write its window blocked counts.
+ */
+function blockedOwnWrite(recorded: readonly string[], declared: NonNullable<MutationReplay["blockMatchers"]>, blocked: readonly BlockedWrite[]): boolean {
+  const observed = recorded.flatMap((line) => {
     const m = REQUEST_LINE.exec(line.trim());
-    if (m === null) return false;
-    return blocked.some((b) => b.method.toUpperCase() === m[1]!.toUpperCase() && pathOf(b.path) === pathOf(m[2]!));
+    return m === null ? [] : [{ method: m[1]!, pathGlob: m[2]!, literal: true as const }];
   });
+  const matchers = [...observed, ...declared];
+  if (matchers.length === 0) return blocked.length > 0;
+  return matchers.some((matcher) => blocked.some((request) => mutationWriteMatches(matcher, request)));
 }
 
-function failedSitesOf(result: { outcome: string; reason?: string; at?: number }, failures: readonly OutcomeCheckFailure[]): MutationFailedSite[] {
+function failedSitesOf(result: { outcome: string; reason?: string; at?: number; failurePhase?: "action" | "postcondition" }, failures: readonly OutcomeCheckFailure[]): MutationFailedSite[] {
   if (result.outcome !== "quarantined") return [];
   const structured = failures.map((f): MutationFailedSite =>
-    f.where === "step-request" ? { where: "step-request", step: f.step, checkIndex: f.checkIndex } : f.where === "end-state" ? { where: "end-state", index: f.index } : { where: "unevaluable" },
+    f.where === "step-request" ? { where: "step-request", step: f.step, checkIndex: f.checkIndex, ...(f.evaluated === true ? { evaluated: true } : {}) } : f.where === "end-state" ? { where: "end-state", index: f.index } : { where: "unevaluable" },
   );
-  return result.at === undefined ? structured : [...structured, { where: "step", step: result.at + 1, postcondition: /postcondition failed/.test(result.reason ?? "") }];
+  return result.at === undefined ? structured : [...structured, { where: "step", step: result.at + 1, postcondition: result.failurePhase === "postcondition" }];
 }
 
 /**
@@ -1269,7 +1276,7 @@ async function attemptReplay(c: ReplayContext, m: JourneyMutation, describe: (j:
     if (r.outcome === "quarantined" && /no-alternative/.test(r.reason)) {
       return { outcome: "not-applied", failedSites: [], ...blockedFields, reason: r.reason };
     }
-    if (how.blockIndex !== undefined && !blockedOwnWrite(how.blockRequests ?? [], blocked)) {
+    if (how.blockIndex !== undefined && !blockedOwnWrite(how.blockRequests ?? [], how.blockMatchers ?? [], blocked)) {
       return {
         outcome: "not-applied",
         failedSites: [],
@@ -1504,6 +1511,10 @@ async function concludeProof(c: ConcludeContext): Promise<JourneyVerifyReport> {
     ...(a.targetedRefusal === undefined ? {} : { targetedRefusal: a.targetedRefusal }),
     // #616: the proving proof was a declared plan, not the automatic relaxation search.
     ...(a.provedBy !== undefined && results.get(a.provedBy)?.targeted?.some((t) => t.site === a.site && t.declared === true) === true ? { declaredProof: true as const } : {}),
+    ...(a.obligations === undefined ? {} : { obligations: a.obligations.map((o) => ({
+      ...o,
+      ...(o.provedBy !== undefined && results.get(o.provedBy)?.targeted?.some((t) => t.site === a.site && t.declared === true) === true ? { declaredProof: true as const } : {}),
+    })) }),
   }));
   const order = new Map(journeyAssertions(journey).map((s, i) => [assertionSiteKey(s), i]));
   const siteOrder = (key: string): number => order.get(key) ?? Number.MAX_SAFE_INTEGER;
@@ -1798,5 +1809,11 @@ export function verifyAssertionLine(a: JourneyVerifyAssertion): string {
     a.relaxedSites === undefined || a.relaxedSites.length === 0 ? "" : a.declaredProof === true ? `, declared plan relaxed ${a.relaxedSites.join(", ")}` : `, relaxed ${a.relaxedSites.join(", ")}`;
   const proved = a.provedBy === undefined ? "" : `  (proved by ${a.provedBy}${relaxed})`;
   const refused = a.targetedRefusal === undefined ? "" : `  (targeted proof refused: ${a.targetedRefusal})`;
-  return `${a.verdict.padEnd(11)}  ${a.site.padEnd(18)}  ${a.check}${proved}${refused}`;
+  const obligations = a.obligations === undefined ? "" : `  [${a.obligations.map((o) => {
+    const witness = o.provedBy === undefined ? "" : ` by ${o.provedBy}`;
+    const relaxed = o.relaxedSites === undefined || o.relaxedSites.length === 0 ? "" : `, ${o.declaredProof === true ? "declared plan " : ""}relaxed ${o.relaxedSites.join(", ")}`;
+    const refusal = o.targetedRefusal === undefined ? "" : `, targeted proof refused: ${o.targetedRefusal}`;
+    return `${o.kind}: ${o.verdict}${witness}${relaxed}${refusal}`;
+  }).join("; ")}]`;
+  return `${a.verdict.padEnd(11)}  ${a.site.padEnd(18)}  ${a.check}${proved}${refused}${obligations}`;
 }

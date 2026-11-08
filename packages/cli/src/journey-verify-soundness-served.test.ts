@@ -968,14 +968,14 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     reason: /no step records it as a write.*If this request is the step's write, add it.*If it is a read, there is no write here to prove/,
   },
   {
-    name: "a check naming the first of two recorded writes stays with the last write, which can't break it: a recording can place a timer's write under the wrong step",
+    name: "a check naming the first of two recorded writes pairs with the step that recorded it (#811), whose block breaks it",
     serve: () => (req, res) => {
       if (pathOfUrl(req).startsWith("/api/")) return void res.writeHead(200, { "content-type": "application/json" }).end("{}");
       html(res, `<button id="a">A</button><button id="b">B</button><script>for(const id of ['a','b'])document.getElementById(id).onclick=()=>fetch('/api/'+id,{method:'POST'})</script>`);
     },
     journey: (site) => J(site, [NAV_TO("#a"), { step: { kind: "click", target: { css: "#a" }, expect: NOCLAIM }, ...WROTE("/api/a") }, { step: { kind: "click", target: { css: "#b" }, expect: NOCLAIM }, ...WROTE("/api/b") }], { networkChecks: POST("/api/a") }),
-    verdict: "insensitive",
-    reading: ["end-state:0", "insensitive"],
+    verdict: "proven",
+    reading: ["end-state:0", "sensitive"],
   },
   {
     name: "a no-store 200 whose body the page never reads: the write was answered",
@@ -1143,14 +1143,14 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     reading: ["end-state:0", "insensitive"],
   },
   // KNOWN LIMIT, NOT DESIRED BEHAVIOUR: this row pins a reading so a change to it is seen, and does not endorse it.
-  // A's timer sends the write. The recording credits it to B, by time. C sends another write and is the last one, so
-  // the end state is paired with C's mutations. block-write:4 aborts every write sent during C's window, the timer's
-  // included, so the check fails and the re-run reproduces it, though C had nothing to do with that write. skip:4 passes.
+  // A's timer sends the write. The recording credits it to B, by time. Since #811 the check pairs with B, the one step
+  // whose recorded delta names it, not with C, the last write. B's block cannot reach a write sent in C's window, so the
+  // check holds under it and the proof reads insensitive: no longer a false proven, but still credited to the wrong step.
   // How the timing holds: C's button stays disabled until the timer has sent its write, so C's window stays open past it
   // however slowly C runs, with no claim to pair. The last step waits on the same thing, so skip:4 reaches the end state
   // with the write answered. What is left is a margin, not an ordering: C has to start within SLOW_WRITE_MS of A's click.
   {
-    name: "stated limit, today's reading: a timer's write, recorded under the next step, is blocked in the last write's window, so that step's block proves a check it had no part in, proven",
+    name: "stated limit, today's reading: a timer's write, recorded under the next step, pairs with that step, whose block cannot break it, insensitive",
     limit: true,
     serve: () => (req: IncomingMessage, res: ServerResponse): void => {
       if (pathOfUrl(req).startsWith("/api/")) {
@@ -1160,10 +1160,8 @@ const ROWS_EXPERIMENT: readonly Row[] = [
       html(res, `<button id="a">A</button><button id="b">B</button><button id="c" disabled>C</button><p id="said"></p><script>const $=(id)=>document.getElementById(id);$('a').onclick=()=>{setTimeout(()=>{fetch('/api/sync',{method:'POST'}).catch(()=>{}).finally(()=>{$('c').disabled=false;$('said').insertAdjacentHTML('beforeend','<i id="synced">synced</i>')})},${SLOW_WRITE_MS})};$('b').onclick=()=>{$('said').append('B')};$('c').onclick=()=>fetch('/api/last',{method:'POST'})</script>`);
     },
     journey: (site) => J(site, [NAV_TO("#a"), { step: { kind: "click", target: { css: "#a" }, expect: NOCLAIM } }, { step: { kind: "click", target: { css: "#b" }, expect: NOCLAIM }, ...WROTE("/api/sync") }, { step: { kind: "click", target: { css: "#c" }, expect: NOCLAIM }, ...WROTE("/api/last") }, { step: { kind: "waitFor", target: { css: "#synced" }, state: "visible" } }], { networkChecks: POST("/api/sync") }),
-    verdict: "proven",
-    reading: ["end-state:0", "sensitive"],
-    under: ["block-write:4", "end-state:0", "sensitive"],
-    passedUnder: "skip:4",
+    verdict: "insensitive",
+    reading: ["end-state:0", "insensitive"],
   },
   // KNOWN LIMIT, NOT DESIRED BEHAVIOUR: this row pins a reading so a change to it is seen, and does not endorse it.
   // An unread clone makes Chromium report a no-store body's bytes as they arrive, which looks the same as a complete body. The write reads as answered after 2 s while the server works on.

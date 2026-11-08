@@ -37,7 +37,7 @@ import type { LocatorHealthDetail } from "./locator-health.js";
 import { evaluateMutationProofPolicy, type MutationProofPolicyMode, type ProofWaiver } from "./mutation-proof-policy.js";
 import { SafetyPolicy, describeCheck, explainCheck, type SafetyConfig } from "@jevitate/explore";
 import { navigateUrlParams, writeClassifier, type Step, type TargetDescriptor, type ValueOrVar } from "@jevitate/recording";
-import { currentJourneyProofHash, type JourneyProofContext } from "./journey-proof-context.js";
+import { currentJourneyProof, type JourneyProofContext } from "./journey-proof-context.js";
 import {
   createSheetWriter,
   finishSheet,
@@ -453,7 +453,7 @@ function multisetDiff(before: readonly string[], after: readonly string[]): { ad
   return { added, removed };
 }
 
-function buildVerify(journey: Journey, hash: string, rec: JourneyVerifyRecord | null | undefined, readRequests: readonly string[] | undefined): JourneyReviewVerify {
+function buildVerify(journey: Journey, rec: JourneyVerifyRecord | null | undefined, readRequests: readonly string[] | undefined): JourneyReviewVerify {
   if (rec === null || rec === undefined) {
     return { status: "not-verified", hint: `run \`jevitate journey verify ${journey.metadata.id} --mutate\` to prove each assertion can fail` };
   }
@@ -461,8 +461,8 @@ function buildVerify(journey: Journey, hash: string, rec: JourneyVerifyRecord | 
     status: "recorded",
     verdict: rec.verdict,
     at: rec.at,
-    // #523: an executable-content change stales the proof; an old record without it compares the full hash.
-    stale: rec.journeyId !== journey.metadata.id || (rec.proofHash === undefined ? rec.contentHash !== hash : rec.proofHash !== currentJourneyProofHash(journey, rec.proofContext, readRequests)),
+    // Evidence without planner identity, or under another read policy, must be reverified.
+    stale: !currentJourneyProof(journey, rec, readRequests),
     ...(rec.reason === undefined ? {} : { reason: rec.reason }),
     summary: { ...rec.summary },
     ...(rec.suggestedTargetedProofs === undefined ? {} : { suggestedTargetedProofs: rec.suggestedTargetedProofs.map((p) => ({ ...p, relax: [...p.relax] })) }),
@@ -563,7 +563,7 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
       ...(m.acceptedWeak === undefined ? {} : { acceptedWeak: { reason: m.acceptedWeak.reason, rules: [...m.acceptedWeak.rules] } }),
       // #616: the declared targeted-proof plans, copied out of the metadata for review.
       ...(m.targetedProofs === undefined || m.targetedProofs.length === 0 ? {} : { targetedProofs: m.targetedProofs.map((p) => ({ check: p.check, mustFailWhen: p.mustFailWhen, relax: [...p.relax] })) }),
-      verify: buildVerify(journey, hash, ctx.lastVerify, ctx.safety?.readRequests),
+      verify: buildVerify(journey, ctx.lastVerify, ctx.safety?.readRequests),
       policy: evaluateMutationProofPolicy({ journey, contentHash: hash, record: ctx.lastVerify, mode: ctx.proofPolicy, waiver: ctx.proofWaiver, readRequests: ctx.safety?.readRequests }),
     },
     changeSinceApproval: buildChange(journey, hash, ctx.approvedSnapshot, ctx.stepIdOnly === true),

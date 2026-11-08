@@ -56,7 +56,7 @@ type Run = NonNullable<JourneyVerifySeams["run"]>;
 type RunResult = Awaited<ReturnType<Run>>;
 const passed = { outcome: "ok", output: {} } as RunResult;
 const requestBroken = { outcome: "quarantined", reason: `step 3 request check failed: ${APP_TEXT}`, outcomeFailures: [{ where: "step-request", step: 3, checkIndex: 0 }], blockedWrites: [{ method: "POST", path: `/api/save?who=${APP_TEXT}` }] } as unknown as RunResult;
-const stepBroken = { outcome: "quarantined", reason: `step 2 postcondition failed: ${APP_TEXT}`, at: 1 } as RunResult;
+const stepBroken = { outcome: "quarantined", reason: `step 2 postcondition failed: ${APP_TEXT}`, at: 1, failurePhase: "postcondition" } as RunResult;
 
 function journeyOf(name = "Save text"): Journey {
   return {
@@ -803,7 +803,7 @@ describe("a resume and an errored pair", () => {
       delete save.expectRequests;
       save.step.expect = { kind: "visible", target: { testId: "status" } };
       await new FsJourneyStore(join(dir, "journeys")).put(journey);
-      const stopped = { outcome: "quarantined", reason: "step 3 postcondition failed", at: 2 } as RunResult;
+      const stopped = { outcome: "quarantined", reason: "step 3 postcondition failed", at: 2, failurePhase: "postcondition" } as RunResult;
       const endState = { outcome: "quarantined", reason: "end state", outcomeFailures: [{ where: "end-state", index: 0 }] } as unknown as RunResult;
       const l = labelled((label, seen, mutation) => {
         if (label !== "skip:3") return undefined;

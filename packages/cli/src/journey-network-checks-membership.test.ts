@@ -114,7 +114,25 @@ describe("JourneyOutcomeChecks step-window membership by identity (#617)", () =>
       return { outcome: "ok", output: null };
     });
 
-    expect(checks.lastFailures).toEqual([{ where: "step-request", step: 2, checkIndex: 0, detail: expect.any(String) }]);
+    expect(checks.lastFailures).toEqual([{ where: "step-request", step: 2, checkIndex: 0, detail: expect.any(String), evaluated: true }]);
+  });
+
+  it.each(["completed", "abandoned"] as const)("a truncated %s own-step capture supplies no negative request proof", async (completion) => {
+    installClock(new FakeClock({ startMs: 1_000_000 }));
+    const page = {} as Page;
+    const checks = new JourneyOutcomeChecks(page, journeyWithStepRequests("truncated-window", [{ kind: "requestMade", method: "POST", pathGlob: "/api/save" }]));
+    const observer = checks.observer()!;
+    await checks.run(actor, async () => {
+      const monitor = harness.monitors.get(page)!;
+      await observer.beforeStep!({ actor, index: 1, recorded });
+      for (let i = 0; i < 20_001; i++) {
+        const key = {};
+        monitor.began(key, request("/api/other"));
+        monitor.ended(key, completion === "abandoned" ? null : request("/api/other"));
+      }
+      return { outcome: "quarantined", reason: "postcondition failed", at: 1 };
+    }, { collectStepFailuresOnReplayFailure: true });
+    expect(checks.lastFailures).toEqual([{ where: "unevaluable", detail: expect.stringContaining("dropped its oldest requests") }]);
   });
 
   it("a retry request begun inside the restarted window satisfies the check at the same clock tick", async () => {

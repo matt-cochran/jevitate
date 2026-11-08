@@ -194,7 +194,7 @@
   ProfileManager: class
   ProfileStatus: interface
 
-# @jevitate/domain (161 exports)
+# @jevitate/domain (166 exports)
   assertInsideRoot: function
   assertRunTag: function
   assertSafeName: function
@@ -202,6 +202,7 @@
   Attribution: type-alias
   AttributionResult: interface
   canonicalJson: function
+  CapabilityScope: interface
   clock: variable
   ClockImpl: interface
   combineOutcomes: function
@@ -223,6 +224,7 @@
   EnvironmentDegraded: type-alias
   EnvironmentDegradedSchema: variable
   evaluateGate: function
+  expandBraces: function
   EXPLORE_MISSION_OUTCOMES: variable
   ExploreMissionOutcome: type-alias
   externalSchemeOf: function
@@ -258,6 +260,7 @@
   isBrokenRun: function
   isExternalSchemeUrl: function
   isGoalOutcome: function
+  isInScope: function
   isNodeError: function
   isPlainObject: function
   isRecord: function
@@ -279,6 +282,8 @@
   looksLikeRendererOom: function
   makeRng: function
   matchesRunTags: function
+  matchGlob: function
+  MAX_GLOB_ALTERNATIVES: variable
   MAX_RUN_TAG_VALUE: variable
   MAX_RUN_TAGS: variable
   MAX_SAFE_NAME_LENGTH: variable
@@ -1231,7 +1236,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (308 exports)
+# @jevitate/journey (311 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1394,6 +1399,8 @@
   JourneyMetadata: interface
   JourneyMutation: interface
   JourneyMutationPair: interface
+  JourneyMutationStep: interface
+  journeyMutationSteps: function
   JourneyNetworkCheck: type-alias
   JourneyOutputsSchema: variable
   JourneyParameter: interface
@@ -1454,6 +1461,7 @@
   MutationRunResult: interface
   MutationVerdict: type-alias
   mutationWait: function
+  mutationWriteMatches: function
   needsRelaxedReplay: function
   nextTargetedRelaxation: function
   OUTCOME_DIRECTIONS: variable

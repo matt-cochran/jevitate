@@ -26,7 +26,7 @@ type Run = NonNullable<JourneyVerifySeams["run"]>;
 type RunResult = Awaited<ReturnType<Run>>;
 const passed = { outcome: "ok", output: {} } as RunResult;
 /** A mutated replay that broke the step: a result, not an error. */
-const failed = { outcome: "quarantined", reason: "step 2 postcondition failed", at: 1 } as RunResult;
+const failed = { outcome: "quarantined", reason: "step 2 postcondition failed", at: 1, failurePhase: "postcondition" } as RunResult;
 
 const journey: Journey = {
   metadata: { id: ID, name: "Save text", promoted: false, params: [], createdAtIso: "2026-10-07T00:00:00.000Z" },
@@ -243,7 +243,7 @@ describe("a replay that is not retried", () => {
 describe("a targeted proof's replay", () => {
   it("is retried through the same path", async () => {
     // Every mutated replay stops at step 1's postcondition, leaving later sites a cascade: a targeted proof runs.
-    const stopped = { outcome: "quarantined", reason: "step 1 postcondition failed", at: 0 } as RunResult;
+    const stopped = { outcome: "quarantined", reason: "step 1 postcondition failed", at: 0, failurePhase: "postcondition" } as RunResult;
     const replays: JourneyVerifyProgress[] = [];
     const targetedError = 3; // after the base and the first mutation's first (and relaxed) replay
     let errored = false;

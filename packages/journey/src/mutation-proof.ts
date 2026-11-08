@@ -1,8 +1,9 @@
 import type { Assertion, NetworkCheck, OutcomeWait, RecordedStep, Step } from "@jevitate/recording";
+import { canonicalJson, expandBraces, matchGlob } from "@jevitate/domain";
 import { WAIT_FOR_STALL_MS } from "@jevitate/recording";
 import type { Journey, JourneyTargetedProofPlan } from "./journey.js";
 import { isNoClaimExpect, journeyAssertions, type JourneyAssertionSite } from "./assertions.js";
-import { journeyWriteSteps, type JourneyLintOptions } from "./lint.js";
+import { journeyMutationSteps, journeyWriteSteps, type JourneyLintOptions } from "./lint.js";
 import { resolveJourneyStep } from "./anchors.js";
 import { secretParamNames } from "./intent.js";
 import { actionRefs, alteredValue, mutableParamValue, pinAssertionRefs, sitePageAssertion, siteRefs, swappedValue, truncatedValue } from "./mutation-proof-refs.js";
@@ -16,7 +17,7 @@ import { actionRefs, alteredValue, mutableParamValue, pinAssertionRefs, sitePage
  * requests inside one step's window, or type an empty value into one fill — never send, fabricate
  * or answer a request.
  *
- *  - `skip:<n>` — a write step's action is left out (its own `expect`, when it has one, is still
+ *  - `skip:<n>` — an effect action is left out (its own `expect`, when it has one, is still
  *    checked at the same place, so a claim that holds without the action is caught);
  *  - `block-write:<n>` — the write requests a write step sends are aborted before they leave the
  *    browser (`mutationReplay` names the step's recorded writes; one of them must be blocked, or the
@@ -71,7 +72,7 @@ export interface MutationPlan {
 /** Where a mutated replay failed. `postcondition`: the step's own assertion failed (not its action). */
 export type MutationFailedSite =
   | { readonly where: "step"; readonly step: number; readonly postcondition: boolean }
-  | { readonly where: "step-request"; readonly step: number; readonly checkIndex: number }
+  | { readonly where: "step-request"; readonly step: number; readonly checkIndex: number; readonly evaluated?: true }
   | { readonly where: "end-state"; readonly index: number }
   | { readonly where: "unevaluable" };
 
@@ -197,6 +198,8 @@ export type AssertionVerdict = MutationVerdict | "unpaired";
 
 export interface AssertionProof {
   readonly site: string;
+  /** An unpaired network/persistence end-state is an unresolved proof obligation. */
+  readonly required?: true;
   readonly verdict: AssertionVerdict;
   /** The mutation that proved it sensitive. */
   readonly provedBy?: string;
@@ -204,6 +207,14 @@ export interface AssertionProof {
   readonly relaxedSites?: readonly string[];
   /** #609: why a targeted proof was refused, when the verdict stays a cascade. */
   readonly targetedRefusal?: string;
+  /** Independent propositions: a UI action witness cannot discharge value/data sensitivity. */
+  readonly obligations?: readonly {
+    readonly kind: "data" | "action";
+    readonly verdict: MutationVerdict;
+    readonly provedBy?: string;
+    readonly relaxedSites?: readonly string[];
+    readonly targetedRefusal?: string;
+  }[];
 }
 
 /** `step:<n>` · `step-request:<n>:<i>` · `end-state:<i>` — the names `metadata.mutationPairs` uses. */
@@ -454,10 +465,48 @@ function fillValue(step: Step, params: Readonly<Record<string, string>>): string
   return v.redacted ? null : v.value;
 }
 
+/** A positive request matcher used for provenance and blocked-write applicability. */
+export function mutationWriteMatches(expected: { readonly method: string; readonly pathGlob: string; readonly literal?: true }, actual: { readonly method: string; readonly path: string }): boolean {
+  if (expected.method !== "*" && expected.method.toUpperCase() !== actual.method.toUpperCase()) return false;
+  const absolute = /^https?:\/\//i.test(expected.pathGlob);
+  const normalize = (path: string): string => {
+    try {
+      return /^https?:\/\//i.test(path) ? (absolute ? new URL(path).origin + new URL(path).pathname : new URL(path).pathname) : path.split("?")[0]!;
+    } catch {
+      return path;
+    }
+  };
+  if (expected.literal === true) return normalize(expected.pathGlob) === normalize(actual.path);
+  return matchGlob(normalize(expected.pathGlob), normalize(actual.path));
+}
+
+function requestRelation(expected: { readonly method: string; readonly pathGlob: string }, candidate: { readonly method: string; readonly pathGlob: string; readonly literal?: true }): "definite" | "possible" | "none" {
+  if (expected.method !== "*" && expected.method.toUpperCase() !== candidate.method.toUpperCase()) return "none";
+  const patterned = (path: string): boolean => path.includes("*") || expandBraces(path).length > 1;
+  if (candidate.literal === true || !patterned(candidate.pathGlob)) return mutationWriteMatches(expected, { method: candidate.method, path: candidate.pathGlob }) ? "definite" : "none";
+  if (expected.pathGlob === candidate.pathGlob) return "definite";
+  if (!patterned(expected.pathGlob)) return mutationWriteMatches(candidate, { method: candidate.method, path: expected.pathGlob }) ? "possible" : "none";
+  // Unresolved pattern intersections are possible owners, never positive provenance.
+  return "possible";
+}
+
+/** Exact symbolic outcome ownership; display metadata never locates a target. */
+function outcomeIdentity(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(outcomeIdentity);
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !["display", "tflowId", "testIdAttr"].includes(key)).map(([key, v]) => [key, outcomeIdentity(v)]));
+}
+
+function ownsFinalUiOutcome(recorded: RecordedStep, assertion: Assertion): boolean {
+  return "expect" in recorded.step && canonicalJson(outcomeIdentity(recorded.step.expect)) === canonicalJson(outcomeIdentity(assertion));
+}
+
 /**
- * #402: the Journey's mutations and which assertion each must break. Derived pairs: a write step's
- * `skip`/`block-write` with that step's own `expect`/`check` and `expectRequests` — and, for the LAST
- * write step, every end-state check; a fill's `stale-value` with that step's own assertion and every
+ * #402: the Journey's mutations and which assertion each must break. UI actions get skips;
+ * positively evidenced HTTP writes also get blocks. Own checks pair with their action, final UI
+ * checks with the last effect only when its own outcome matches symbolically (or it is an HTTP
+ * write), and network checks with their unique originating request step.
+ * A fill's `stale-value` pairs with that step's own assertion and every
  * `valueEquals`/`textIncludes` that checks the typed value. Plus `metadata.mutationPairs` (anchors resolved).
  * An explicit no-claim `expect` (`isNoClaimExpect`) asserts nothing, so it is never paired.
  */
@@ -476,14 +525,26 @@ export function planJourneyMutations(
   };
   const ownSites = (n: number): JourneyAssertionSite[] => sites.filter((s) => (s.where === "step" || s.where === "step-request") && s.step === n);
 
-  const writes = journeyWriteSteps(journey, opts);
-  const lastWrite = writes.at(-1)?.step;
-  for (const w of writes) {
-    for (const kind of ["skip", "block-write"] as const) {
+  const candidates = journeyMutationSteps(journey, opts);
+  const lastEffect = candidates.at(-1)?.step;
+  for (const w of candidates) {
+    for (const kind of w.knownHttpWrite ? ["skip", "block-write"] as const : ["skip"] as const) {
       const m = mutation(kind, w.step);
       mutations.push(m);
       for (const s of ownSites(w.step)) pair(s, m);
-      if (w.step === lastWrite) for (const s of sites) if (s.where === "end-state") pair(s, m);
+      for (const s of sites) {
+        if (s.where !== "end-state") continue;
+        const check = s.check;
+        if (check.kind === "page" || check.kind === "reloadThen" || check.kind === "http") {
+          if (w.step === lastEffect && (w.knownHttpWrite || (check.kind === "page" && ownsFinalUiOutcome(steps[w.step - 1]!, check.assertion)))) pair(s, m);
+          continue;
+        }
+        // Request checks belong to the unique matching originating step. Ambiguous
+        // provenance stays unpaired until an explicit causal pair is supplied.
+        const relations = candidates.map((candidate) => ({ candidate, relations: candidate.requests.map((request) => requestRelation(check, request)) }));
+        const possible = relations.filter((entry) => entry.relations.some((relation) => relation !== "none"));
+        if (possible.length === 1 && possible[0]!.candidate.step === w.step && possible[0]!.relations.includes("definite")) pair(s, m);
+      }
     }
   }
 
@@ -575,13 +636,14 @@ export function mutationReplay(journey: Journey, m: JourneyMutation, opts: Mutat
   if (m.kind === "swap-param" || m.kind === "truncate-param" || m.kind === "guard-param") return paramReplay(journey, m, opts.params ?? {});
   if (m.kind === "block-write") {
     const requests = journeyWriteSteps(journey, opts).find((w) => w.step === m.step)?.requests ?? [];
+    const blockMatchers = journeyMutationSteps(journey, opts).find((w) => w.step === m.step)?.requests ?? [];
     const step = flat(journey)[index]?.step;
     // #409: the blocked job never runs, so its waited claim waits at most the hang threshold.
-    if (step === undefined || !("waitFor" in step) || step.waitFor === undefined) return { journey, blockIndex: index, blockRequests: [...requests] };
+    if (step === undefined || !("waitFor" in step) || step.waitFor === undefined) return { journey, blockIndex: index, blockRequests: [...requests], blockMatchers };
     const copy = structuredClone(journey);
     const target = flat(copy)[index]!;
     target.step = { ...step, waitFor: mutationWait(step.waitFor) } as Step;
-    return { journey: copy, blockIndex: index, blockRequests: [...requests] };
+    return { journey: copy, blockIndex: index, blockRequests: [...requests], blockMatchers };
   }
   const step = flat(journey)[index]?.step;
   if (step === undefined) throw new Error(`journey '${journey.metadata.id}' has no step ${m.step}`);
@@ -619,6 +681,8 @@ export interface MutationReplay {
   readonly skipIndex?: number;
   readonly blockIndex?: number;
   readonly blockRequests?: readonly string[];
+  /** Observed or declared method/path matchers; not fabricated recorded request lines. */
+  readonly blockMatchers?: readonly { readonly method: string; readonly pathGlob: string; readonly literal?: true }[];
   readonly params?: Readonly<Record<string, string>>;
   /**
    * #579: instead of altering a parameter (a `select` cannot be swapped by rewriting params), pick a
@@ -959,13 +1023,14 @@ export function relaxedMutationReplay(journey: Journey, m: JourneyMutation, opts
   }
   if (m.kind === "block-write") {
     const requests = journeyWriteSteps(journey, opts).find((w) => w.step === m.step)?.requests ?? [];
+    const blockMatchers = journeyMutationSteps(journey, opts).find((w) => w.step === m.step)?.requests ?? [];
     const copy = structuredClone(journey);
     const target = flat(copy)[index]!;
     const waits = relaxedSiteWaits(copy, [`step:${m.step}`]);
     const step: Record<string, unknown> = { ...target.step, expect: relaxedExpect(target.step) };
     delete step.waitFor;
     target.step = step as Step;
-    return { journey: copy, blockIndex: index, blockRequests: [...requests], relaxedSiteWaits: waits };
+    return { journey: copy, blockIndex: index, blockRequests: [...requests], blockMatchers, relaxedSiteWaits: waits };
   }
   const copy = structuredClone(journey);
   const target = flat(copy)[index]!;
@@ -1291,7 +1356,11 @@ export function needsRelaxedReplay(plan: MutationPlan, m: JourneyMutation, resul
   if (result.outcome !== "failed") return false;
   if (!result.failedSites.some((f) => f.where === "step" && f.step === m.step && f.postcondition)) return false;
   const own = `step:${m.step}`;
-  return plan.pairs.some((p) => p.mutation === m.id && p.site !== own);
+  return plan.pairs.some((p) => {
+    if (p.mutation !== m.id || p.site === own) return false;
+    const request = /^step-request:([1-9][0-9]*):([0-9]+)$/.exec(p.site);
+    return request === null || !evaluatedOwnRequestFailure(Number(request[1]), Number(request[2]), m, result);
+  });
 }
 
 /**
@@ -1308,12 +1377,24 @@ export function classifyMutation(site: JourneyAssertionSite, m: JourneyMutation,
   return targeted === "sensitive" || targeted === "insensitive" ? targeted : "cascade";
 }
 
+/** An already judged own-request failure survives only the completed action's own DOM failure. */
+function evaluatedOwnRequestFailure(step: number, checkIndex: number, m: JourneyMutation, result: Pick<MutationRunResult, "outcome" | "failedSites">): boolean {
+  if (result.outcome !== "failed" || step !== m.step) return false;
+  return result.failedSites.some((f) => f.where === "step-request" && f.step === step && f.checkIndex === checkIndex && f.evaluated === true) &&
+    !result.failedSites.some((f) => f.where === "unevaluable" ||
+      (f.where === "step" && (f.step < step || (f.step === step && !f.postcondition))) ||
+      (f.where === "step-request" && f.step < step));
+}
+
 /**
  * #402: one assertion against one mutated replay. Sensitive only when the replay failed AT that
  * assertion and nothing failed before the mutated step — a failure anywhere else is a cascade,
  * never counted as proof.
  */
 function classifyMutationPlain(site: JourneyAssertionSite, m: JourneyMutation, result: Pick<MutationRunResult, "outcome" | "failedSites" | "waitsCut" | "relaxed" | "atBaseTime">): MutationVerdict {
+  // The original applied run already evaluated this exact request in its own complete capture.
+  // Its completed action can fail its DOM assertion too; a relaxed rerun must not erase that fact.
+  if (site.where === "step-request" && evaluatedOwnRequestFailure(site.step, site.checkIndex, m, result)) return "sensitive";
   // #554: the mutated step's own postcondition failed, so a later site is judged on the relaxed
   // replay (same rules, no further relaxed level). The step's own step site keeps the original
   // result, so its own failure stays the sensitive verdict.
@@ -1441,46 +1522,92 @@ function provenSensitive(journey: Journey, m: JourneyMutation, results: Readonly
 }
 
 /**
- * #402/#609: every assertion's verdict over its paired mutations — sensitive when ANY paired
+ * A final network check pairs with the step that recorded its request, and recorded requests are placed
+ * by time. A step that really sends the request breaks the check when it is skipped too. If the check
+ * holds under the skip and fails only under the block, the block aborted another step's request (a timer
+ * firing in this step's window), so that failure is not evidence about this step.
+ */
+function blockAloneBrokeNetworkCheck(
+  site: JourneyAssertionSite,
+  pairs: readonly MutationPair[],
+  verdicts: readonly { readonly m: JourneyMutation; readonly v: MutationVerdict }[],
+): boolean {
+  if (site.where !== "end-state" || (site.check.kind !== "requestMade" && site.check.kind !== "responseStatus")) return false;
+  return verdicts.some(({ m, v }) =>
+    m.kind === "block-write" && v === "sensitive" && pairs.find((p) => p.mutation === m.id)?.declared !== true &&
+    verdicts.some((other) => other.m.kind === "skip" && other.m.step === m.step && other.v === "insensitive"),
+  );
+}
+
+/**
+ * #402/#609: an assertion's verdict within one obligation — sensitive when ANY paired
  * mutation broke it for the right reason (`provedBy` the first), else insensitive when one passed,
  * else cascade / not-applied / error; `unpaired` when no mutation is paired with it. A sensitive
  * verdict reached by a targeted proof records its relaxed sites; a cascade that a targeted attempt
  * refused records why (#609).
  */
+function judgePairedAssertion(journey: Journey, key: string, paired: readonly JourneyMutation[], results: ReadonlyMap<string, MutationRunResult>): AssertionProof & { readonly verdict: MutationVerdict } {
+  const site = journeyAssertions(journey).find((s) => assertionSiteKey(s) === key)!;
+  const proofFor = (m: JourneyMutation, siteKey: string): TargetedProof | undefined => results.get(m.id)?.targeted?.find((t) => t.site === siteKey);
+  const verdicts = paired.map((m) => ({ m, v: classifyMutation(site, m, results.get(m.id) ?? { outcome: "error", failedSites: [] }) }));
+  // #616: set when every sensitive verdict rested on an unproven relaxed site — those count as cascades.
+  let unsound: string | undefined;
+  for (const v of PRECEDENCE) {
+    const first = verdicts.find((x) => x.v === v);
+    if (first === undefined && !(v === "cascade" && unsound !== undefined)) continue;
+    if (v === "sensitive") {
+      // #616: a targeted (declared or automatic) sensitive verdict is sound only when every site it
+      // relaxed is itself proven sensitive to the SAME mutation (transitively) — otherwise the
+      // target merely sits behind an unproven defense. The first sound paired mutation proves it;
+      // with none, the site falls through (an insensitive mutation still outranks the cascade).
+      for (const { m } of verdicts.filter((x) => x.v === "sensitive")) {
+        const proof = proofFor(m, key);
+        if (proof === undefined || proof.refused !== undefined) return { site: key, verdict: v, provedBy: m.id };
+        const bad = proof.relaxedSites.find((relaxed) => !provenSensitive(journey, m, results, relaxed, new Set([key])));
+        if (bad === undefined) return { site: key, verdict: v, provedBy: m.id, relaxedSites: proof.relaxedSites };
+        unsound ??= `relaxed site ${bad} is not itself proven sensitive to ${m.id}`;
+      }
+      continue;
+    }
+    if (v === "cascade" && unsound !== undefined) return { site: key, verdict: v, targetedRefusal: unsound };
+    if (v === "cascade") {
+      const refusal = paired.map((m) => proofFor(m, key)).find((t) => t !== undefined && t.refused !== undefined);
+      if (refusal !== undefined) return { site: key, verdict: v, targetedRefusal: refusal.refused };
+    }
+    return { site: key, verdict: v };
+  }
+  return { site: key, verdict: "error" };
+}
+
+/** Value/data sensitivity and action necessity are separate required propositions. */
 export function judgeAssertions(journey: Journey, plan: MutationPlan, results: ReadonlyMap<string, MutationRunResult>): AssertionProof[] {
-  const proofFor = (m: JourneyMutation, key: string): TargetedProof | undefined => results.get(m.id)?.targeted?.find((t) => t.site === key);
   return journeyAssertions(journey).map((site) => {
     const key = assertionSiteKey(site);
-    const paired = plan.mutations.filter((m) => plan.pairs.some((p) => p.site === key && p.mutation === m.id));
-    if (paired.length === 0) return { site: key, verdict: "unpaired" };
+    const sitePairs = plan.pairs.filter((p) => p.site === key);
+    const paired = plan.mutations.filter((m) => sitePairs.some((p) => p.mutation === m.id));
+    if (paired.length === 0) return { site: key, verdict: "unpaired", ...(site.where === "end-state" && site.check.kind !== "page" ? { required: true as const } : {}) };
     const verdicts = paired.map((m) => ({ m, v: classifyMutation(site, m, results.get(m.id) ?? { outcome: "error", failedSites: [] }) }));
-    // #616: set when every sensitive verdict rested on an unproven relaxed site — those count as cascades.
-    let unsound: string | undefined;
-    for (const v of PRECEDENCE) {
-      const first = verdicts.find((x) => x.v === v);
-      if (first === undefined && !(v === "cascade" && unsound !== undefined)) continue;
-      if (v === "sensitive") {
-        // #616: a targeted (declared or automatic) sensitive verdict is sound only when every site it
-        // relaxed is itself proven sensitive to the SAME mutation (transitively) — otherwise the
-        // target merely sits behind an unproven defense. The first sound paired mutation proves it;
-        // with none, the site falls through (an insensitive mutation still outranks the cascade).
-        for (const { m } of verdicts.filter((x) => x.v === "sensitive")) {
-          const proof = proofFor(m, key);
-          if (proof === undefined || proof.refused !== undefined) return { site: key, verdict: v, provedBy: m.id };
-          const bad = proof.relaxedSites.find((relaxed) => !provenSensitive(journey, m, results, relaxed, new Set([key])));
-          if (bad === undefined) return { site: key, verdict: v, provedBy: m.id, relaxedSites: proof.relaxedSites };
-          unsound ??= `relaxed site ${bad} is not itself proven sensitive to ${m.id}`;
-        }
-        continue;
-      }
-      if (v === "cascade" && unsound !== undefined) return { site: key, verdict: v, targetedRefusal: unsound };
-      if (v === "cascade") {
-        const refusal = paired.map((m) => proofFor(m, key)).find((t) => t !== undefined && t.refused !== undefined);
-        if (refusal !== undefined) return { site: key, verdict: v, targetedRefusal: refusal.refused };
-      }
-      return { site: key, verdict: v };
+    if (blockAloneBrokeNetworkCheck(site, sitePairs, verdicts)) return { site: key, verdict: "insensitive" };
+    const data = paired.filter((m) => m.kind !== "skip" && m.kind !== "block-write");
+    const action = paired.filter((m) => m.kind === "skip" || m.kind === "block-write");
+    if (data.length === 0 || action.length === 0) return judgePairedAssertion(journey, key, paired, results);
+    const obligations = [
+      { kind: "data" as const, ...judgePairedAssertion(journey, key, data, results) },
+      { kind: "action" as const, ...judgePairedAssertion(journey, key, action, results) },
+    ];
+    // Once both propositions are proven, retain the first sound witness in original plan order
+    // for compatibility. Its relaxations belong to that witness; grouped evidence stays intact.
+    if (obligations.every((o) => o.verdict === "sensitive")) {
+      return { ...judgePairedAssertion(journey, key, paired, results), obligations: obligations.map(({ site: _site, ...o }) => o) };
     }
-    return { site: key, verdict: "error" };
+    // Alternative witnesses still use the established rules WITHIN one proposition. Across
+    // propositions, any vacuity or unresolved evidence remains visible; both must be sensitive.
+    const decisive = obligations.find((o) => o.verdict === "insensitive") ??
+      obligations.find((o) => o.verdict === "cascade") ??
+      obligations.find((o) => o.verdict === "not-applied") ??
+      obligations.find((o) => o.verdict === "error") ?? obligations[0]!;
+    const { kind: _kind, ...aggregate } = decisive;
+    return { ...aggregate, obligations: obligations.map(({ site: _site, ...o }) => o) };
   });
 }
 
@@ -1525,6 +1652,7 @@ export function mutationProofVerdict(input: {
   if (errored > 0) {
     return { verdict: "inconclusive", reason: `${errored} of ${input.mutations.length} mutated replays errored, so the proof has a gap; retry it` };
   }
+  if (input.assertions.some((a) => a.required === true && a.verdict === "unpaired")) return { verdict: "inconclusive", reason: "a network or persistence end-state has no established causal mutation pair" };
   if (paired.every((a) => a.verdict === "sensitive")) return { verdict: "proven" };
   const refusals = input.assertions.map((a) => a.targetedRefusal).filter((r): r is string => r !== undefined);
   if (refusals.length > 0) {

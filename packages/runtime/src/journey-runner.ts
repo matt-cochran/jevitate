@@ -52,7 +52,7 @@ export type JourneyRunResult = (
   | { outcome: "ok"; output: unknown }
   | { outcome: "healed-pending-review"; output: unknown; revision: ProposedRevisionDraft }
   | { outcome: "heal-exhausted"; reason: string; at: number }
-  | { outcome: "quarantined"; reason: string; at?: number }
+  | { outcome: "quarantined"; reason: string; at?: number; failurePhase?: "action" | "postcondition" }
 ) & {
   /**
    * #409: the actual outcome wait of each step that declared `waitFor` (in run order; a resumed or
@@ -293,10 +293,10 @@ export class JourneyRunner {
 
       if (result.outcome === "failed") {
         // Invariant #4: fail-closed never heals — quarantine, never mask.
-        if (session === undefined) return { outcome: "quarantined", reason: `step ${result.at + 1} failed: ${result.error}`, at: result.at };
+        if (session === undefined) return { outcome: "quarantined", reason: `step ${result.at + 1} failed: ${result.error}`, at: result.at, ...(result.failurePhase === undefined ? {} : { failurePhase: result.failurePhase }) };
         // Nothing secret-bound goes to a model: the step fails as it would without a heal, and says so.
         const noHeal = this.heal?.noHealBecause?.();
-        if (noHeal !== undefined) return { outcome: "quarantined", reason: `step ${result.at + 1} failed: ${result.error} — self-heal skipped: ${noHeal}`, at: result.at };
+        if (noHeal !== undefined) return { outcome: "quarantined", reason: `step ${result.at + 1} failed: ${result.error} — self-heal skipped: ${noHeal}`, at: result.at, ...(result.failurePhase === undefined ? {} : { failurePhase: result.failurePhase }) };
         session.touched = true;
         const healed = await this.#healStep(session, req, recording, result);
         if (healed.kind === "stop") {
@@ -358,7 +358,7 @@ export class JourneyRunner {
       kind: "stop",
       verdict,
       reason: why,
-      result: { outcome: "quarantined", reason: `${failed} — ${why}`, at: i },
+      result: { outcome: "quarantined", reason: `${failed} — ${why}`, at: i, ...(failure.failurePhase === undefined ? {} : { failurePhase: failure.failurePhase }) },
     });
     const entry = flattenRecording(recording)[i];
     if (entry === undefined) return quarantine("refused-proof", "the failed step is not in the recording");

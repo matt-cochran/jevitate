@@ -23,12 +23,15 @@ describe("a request a networkCheck names", () => {
   it("makes no write step, though a step's page timing shows it", () => {
     const j = journey([nav(), click("Save", [SAVE])], [check(SAVE)]);
     expect(journeyWriteSteps(j)).toEqual([]);
-    expect(planJourneyMutations(j).pairs).toEqual([]);
+    const plan = planJourneyMutations(j);
+    // The click's own checked UI effect still gets its skip (#811); nothing blocks a write or pairs the check.
+    expect(plan.mutations.some((m) => m.kind === "block-write")).toBe(false);
+    expect(plan.pairs.filter((p) => p.site.startsWith("end-state"))).toEqual([]);
   });
 
-  it("stays with the last write, though another step's delta line names it", () => {
+  it("pairs with the one step whose own delta sent it, not the last write (#811)", () => {
     const j = journey([nav(), write("Save", SAVE), write("Invite", INVITE)], [check(SAVE)]);
     const pairs = planJourneyMutations(j).pairs.filter((p) => p.site.startsWith("end-state")).map((p) => p.mutation);
-    expect(pairs.sort()).toEqual(["block-write:3", "skip:3"]);
+    expect(pairs.sort()).toEqual(["block-write:2", "skip:2"]);
   });
 });
