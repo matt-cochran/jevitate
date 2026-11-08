@@ -241,6 +241,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
     },
     omitted: {
       "--secret-field": OMIT.envSecret,
+      "--secret-mode": "an agent never picks how a secret is met: over MCP the run mode and the operator's targets.json decide (vault-autofill, a hold, or a refusal)",
       "--allow": OMIT.mcpOrigins,
       // 0.30.0 (#800): temporary until the done-check hooks are registered for MCP run_journey (d-run-hooks-register).
       "--no-done-check": "done checks are not yet read on MCP runs; the MCP argument lands with the hook registration",
@@ -420,6 +421,47 @@ describe("#800: find_capabilities carries the linked job's done check", () => {
       expect(cliCap.job?.done?.check).toBe(cap.job?.done?.check);
     } finally {
       cwd.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("#796: find_capabilities and journey find expose parameter types", () => {
+  it("lists type and enum on both surfaces, and leaves an untyped parameter unchanged", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = mkdtempSync(join(tmpdir(), "jev-typed-find-"));
+    const journeysDir = join(root, ".jevitate", "journeys");
+    mkdirSync(journeysDir, { recursive: true });
+    const rec = { version: "1.0.0", site: "https://example.test", pages: [{ url: "/", steps: [{ step: { kind: "navigate", url: "/", expect: { kind: "urlIncludes", text: "/" } } }] }] };
+    const write = (id: string, parameters: unknown[]) =>
+      writeFileSync(
+        join(journeysDir, `${id}.json`),
+        JSON.stringify({ metadata: { id, name: id, description: "typedfind", promoted: true, params: ["plan"], parameters, createdAtIso: "2026-11-01T00:00:00Z" }, recording: rec }),
+      );
+    write("typed-j", [{ name: "plan", type: "enum", enum: ["free", "pro"] }]);
+    write("untyped-j", [{ name: "plan" }]);
+    try {
+      const tool = buildMcpTools({ journeysDir }).find((t) => t.name === "find_capabilities")!;
+      const res = await tool.handler({ query: "typedfind" });
+      type Cap = { id: string; params: string[]; parameters?: Array<{ name: string; type?: string; enum?: string[] }> };
+      const mcp = JSON.parse((res.content[0] as { text: string }).text) as Cap[];
+      const lines: string[] = [];
+      const cli = buildProgram({ profiles: new ProfileManager("/unused-in-parity"), journeysDir });
+      cli.configureOutput({ writeOut: (t) => lines.push(t), writeErr: () => {} });
+      cli.exitOverride();
+      await cli.parseAsync(["journey", "find", "typedfind", "--json"], { from: "user" });
+      const cliCaps = (JSON.parse(lines.join("")) as { data: Cap[] }).data;
+      for (const caps of [mcp, cliCaps]) {
+        const typed = caps.find((c) => c.id === "typed-j")!;
+        expect(typed.parameters?.[0]?.type).toBe("enum");
+        expect(typed.parameters?.[0]?.enum).toEqual(["free", "pro"]);
+        const untyped = caps.find((c) => c.id === "untyped-j")!;
+        expect("parameters" in untyped).toBe(false);
+        expect(untyped.params).toEqual(["plan"]);
+      }
+    } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });

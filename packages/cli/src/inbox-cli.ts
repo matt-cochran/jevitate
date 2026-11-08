@@ -307,6 +307,8 @@ export function registerInboxCommands(program: Command, deps: CliDeps): void {
           ...(o.storageState === undefined ? {} : { storageState: o.storageState }),
           ...(browser === undefined ? {} : { browser }),
           ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),
+          // §5.3: a handback or secret hold is completed by the person at this terminal.
+          ...(deps.approval === undefined ? {} : { approval: deps.approval }),
         });
       } catch (err) {
         if (isEnvironmentError(err)) {

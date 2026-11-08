@@ -5,7 +5,8 @@ import { hasRunHooks, resolveRunMode, runReadDoneCheckHooks, runValidateParamsHo
 import { allowedOriginSet, offAllowlistWriteOrigin, prepareMcpRunGuard } from "./mcp-run-guard.js";
 import { FsJourneyStore, JourneyRegistry, ParamValidationError, declaredNonSecretParams, describeStep, isSecretName, loadRefusedParamNames, flatJourneySteps, journeyEndState, journeyParamSchema, journeyPrefix, lintJourney, lintUploadFixtures, secretNamedValues, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
 import { assertHttpChecksAllowed, createHttpProbe, httpCheckRefs } from "./http-probe.js";
-import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
+import { inMcpInvocation, programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
+import { planSecretRun, secretHandbackHandler, secretOriginRefusalOf, withSecretHandbacks, type SecretModeFlag } from "./journey-secret-mode.js";
 import { journeyEntry } from "./forge-verify.js";
 import { checkProposal, deleteJourneyProposal, proposedJourney, rejectJourneyProposal, requireJourneyProposal } from "./journey-proposal-store.js";
 import { journeyReviewHash } from "./journey-review.js";
@@ -103,6 +104,14 @@ export interface RunJourneyProgrammaticallyOptions {
    * typed: its origins, or `allowlist` for this run's allowlist. Checked at type time.
    */
   boundSecretParams?: BoundSecretParams;
+  /** 0.30.0 §5.3 `--secret-mode` (journey-secret-mode.ts): how a human step or a missing secret is met. Default `auto`. */
+  secretMode?: SecretModeFlag;
+  /** Where a target's `secretFields` `env:` sources are read (default: this process's environment). */
+  secretEnv?: Readonly<Record<string, string | undefined>>;
+  /** 0.30.0 §5.4: a hold's resume continues at this 1-based step; nothing before it runs again (journey-hold.ts). */
+  resumeAtStep?: number;
+  /** A resumed secret hold: the secret parameters a person types in the browser (journey-hold.ts). */
+  heldSecretParams?: readonly string[];
   /** Told the run's `output` before it is redacted, for a caller that hands it on to a page (`journey chain`). Never reported. */
   onRawOutput?: (output: unknown) => void;
   /** Defaults to `safeRunPolicy()` (Slice 1: fail-closed secret mode) when omitted. */
@@ -697,9 +706,9 @@ function runEvidenceFor(opts: RunJourneyProgrammaticallyOptions, stored: Journey
 async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutation: MutationReplayOptions, stored: Journey, evidence: RunEvidenceScope | undefined): Promise<RunJourneyResult> {
   await opts.assertRunnable?.(stored);
   // #247: onto the chosen environment (a step on an origin it does not allow is refused here).
-  const full = applyJourneyEnvironment(stored, opts.environment);
+  let full = applyJourneyEnvironment(stored, opts.environment);
   // #293: only the prefix up to the anchor runs (its params are the ones those steps take).
-  const journey = opts.stopAfterStep === undefined ? full : journeyPrefix(full, opts.stopAfterStep);
+  let journey = opts.stopAfterStep === undefined ? full : journeyPrefix(full, opts.stopAfterStep);
   opts.runRecorder?.noteJourney(journey);
   evidence?.ran(journey);
   // 0.30.0 run hooks (journey-run-hooks.ts): what every hook is told; the mode once `resolveMode` decided it.
@@ -726,7 +735,31 @@ async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutatio
   const inputParams = journey === full ? opts.params : prefixParams(full, journey, opts.params);
   mode = await resolveRunMode(hookCtx());
   if (mode !== undefined) evidence?.writer.noteMode(mode);
-  validateParams(journeyParamSchema(journey), inputParams);
+  // 0.30.0 §5.3: a human step or a secret nobody supplied — vault-autofill, a hold, or a refusal, before anything opens.
+  const secretPlan = planSecretRun({
+    stored,
+    journey,
+    params: inputParams,
+    bound: opts.boundSecretParams,
+    origin: target.origin,
+    environment: opts.environment,
+    targetsFile: opts.runGuardTargetsFile,
+    mode,
+    mcp: inMcpInvocation(),
+    // A run a surface started, a hold's resume, or any run of an MCP tool call (verify_journey, journey_readiness, chain_journeys).
+    surface: opts.runRecorder?.channel !== undefined || opts.resumeAtStep !== undefined || inMcpInvocation(),
+    flag: opts.secretMode,
+    env: opts.secretEnv ?? process.env,
+    heldSecretParams: opts.heldSecretParams,
+  });
+  if (secretPlan.heldSecretParams.length > 0) {
+    const wasFull = journey === full;
+    full = withSecretHandbacks(full, secretPlan.heldSecretParams);
+    journey = wasFull ? full : withSecretHandbacks(journey, secretPlan.heldSecretParams);
+  }
+  for (const v of secretPlan.values) evidence?.writer.noteValue(v);
+  const boundSecretParams = secretPlan.bound === undefined ? opts.boundSecretParams : { ...opts.boundSecretParams, ...secretPlan.bound };
+  validateParams(journeyParamSchema(journey), { ...secretPlan.params, ...inputParams });
   await runValidateParamsHooks(hookCtx());
   // #402: the mutated copy replays (and is judged); the stored Journey still names, redacts and gates.
   const replayed = mutation.mutateJourney === undefined || journey !== full ? journey : mutation.mutateJourney(journey);
@@ -744,19 +777,19 @@ async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutatio
   const gate = await gateJourney(opts.siteGate, journey.recording, { ...(opts.account === undefined ? {} : { account: opts.account }), enforceLimits: true });
 
   const fx = opts.fixtures?.(journey.recording.site, allowedOrigins, stored.recording.site);
-  let params = inputParams;
+  let params: Record<string, string> = { ...secretPlan.params, ...inputParams };
   try {
     if (fx !== undefined) {
       await fx.setup();
       const b = fx.bindings();
-      params = Object.fromEntries(Object.entries(inputParams).map(([k, v]) => [k, substituteSetupRefs(v, b, { where: `--param ${k}` })]));
+      params = Object.fromEntries(Object.entries(params).map(([k, v]) => [k, substituteSetupRefs(v, b, { where: `--param ${k}` })]));
       // #812: a fixture's outputs, and the params they were bound into, are masked from the evidence's write shapes.
       for (const v of [...Object.values(b.values), ...fx.secrets(), ...Object.values(params)]) evidence?.writer.noteValue(v);
     }
     // #140 order: fixture setup (above) → open the browser (#137 launch options, #118 storageState) → run → restore.
     // #250/#251: a recorded or screenshotted run carries the live pixel mask from its first paint.
     // A fixture's credential-named output is redacted by name, wherever a param carried it.
-    const secrets = [...new Set([...secretParamValues(stored, params), ...(fx?.secrets() ?? [])])];
+    const secrets = [...new Set([...secretParamValues(stored, params), ...(fx?.secrets() ?? []), ...secretPlan.values])];
     const mask = opts.mask ?? new SecretPixelMask(secrets);
     const capturing = opts.session === undefined && (opts.browser?.recordVideo !== undefined || opts.screenshots !== undefined);
     const openPort = (): BrowserPort => {
@@ -819,7 +852,7 @@ async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutatio
         new BrowseTheWeb(session, allowedOrigins),
         ...gate.abilities,
       );
-      const boundOption = opts.boundSecretParams === undefined ? {} : { boundSecretParams: new Map(Object.entries(opts.boundSecretParams).map(([n, o]) => [n, o === "allowlist" ? allowedOrigins : o] as const)) };
+      const boundOption = boundSecretParams === undefined ? {} : { boundSecretParams: new Map(Object.entries(boundSecretParams).map(([n, o]) => [n, o === "allowlist" ? allowedOrigins : o] as const)) };
       const replayDeltas = opts.actionDeltas === true ? new ReplayDeltas({ secrets, recorded: flat.map((f) => f.recorded) }) : undefined;
       // #322/#400: a full replay (never an anchored prefix) must also satisfy the Journey's end state
       // and each step's request expectations.
@@ -883,7 +916,9 @@ async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutatio
         opts.heal === undefined || healGuard === undefined
           ? undefined
           : { scope: opts.heal.scope, riskOf: journeyStepRisk(), writeGuard: healGuard.guard, allowedOrigins, noHealBecause: () => (secretBound.length > 0 || secrets.length > 0 || extractedCredentials.size > 0 ? secretBoundNoHeal(secretBound) : undefined), observe: healObserver(healDir, mask) };
-      const runner = new JourneyRunner(actor, interpreter, undefined, undefined, opts.selfHealer, heal);
+      const handback = secretPlan.secretMode === "visible-handback" ? secretHandbackHandler({ ctx: hookCtx, page: session.page, holdKinds: secretPlan.holdKinds }) : undefined;
+      const runner = new JourneyRunner(actor, interpreter, handback, secretPlan.secretManager, opts.selfHealer, heal);
+      const runPolicy = secretPlan.secretMode === undefined ? policy : { ...policy, secret: { ...policy.secret, secretMode: secretPlan.secretMode } };
       let result: JourneyRunResult;
       // #564: the run's secrets also cover every value it bound under a credential-like name (an
       // `extract as: "apiKey"`), so the output, failures and artifacts below never carry it.
@@ -893,7 +928,21 @@ async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutatio
         // relaxed the only check naming an assertion-only `expected_*` param). The supplied set was
         // validated against the stored Journey above; the copy runs with the subset it still reads.
         const replayParams = replayed === journey ? params : prefixParams(journey, replayed, params);
-        const raw = await outcomeChecks.run(actor, () => runner.run({ journey: replayed, params: replayParams, policy }), {
+        const raw = await outcomeChecks.run(
+          actor,
+          () =>
+            runner
+              .run({
+                journey: replayed,
+                params: replayParams,
+                policy: runPolicy,
+                ...(opts.resumeAtStep === undefined ? {} : { resumeAt: opts.resumeAtStep - 1 }),
+                ...(secretPlan.secretRefs === undefined ? {} : { secretRefs: secretPlan.secretRefs }),
+              })
+              .catch((err: unknown) => {
+                throw secretOriginRefusalOf(err, target.origin, mode ?? "automation", secretPlan.trust) ?? err;
+              }),
+          {
           collectStepFailuresOnReplayFailure: mutation.structuredFailures === true,
           ...(mutation.beforeEndState === undefined ? {} : { beforeEndState: mutation.beforeEndState }),
           ...(mutation.afterEndState === undefined ? {} : { afterEndState: mutation.afterEndState }),

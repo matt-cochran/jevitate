@@ -96,6 +96,12 @@ export async function secretParamsCarried(dir: string, ids: readonly unknown[], 
   return [...new Set([...carried, ...needed])].sort();
 }
 
+/** The secret parameters `journey` requires that `params` leaves out (a value nobody supplied yet). Names only. */
+export function missingSecretParams(journey: Journey, params: Readonly<Record<string, string>>): string[] {
+  const required = journeyParamSchema(journey).required;
+  return secretParamNames(journey).filter((n) => required.includes(n) && !(n in params)).sort();
+}
+
 /** The warning for these secret parameters on the command line. It names them and never holds a value. */
 export function secretParamNamesArgvWarning(names: readonly string[]): string {
   return (
@@ -150,12 +156,12 @@ function replayField(spec: string, env: Readonly<Record<string, string | undefin
 }
 
 /** `fieldMatches` on a recorded step's target. `type=` needs a live control, so it never matches here. */
-function fieldMatchesTarget(field: SecretField, target: TargetDescriptor): boolean {
+export function fieldMatchesTarget(field: SecretField, target: TargetDescriptor): boolean {
   return fieldMatches(field.matcher, { name: target.name ?? "", tag: "", descriptor: target } as unknown as Control);
 }
 
 /** Each secret parameter of `journey` a fill or select step types, with its step's target. */
-function secretParamTargets(journey: Journey): Array<{ name: string; target: TargetDescriptor }> {
+export function secretParamTargets(journey: Journey): Array<{ name: string; target: TargetDescriptor }> {
   const secret = new Set(secretParamNames(journey));
   return flatJourneySteps(journey).flatMap(({ recorded: { step } }) => {
     if ((step.kind !== "fill" && step.kind !== "select") || !("var" in step.value) || !secret.has(step.value.var)) return [];
@@ -223,9 +229,29 @@ export async function withSecretParams(req: {
   readonly env: Readonly<Record<string, string | undefined>>;
 }): Promise<{ params: Record<string, string>; bound?: BoundSecretParams }> {
   if (req.flags.length === 0 && (req.targetFields ?? []).length === 0) return { params: { ...req.params } };
-  const flagFields = [...new Set(req.flags)].map((spec) => replayField(spec, req.env));
   const journey = await loadJourney(req.dir, req.id);
-  if (journey === null) return { params: { ...req.params } };
+  if (journey === null) {
+    // Still a mistake the operator typed, whatever the Journey.
+    for (const spec of new Set(req.flags)) replayField(spec, req.env);
+    return { params: { ...req.params } };
+  }
+  return withSecretParamsFor(journey, req);
+}
+
+/** `withSecretParams` on a Journey already read (the run reads it once). */
+export function withSecretParamsFor(
+  journey: Journey,
+  req: {
+    readonly id: string;
+    readonly params: Readonly<Record<string, string>>;
+    readonly flags: readonly string[];
+    readonly targetFields: readonly string[] | undefined;
+    readonly targetOrigin: string | undefined;
+    readonly env: Readonly<Record<string, string | undefined>>;
+  },
+): { params: Record<string, string>; bound?: BoundSecretParams } {
+  if (req.flags.length === 0 && (req.targetFields ?? []).length === 0) return { params: { ...req.params } };
+  const flagFields = [...new Set(req.flags)].map((spec) => replayField(spec, req.env));
   const fromFlags = paramsFromFields(journey, flagFields, new Set(Object.keys(req.params)));
   const unused = flagFields.filter((f) => !fromFlags.used.has(f));
   if (unused.length > 0) {

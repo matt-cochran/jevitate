@@ -272,6 +272,8 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           ...(o?.actionDeltas === true ? { actionDeltas: true } : {}),
           ...(o?.stepResponseTimeoutMs === undefined ? {} : { stepResponseTimeoutMs: o.stepResponseTimeoutMs }),
           ...(o?.boundSecretParams === undefined ? {} : { boundSecretParams: o.boundSecretParams }),
+          // §5.3: a target's secretFields `env:` sources are read from the server's environment (a test seam).
+          ...(deps.secretEnv === undefined ? {} : { secretEnv: deps.secretEnv }),
           ...(deps.browserPortFactory === undefined ? {} : { browserPortFactory: deps.browserPortFactory }),
         }),
       ))));

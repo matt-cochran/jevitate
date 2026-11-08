@@ -208,11 +208,11 @@ describe("0.30.0 run modes over MCP (real Chromium)", { timeout: 180_000 }, () =
     expect(allFiles(root).filter((f) => readFileSync(f).includes(MARKER))).toEqual([]);
   });
 
-  it("without a targets.json entry for the origin it is still refused E_SECRET_PARAM_OVER_MCP, before any browser", async () => {
+  it("bound in targets.json to another origin only, it is refused E_SECRET_ORIGIN_REFUSED, before any browser (§5.3)", async () => {
     await new FsJourneyStore(journeysDir).put(journey("login", true));
     await approveAtTty("login");
     const r = await call("run_journey", { id: "login", baseUrl: recorded, params: { who: "ann" } });
-    expect(r.body).toMatchObject({ error: "invalid_args", code: SECRET_PARAM_OVER_MCP, params: ["password1"] });
+    expect(r.body).toMatchObject({ error: "refused", code: "E_SECRET_ORIGIN_REFUSED", mode: "automation", retryable: false });
     expect(r.text).not.toContain(MARKER);
     expect(launches.count).toBe(0);
   });

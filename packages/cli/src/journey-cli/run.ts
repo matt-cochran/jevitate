@@ -4,7 +4,7 @@ import { DEPRECATED_DIR_HELP, flaggedCatalogDir, journeyLayout } from "./shared.
 import { HttpCheckOffAllowlistError } from "../http-probe.js";
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "../run-tags-cli.js";
 import { existsSync } from "node:fs";
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { ParamValidationError } from "@jevitate/journey";
 import { MissingCredentialError, UsageTracker, type GenerationPort } from "@jevitate/ai-core";
 import { DEFAULT_DONE_CHECK_POLICY, journeyExitCode, safeRunPolicy, type DoneCheckPolicy, type SelfHealMode } from "@jevitate/domain";
@@ -21,6 +21,7 @@ import { journeyDraftWarning } from "../journey-stale-api.js";
 import { draftOnAutomationTargetWarning, RunModeRefusedError } from "../journey-run-mode-gate.js";
 import { ParamTypeError, paramTypeRefusalBody } from "../journey-param-types.js";
 import { heldOutcomeOf } from "../journey-hold.js";
+import { SECRET_MODE_FLAGS, type SecretModeFlag } from "../journey-secret-mode.js";
 import { runRecordErrorOf, withJourneyRunRecord } from "../journey-run-record.js";
 import { ExtensionMismatchError } from "../browser-run-options.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "../run-screenshots.js";
@@ -55,6 +56,11 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
     // runtime's write floor). `hybrid`/`full` need an AI gateway, selected
     // with --real/--fake-ai (mirrors `explore`); requesting a heal mode
     // without one fails CLOSED, never a silent unhealed run.
+    .addOption(
+      new Option("--secret-mode <mode>", "0.30.0: how a handback step (or a secret nobody supplied) is met on an automation-mode target: auto (the target's targets.json secretFields type it on its own origin, else the run holds for a person: jevitate inbox resume <holdId> opens it headed) | vault-autofill (the binding, or refuse E_SECRET_MODE_UNAVAILABLE) | visible-handback (always hold for a person) | fail-closed (never wait: quarantine at the step). A test-mode target never waits: E_HUMAN_STEP_IN_TEST_MODE")
+        .choices([...SECRET_MODE_FLAGS])
+        .default("auto"),
+    )
     .option("--self-heal <mode>", "self-heal policy mode: fail-closed | hybrid | full (#453: hybrid/full need --changes and/or --change-note; a heal is proposed for review, exit 5 — never a pass)", "fail-closed")
     .option("--changes <range>", "#453: the git range that explains a break (e.g. HEAD~1..HEAD, main...HEAD; read-only, in the journeys dir's repo) — needs --self-heal hybrid|full")
     .option("--change-note <text>", "#453: a change note that explains a break (e.g. 'renamed \"Create New\" to \"Create\"'; repeatable) — needs --self-heal hybrid|full", (v: string, prev: string[]) => [...prev, v], [] as string[])
@@ -99,6 +105,7 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
       const {
         param: paramFlags,
         secretField,
+        secretMode,
         storageState: storageStateFlag,
         selfHeal,
         real,
@@ -130,6 +137,7 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         stepResponseTimeout?: number;
         param: Record<string, string>;
         secretField: string[];
+        secretMode: SecretModeFlag;
         storageState?: string;
         selfHeal: string;
         real?: boolean;
@@ -283,6 +291,8 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
           id,
           params: param,
           ...(boundSecretParams === undefined ? {} : { boundSecretParams }),
+          secretMode,
+          ...(deps.explore?.env === undefined ? {} : { secretEnv: deps.explore.env }),
           policy,
           selfHealer,
           ...(healScope === undefined ? {} : { heal: { scope: healScope } }),

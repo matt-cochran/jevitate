@@ -6,6 +6,7 @@ import { CATALOG_EXPORT_FORMATS } from "./catalog-bundle-api.js";
 import type { McpCliRunner } from "./mcp-cli-runner.js";
 import { policyLoosenings, policyLoosenRefusalBody, RunGuardRefusedError, runGuardRefusalBody, targetPromoteRefusalBody } from "./mcp-run-guard.js";
 import { RunModeRefusedError, runModeRefusalBody } from "./journey-run-mode-gate.js";
+import { heldOutcomeOf } from "./journey-hold.js";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { SitePolicySchema, type SitePolicy } from "@jevitate/domain";
@@ -1394,6 +1395,11 @@ export async function runCliTool(spec: CliToolSpec, args: McpArgs, deps: { runCl
   // #789: a refused replay is the answer, whatever the command made of it. What the command did report before it stays beside it.
   // 0.30.0 §5: so is a run the run mode refused.
   const refusedBody = refusal instanceof RunGuardRefusedError ? runGuardRefusalBody(refusal) : refusal instanceof RunModeRefusedError ? runModeRefusalBody(refusal) : undefined;
+  // 0.30.0 §5.3: a run held at a step only a person can do; it proves nothing yet (`jevitate inbox resume <holdId>`).
+  const held = heldOutcomeOf(refusal);
+  if (held !== undefined) {
+    return { isError: true, body: { ...held, retryable: false, exitCode: 2, ...(envelope?.data === undefined || envelope.data === null ? {} : { partial: envelope.data }) } };
+  }
   if (refusedBody !== undefined) {
     return { isError: true, body: { ...refusedBody, ...(envelope?.data === undefined || envelope.data === null ? {} : { partial: envelope.data }) } };
   }

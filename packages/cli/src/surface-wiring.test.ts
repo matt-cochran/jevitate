@@ -91,6 +91,14 @@ const STORED_ALLOWLIST = { allow: "#484: replays with the result's stored allow 
 /** #542: the extra-origins override is `journey run|verify --allow`; elsewhere a replay uses the Journey's own `metadata.allowedOrigins`. */
 const REPLAY_ALLOW = "#542: replays with the recorded site and the Journey's metadata.allowedOrigins; the per-run override is `journey run|verify --allow` (not an MCP/campaign argument, #484)";
 
+/** 0.30.0 §5.3/§5.4 (journey-secret-mode.ts, journey-hold.ts): only a hold's resume sets these; only `journey run` takes --secret-mode. */
+const HOLD_RESUME = {
+  resumeAtStep: "set only by `jevitate inbox resume` (journey-hold.ts resumeHold), continuing a held run",
+  heldSecretParams: "set only by `jevitate inbox resume` for a secret hold (journey-hold.ts resumeHold)",
+} as const;
+const SECRET_MODE_AUTO = "the secret mode is `auto` (journey-secret-mode.ts); only `journey run --secret-mode` narrows it";
+const SECRET_ENV_PROCESS = "a target's secretFields `env:` sources are read from this process's environment (the default)";
+
 const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // ── explore CLI: the reference surface ──────────────────────────────────────────────────────
   "goal-strategy.ts runExploration": { hostHealth: SEAM, successAssertion: "the CLI passes --success as successChecks", nowIso: SEAM },
@@ -172,10 +180,12 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // #497: the labels backfill replays with its own label-reading observer, never a whole interpreter.
   "journey-labels-migrate-api.ts runJourneyProgrammatically": { interpreter: OBSERVER_NOT_INTERPRETER },
   "run.ts runJourneyProgrammatically": {
+    ...HOLD_RESUME,
     onRawOutput: "only `journey chain` hands a run's output on to a page",
     assertRunnable: MCP_RUN_GATE,
     fixtureBaseDir: FIXTURE_BASE_DIR, account: SITE_ACCOUNT, interpreter: ANNOTATE_OBSERVER, mask: MASK_INTERNAL, observer: OBSERVER_INTERNAL, session: WHOLE_JOURNEY, stopAfterStep: WHOLE_JOURNEY },
   "journey-prefix.ts runJourneyProgrammatically": {
+    ...HOLD_RESUME, secretMode: SECRET_MODE_AUTO, secretEnv: SECRET_ENV_PROCESS,
     onRawOutput: "only `journey chain` hands a run's output on to a page",
     boundSecretParams: "only `journey run` resolves a secret from an operator binding; this path takes values through params",
     assertRunnable: MCP_RUN_GATE,
@@ -209,6 +219,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     selfHealer: "a demo never self-heals: a Journey that no longer replays is a stale demo (exit 1)",
   },
   "demo-aspect-api.ts runJourneyProgrammatically": {
+    ...HOLD_RESUME, secretMode: SECRET_MODE_AUTO, secretEnv: SECRET_ENV_PROCESS,
     onRawOutput: "only `journey chain` hands a run's output on to a page",
     boundSecretParams: "only `journey run` resolves a secret from an operator binding; this path takes values through params",
     assertRunnable: MCP_RUN_GATE,
@@ -231,6 +242,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
   "load-cli.ts runJourneyLoadTest": { policy: "a load run replays with the fail-closed safeRunPolicy()" },
   "mcp-api.ts runJourneyProgrammatically": {
+    ...HOLD_RESUME, secretMode: SECRET_MODE_AUTO,
     onRawOutput: "only `journey chain` hands a run's output on to a page",
     allow: REPLAY_ALLOW,
     fixtureBaseDir: FIXTURE_BASE_DIR,
@@ -242,6 +254,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     stopAfterStep: WHOLE_JOURNEY,
   },
   "check-execute.ts runJourneyProgrammatically": {
+    ...HOLD_RESUME, secretMode: SECRET_MODE_AUTO, secretEnv: SECRET_ENV_PROCESS,
     onRawOutput: "only `journey chain` hands a run's output on to a page",
     boundSecretParams: "only `journey run` resolves a secret from an operator binding; this path takes values through params",
     assertRunnable: MCP_RUN_GATE,

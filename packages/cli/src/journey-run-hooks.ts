@@ -175,7 +175,14 @@ export async function runBeforeWriteHooks(ctx: RunHookContext & PendingAction): 
     if (answer !== undefined && answer !== null) held = { owner, hold: answer };
   });
   if (held === undefined) return;
-  const { hold, owner } = held;
+  await holdRunAt(held.owner, ctx, held.hold);
+}
+
+/**
+ * Holds the run at `ctx.step` for `owner`: tells every `onHold` hook (which make it durable), then ends
+ * the run with `RunHeldError`. For a step that waits for a person without a write (a handback, §5.3).
+ */
+export async function holdRunAt(owner: string, ctx: RunHookContext & PendingAction, hold: RunHoldRequest): Promise<never> {
   await each("onHold", (hook) => hook({ ...ctx, hold }));
   throw new RunHeldError(owner, hold, { at: ctx.step });
 }

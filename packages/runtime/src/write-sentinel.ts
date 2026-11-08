@@ -18,12 +18,15 @@ export interface SentinelGateway {
   }): Promise<Record<string, { kind: string; probability?: number }>>;
 }
 
+/**
+ * Structure only (owner decision, #794): the control's role and name, the HTTP method, the path shape and
+ * the job's id and title. There is no field for page text or a page summary, so none can be passed.
+ */
 export interface SentinelInput {
-  control: string;
+  control: { role: string; name: string };
   method: string;
   pathShape: string;
-  pageSummary: string;
-  jobStory: string;
+  job: { id: string; title: string };
 }
 
 export interface SentinelResult {
@@ -42,7 +45,7 @@ const QUESTIONS = {
   },
   "write.outside-intent": {
     kind: "noul" as const,
-    instructions: "Is this pending write outside what the job story intends the user to do?",
+    instructions: "Is this pending write outside what the job intends the user to do?",
   },
 };
 
@@ -58,11 +61,10 @@ export class WriteSentinel {
       const r = this.redact;
       const answers = await this.gateway.systemOne({
         state: {
-          goal: r(input.jobStory),
+          goal: r(`${input.job.id}: ${input.job.title}`),
           url: r(input.pathShape),
-          controls: [r(`${input.method} ${input.control}`)],
+          controls: [r(`${input.method} ${input.control.role} "${input.control.name}"`)],
           history: [],
-          visibleText: r(input.pageSummary),
         },
         questions: QUESTIONS,
       });

@@ -2209,7 +2209,7 @@
   Reproduces: type-alias
   ReproductionReport: interface
 
-# @jevitate/runtime (70 exports)
+# @jevitate/runtime (74 exports)
   anchorValues: function
   assertProofUntouched: function
   assertRecordedProofUntouched: function
@@ -2262,6 +2262,10 @@
   RetargetCandidate: interface
   retargetRecording: function
   sanitizeStep: function
+  Secret: other
+  SecretManagerPort: other
+  SecretOriginMismatchError: other
+  SecretUnresolvableError: other
   SelfHealer: interface
   SENTINEL_NOTE_UNAVAILABLE: variable
   SENTINEL_TASKS: variable
