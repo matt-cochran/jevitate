@@ -18,6 +18,7 @@ export {
   type MutationFailedSite,
   type MutationPlan,
   type MutationProofVerdict,
+  type PlanSiteInfo,
   type MutationRunResult,
   type PlannedMutation,
   type RunOutcome,

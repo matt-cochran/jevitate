@@ -1,6 +1,6 @@
 === DECLARATION (src/index.ts, TS compiler API) ===
 
-# @jevitate/adjudicator (68 exports)
+# @jevitate/adjudicator (69 exports)
   adjudicate: other
   AdvisoryJudgment: type-alias
   AdvisoryJudgmentSchema: variable
@@ -44,6 +44,7 @@
   MutationVerdict: type-alias
   parseSiteKey: other
   PlannedMutation: other
+  PlanSiteInfo: other
   provenSensitive: other
   RefusalCodeSchema: variable
   rejudge: other

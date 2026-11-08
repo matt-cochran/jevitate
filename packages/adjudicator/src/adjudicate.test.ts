@@ -116,6 +116,94 @@ function targetedProof(struck = false): RunEvidence {
   };
 }
 
+/** One step-2 proof with the given plan and mutated replays, around a passing base and closing replay. */
+function proofWith(plan: NonNullable<RunEvidence["mutation"]>["plan"], mutated: readonly ReplayEvidence[]): RunEvidence {
+  const e = proof();
+  return {
+    ...e,
+    mutation: {
+      ...e.mutation!,
+      plan,
+      replays: [replay(0, "base"), replay(1, "independence"), ...mutated.map((r, i) => ({ ...r, ordinal: i + 2 })), replay(mutated.length + 2, "closing")],
+    },
+  };
+}
+
+/** #811: block-write:2 failed step 2's DOM postcondition AND its own request check, which the applied run evaluated; the relaxed rerun passed. */
+function ownRequest(evaluated: boolean): RunEvidence {
+  return proofWith(
+    {
+      mutations: [{ id: "block-write:2", kind: "block-write", step: 2 }],
+      pairs: [
+        { site: "step:2", mutation: "block-write:2" },
+        { site: "step-request:2:0", mutation: "block-write:2" },
+      ],
+      sites: [
+        { site: "step:2", check: "page textIncludes" },
+        { site: "step-request:2:0", check: "requestMade POST" },
+      ],
+    },
+    [
+      replay(0, "mutated", {
+        mutation: "block-write:2",
+        outcome: "failed",
+        failedSites: [
+          { where: "step", step: 2, postcondition: true },
+          { where: "step-request", step: 2, checkIndex: 0, ...(evaluated ? { evaluated: true as const } : {}) },
+        ],
+      }),
+      replay(0, "relaxed", { mutation: "block-write:2" }),
+    ],
+  );
+}
+
+/** #811: end-state:1 is a network end state no mutation pairs with; `required` makes that a gap. */
+function requiredUnpaired(required: boolean): RunEvidence {
+  const e = proof();
+  const plan = e.mutation!.plan;
+  return { ...e, mutation: { ...e.mutation!, plan: { ...plan, sites: [...plan.sites, { site: "end-state:1", check: "requestMade POST", ...(required ? { required: true as const } : {}) }] } } };
+}
+
+/** #811: a final network check broken by block-write:2 while skip:2 left it holding. */
+function blockAlone(declared: boolean): RunEvidence {
+  return proofWith(
+    {
+      mutations: [
+        { id: "block-write:2", kind: "block-write", step: 2 },
+        { id: "skip:2", kind: "skip", step: 2 },
+      ],
+      pairs: [
+        { site: "end-state:0", mutation: "block-write:2", ...(declared ? { declared: true as const } : {}) },
+        { site: "end-state:0", mutation: "skip:2" },
+      ],
+      sites: [{ site: "end-state:0", check: "requestMade POST" }],
+    },
+    [
+      replay(0, "mutated", { mutation: "block-write:2", outcome: "failed", failedSites: [{ where: "end-state", index: 0 }] }),
+      replay(0, "mutated", { mutation: "skip:2" }),
+    ],
+  );
+}
+
+/** #811: step:2 pairs a data mutation (stale-value:2) and an action one (skip:2); only skip:2 broke it unless `bothBreak`. */
+function obligations(bothBreak: boolean): RunEvidence {
+  const broke = { outcome: "failed" as const, failedSites: [{ where: "step" as const, step: 2, postcondition: true }] };
+  return proofWith(
+    {
+      mutations: [
+        { id: "stale-value:2", kind: "stale-value", step: 2 },
+        { id: "skip:2", kind: "skip", step: 2 },
+      ],
+      pairs: [
+        { site: "step:2", mutation: "stale-value:2" },
+        { site: "step:2", mutation: "skip:2" },
+      ],
+      sites: [{ site: "step:2", check: "page valueEquals" }],
+    },
+    [replay(0, "mutated", { mutation: "stale-value:2", ...(bothBreak ? broke : {}) }), replay(0, "mutated", { mutation: "skip:2", ...broke })],
+  );
+}
+
 const fixtures: Record<string, RunEvidence> = {
   achieved: withDone(false, true),
   notAchieved: withDone(false, false),
@@ -129,6 +217,13 @@ const fixtures: Record<string, RunEvidence> = {
   proofUnknownTrust: proof("unknown"),
   targeted: targetedProof(),
   targetedStruck: targetedProof(true),
+  ownRequestEvaluated: ownRequest(true),
+  ownRequestUnevaluated: ownRequest(false),
+  requiredUnpaired: requiredUnpaired(true),
+  blockAlone: blockAlone(false),
+  blockAloneDeclared: blockAlone(true),
+  obligationsOneSided: obligations(false),
+  obligationsBoth: obligations(true),
 };
 
 describe("fixtures", () => {
@@ -213,6 +308,40 @@ describe("mutation proof (ported rules)", () => {
     expect(as("not-applied").verdict).toBe("sensitive"); // block-write:2 still shows end-state:0 sensitive
     expect(as("stalled").verdict).toBe("inconclusive");
     expect(as("stalled").reason).toMatch(/1 of 2 mutated replays errored/);
+  });
+  it("#811: keeps an evaluated own-request failure sensitive when the DOM postcondition failed too", () => {
+    const checks = adjudicate(fixtures.ownRequestEvaluated!).checks!;
+    expect(checks.assertions).toEqual([
+      { site: "step:2", verdict: "sensitive", provedBy: "block-write:2" },
+      { site: "step-request:2:0", verdict: "sensitive", provedBy: "block-write:2" },
+    ]);
+    expect(checks.verdict).toBe("sensitive");
+    // Not evaluated in the applied run: judged on the relaxed rerun, which passed.
+    const plain = adjudicate(fixtures.ownRequestUnevaluated!).checks!;
+    expect(plain.assertions[1]).toEqual({ site: "step-request:2:0", verdict: "insensitive" });
+    expect(plain.verdict).toBe("insensitive");
+  });
+  it("#811: a required end state with no causal pair leaves the proof inconclusive", () => {
+    const checks = adjudicate(fixtures.requiredUnpaired!).checks!;
+    expect(checks.assertions[2]).toEqual({ site: "end-state:1", verdict: "unpaired" });
+    expect(checks.verdict).toBe("inconclusive");
+    expect(checks.reason).toBe("a network or persistence end-state has no established causal mutation pair");
+    expect(adjudicate(requiredUnpaired(false)).checks?.verdict).toBe("sensitive");
+  });
+  it("#811: a network check only an undeclared block broke, while the skip held, is insensitive", () => {
+    const checks = adjudicate(fixtures.blockAlone!).checks!;
+    expect(checks.assertions).toEqual([{ site: "end-state:0", verdict: "insensitive" }]);
+    expect(checks.verdict).toBe("insensitive");
+    // A declared pair is the author's causal claim, so the block's failure counts.
+    expect(adjudicate(fixtures.blockAloneDeclared!).checks!.assertions).toEqual([{ site: "end-state:0", verdict: "sensitive", provedBy: "block-write:2" }]);
+  });
+  it("#811: data and action mutations are separate obligations that must both be sensitive", () => {
+    const checks = adjudicate(fixtures.obligationsOneSided!).checks!;
+    expect(checks.assertions).toEqual([{ site: "step:2", verdict: "insensitive" }]);
+    expect(checks.verdict).toBe("insensitive");
+    const both = adjudicate(fixtures.obligationsBoth!).checks!;
+    expect(both.assertions).toEqual([{ site: "step:2", verdict: "sensitive", provedBy: "stale-value:2" }]);
+    expect(both.verdict).toBe("sensitive");
   });
   it("leaves checks out when there is no mutation proof", () => {
     expect(adjudicate(fixtures.achieved!).checks).toBeUndefined();
