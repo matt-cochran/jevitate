@@ -92,6 +92,7 @@ export function registerJourneyMigrate(journey: Command, program: Command, deps:
             ...(ids === undefined ? {} : { ids }),
             dryRun: dryRun === true,
             params: param,
+            warn: (line: string) => program.configureOutput().writeErr?.(line),
             run: {
               ...(siteGate === undefined ? {} : { siteGate }),
               ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),
