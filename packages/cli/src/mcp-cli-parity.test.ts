@@ -403,6 +403,16 @@ describe("#800: find_capabilities carries the linked job's done check", () => {
       expect(cap.job?.id).toBe("invite");
       expect(cap.job?.done?.at).toBe("/members");
       expect(cap.job?.done?.check).toBe("textIncludes:#list|ada");
+      // The CLI exposes the same capability: `journey find --json` carries the same job.done.
+      const lines: string[] = [];
+      const cli = buildProgram({ profiles: new ProfileManager("/unused-in-parity"), journeysDir });
+      cli.configureOutput({ writeOut: (t) => lines.push(t), writeErr: () => {} });
+      cli.exitOverride();
+      await cli.parseAsync(["journey", "find", "invite", "--json"], { from: "user" });
+      const cliCaps = (JSON.parse(lines.join("")) as { data: Array<{ id: string; job?: { id: string; done?: { at: string; check: string } } }> }).data;
+      const cliCap = cliCaps.find((c) => c.id === "invite-admin")!;
+      expect(cliCap.job?.done?.at).toBe(cap.job?.done?.at);
+      expect(cliCap.job?.done?.check).toBe(cap.job?.done?.check);
     } finally {
       cwd.mockRestore();
       rmSync(root, { recursive: true, force: true });

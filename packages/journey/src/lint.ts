@@ -33,7 +33,11 @@ export type JourneyLintRule =
   | "serves-outcome"
   /** #523: the catalog link warnings the CLI adds (journey-link-hints.ts). */
   | "missing-job"
-  | "missing-persona";
+  | "missing-persona"
+  /** #800: the linked job's done check (done-check.ts `lintDoneCheck`): absent (warning), cannot read false (warning), invalid (error). */
+  | "missing-done-check"
+  | "done-check-cannot-be-false"
+  | "done-check-invalid";
 
 /** #401: one weak assertion in a Journey, with the 1-based step it belongs to when it has one. */
 export interface JourneyLintFinding {

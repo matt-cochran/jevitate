@@ -9,7 +9,8 @@ import { checkProposal, deleteJourneyProposal, proposedJourney, rejectJourneyPro
 import { journeyReviewHash } from "./journey-review.js";
 import { readApprovedSnapshot, writeApprovedSnapshot } from "./journey-review-store.js";
 import { anchorRuleMode, assertAnchorRules, journeyAnchorIssues, refLintFindings } from "./journey-anchor-gate.js";
-import { journeyCatalogGate, resolveCatalogDir } from "./catalog-api.js";
+import { journeyCatalogGate, loadCatalog, resolveCatalogDir } from "./catalog-api.js";
+import { journeyDoneCheckFindings } from "./catalog-refs.js";
 import type { JevSetup } from "./jev-advisor.js";
 import { redactText } from "@jevitate/ai-core";
 import { safeRunPolicy, runTagsOf, type RunPolicy, clock } from "@jevitate/domain";
@@ -363,7 +364,16 @@ export async function lintJourneyById(
   };
   // #498: with no project, every literal upload fixture is refused at run time — say so here too.
   const noRoot = baseDir === undefined ? lintUploadFixtures(journey, undefined) : [];
-  const findings = [...lintJourney(journey, lintOpts), ...noRoot, ...refLintFindings(refIssues)];
+  // #800: the linked job's done-check findings (missing / invalid / cannot be false), about this Journey.
+  const doneFindings: JourneyLintFinding[] = [];
+  if (journey.metadata.job !== undefined) {
+    const catalogDir = opts.catalogDir === undefined ? resolveCatalogDir(undefined) : opts.catalogDir;
+    const catalog = await loadCatalog(catalogDir, dir);
+    for (const f of journeyDoneCheckFindings(catalog, journey)) {
+      doneFindings.push({ rule: f.rule, level: f.level, message: f.message, ...(f.fix === undefined ? {} : { fix: f.fix }) });
+    }
+  }
+  const findings = [...lintJourney(journey, lintOpts), ...noRoot, ...refLintFindings(refIssues), ...doneFindings];
   return {
     id,
     findings,
