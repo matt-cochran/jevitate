@@ -25,7 +25,7 @@ import { currentRunMetadata, stampRunMetadata, type RunMetadata } from "./run-me
  * "inconclusive"`, `reason: "interrupted by SIG… after N steps"` — built from whatever the journal
  * already flushed, starts closing the shared browser pool, terminates every browser process tree
  * this process launched (#326: bounded SIGTERM, then SIGKILL — a blocking wait, never an `await`),
- * then exits with the conventional code (129 SIGHUP or parent death / 130 SIGINT / 143 SIGTERM) —
+ * then exits with the conventional code (129 SIGHUP or parent death, named as such / 130 SIGINT / 143 SIGTERM) —
  * all SYNCHRONOUSLY, in the same turn the signal arrives. Playwright installs its OWN SIGTERM/SIGINT handler on the browsers it
  * launched; the instant that fires, any in-flight page operation starts rejecting, and the killed
  * mission's own error handling can turn that into a normal (non-killed) result and call
@@ -106,6 +106,14 @@ export type KillSwitchOutput = "envelope" | "human" | "none";
 /** 128 + the signal number, the shell convention. SIGHUP (#326) also stands for "the parent died". */
 const SIGNAL_EXIT_CODE = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 } as const;
 export type KillSignal = keyof typeof SIGNAL_EXIT_CODE;
+/**
+ * Why the kill path ran. The parent's death ends the run like a SIGHUP, with the same exit code, but
+ * no signal was sent: a result must not claim one.
+ */
+export type KillCause = KillSignal | "parent-gone";
+/** What a run ended by its parent's death tells the operator. */
+export const PARENT_GONE_HINT = "set JEVITATE_PARENT_WATCHDOG=off to keep a detached run going";
+const KILL_EXIT_CODE: Readonly<Record<KillCause, number>> = { ...SIGNAL_EXIT_CODE, "parent-gone": SIGNAL_EXIT_CODE.SIGHUP };
 
 /** The seams a test fakes: nothing here touches the real process/filesystem/browser pool. */
 export interface KillSwitchDeps {
@@ -208,7 +216,15 @@ export interface KilledMission {
  * reports a kill ITSELF: told the signal and every killed mission's partial result, it writes its
  * own partial aggregate SYNCHRONOUSLY and returns what to print — instead of each run's own envelope.
  */
-export type KillSummary = (killed: { signal: KillSignal; exitCode: number; missions: readonly KilledMission[] }) => string | undefined;
+export type KillSummary = (killed: { signal: KillCause; exitCode: number; missions: readonly KilledMission[] }) => string | undefined;
+
+/**
+ * A registered command's terminal result (`terminal-result.ts`). While one is set it OWNS stdout for
+ * the kill: armed missions still flush their results, but their output and a summary's text are not
+ * printed, so the command prints one envelope. It MUST be synchronous: it runs on the kill path, in
+ * the same turn as the exit below, and must not yield the event loop (see `onKillSignal`).
+ */
+export type KillTerminalReporter = (killed: { cause: KillCause; exitCode: number }) => void;
 
 let installed = false;
 /** Every armed mission, in arming order, with the kill listener scoped to the context that ran it. */
@@ -218,6 +234,7 @@ const armedMeta = new Map<KillableMission, RunMetadata | undefined>();
 let terminating = false;
 let output: KillSwitchOutput = "none";
 let summary: KillSummary | undefined;
+let terminalReporter: KillTerminalReporter | undefined;
 /** Process-wide listeners: told about every killed mission. */
 const killedListeners = new Set<KilledListener>();
 /** The listener for missions armed inside `runWithMissionKillListener` (e.g. one queue-drain item). */
@@ -234,7 +251,7 @@ function safely<T>(read: (() => T) | undefined): T | undefined {
 }
 
 /** The killed run's partial typed result: every field a finished run's result would carry that exists yet. */
-function partialResult(mission: KillableMission, signal: KillSignal, code: number, deps: KillSwitchDeps): Record<string, unknown> {
+function partialResult(mission: KillableMission, cause: KillCause, code: number, deps: KillSwitchDeps): Record<string, unknown> {
   const transcriptPath = mission.transcriptPath ?? transcriptPathFor(mission.recordingPath);
   // The live step list wins over the file (it is never behind it); the file is the fallback for a
   // mission armed without a live reference.
@@ -256,9 +273,15 @@ function partialResult(mission: KillableMission, signal: KillSignal, code: numbe
     missionOutcome: "inconclusive",
     // #217: a goal run's own ending travels as `goalOutcome` (a kill is the shared `inconclusive`).
     ...(mission.strategy === "goal" ? { goalOutcome: "inconclusive", goalReason: "broken-run" } : {}),
-    reason: `interrupted by ${signal} after ${steps} step${steps === 1 ? "" : "s"}`,
+    reason:
+      cause === "parent-gone"
+        ? `the parent process went away after ${steps} step${steps === 1 ? "" : "s"}, no signal was sent (${PARENT_GONE_HINT})`
+        : `interrupted by ${cause} after ${steps} step${steps === 1 ? "" : "s"}`,
     stop: "terminated",
-    signal,
+    // `signal` stays SIGHUP on a parent's death: it is this result's documented, tested field for 129.
+    // `reason` and `parentGone` say what really happened.
+    signal: cause === "parent-gone" ? "SIGHUP" : cause,
+    ...(cause === "parent-gone" ? { parentGone: true } : {}),
     steps,
     exitCode: code,
     defects: [],
@@ -289,8 +312,8 @@ function partialResult(mission: KillableMission, signal: KillSignal, code: numbe
  * started but deliberately not awaited; #326: what it cannot finish, `deps.terminateBrowsers` ends
  * synchronously (a bounded blocking wait, then SIGKILL), so no Chromium outlives the process.
  */
-function onKillSignal(signal: KillSignal, deps: KillSwitchDeps): void {
-  const code = SIGNAL_EXIT_CODE[signal];
+function onKillSignal(cause: KillCause, deps: KillSwitchDeps): void {
+  const code = KILL_EXIT_CODE[cause];
   if (terminating) {
     // Escalation (a second signal, or the mission's own completion racing ahead): stop being
     // graceful and exit right now.
@@ -303,7 +326,7 @@ function onKillSignal(signal: KillSignal, deps: KillSwitchDeps): void {
     let partial: Record<string, unknown> | undefined;
     let resultPath: string | undefined;
     try {
-      partial = stampRunMetadata(partialResult(mission, signal, code, deps), armedMeta.get(mission));
+      partial = stampRunMetadata(partialResult(mission, cause, code, deps), armedMeta.get(mission));
       // #163: a killed run's per-call usage sidecar too (the calls it made before the signal).
       const u = mission.usage;
       const ledger: UsageLedger | undefined = u?.calls === undefined ? undefined : { snapshot: () => u.snapshot(), calls: () => u.calls?.() ?? [] };
@@ -337,7 +360,7 @@ function onKillSignal(signal: KillSignal, deps: KillSwitchDeps): void {
     if (partial !== undefined) killed.push({ partial, ...(resultPath === undefined ? {} : { resultPath }) });
     // A `--json` caller gets its envelope even from a killed run (#120) — one line per mission,
     // written synchronously, before the exit below. An orchestrator's summary (#220) replaces them.
-    if (summary === undefined && partial !== undefined && output !== "none" && deps.writeStdout !== undefined) {
+    if (terminalReporter === undefined && summary === undefined && partial !== undefined && output !== "none" && deps.writeStdout !== undefined) {
       try {
         deps.writeStdout(output === "envelope" ? `${JSON.stringify(ok(partial))}\n` : formatMissionHuman(partial));
       } catch {
@@ -351,11 +374,17 @@ function onKillSignal(signal: KillSignal, deps: KillSwitchDeps): void {
   // two runs of a multi-run) — written and printed synchronously, like everything above.
   if (summary !== undefined) {
     try {
-      const text = summary({ signal, exitCode: code, missions: killed });
-      if (text !== undefined && deps.writeStdout !== undefined) deps.writeStdout(text);
+      const text = summary({ signal: cause, exitCode: code, missions: killed });
+      if (terminalReporter === undefined && text !== undefined && deps.writeStdout !== undefined) deps.writeStdout(text);
     } catch {
       // Best-effort, like the flush: a failed summary must never keep the process from exiting.
     }
+  }
+  // A registered command's one envelope, after the missions flushed and before anything can block.
+  try {
+    terminalReporter?.({ cause, exitCode: code });
+  } catch {
+    // Best-effort, like the flush: a failed report must never keep the process from exiting.
   }
   deps.closeBrowsers().catch(() => {
     // Best-effort: a failed teardown must never keep the process from having honored the signal.
@@ -377,9 +406,9 @@ function install(deps: KillSwitchDeps): void {
   deps.onSignal("SIGTERM", () => onKillSignal("SIGTERM", deps));
   deps.onSignal("SIGINT", () => onKillSignal("SIGINT", deps));
   // #326: a hang-up (a closed terminal, the `jevitate` alias forwarding one) ends the run the same
-  // way; so does the parent's death, which no signal announces.
+  // way; so does the parent's death, which no signal announces, and so is reported under its own name.
   deps.onSignal("SIGHUP", () => onKillSignal("SIGHUP", deps));
-  deps.watchParent?.(() => onKillSignal("SIGHUP", deps));
+  deps.watchParent?.(() => onKillSignal("parent-gone", deps));
 }
 
 /**
@@ -451,6 +480,17 @@ export function setKillSummary(fn: KillSummary): () => void {
 }
 
 /**
+ * Installs the reporter of a command registered through `terminal-result.ts`. Returns the function
+ * that removes it. With none set, a signal behaves exactly as it does without this layer.
+ */
+export function setKillTerminalReporter(fn: KillTerminalReporter): () => void {
+  terminalReporter = fn;
+  return () => {
+    if (terminalReporter === fn) terminalReporter = undefined;
+  };
+}
+
+/**
  * Registers a process-wide SYNCHRONOUS listener told where EVERY killed mission's partial result was
  * written, just before the process exits. A runner that owns one specific mission should use
  * `runWithMissionKillListener` instead, so it never records another mission's result. Returns the
@@ -471,5 +511,6 @@ export function __resetKillSwitchForTests(): void {
   terminating = false;
   output = "none";
   summary = undefined;
+  terminalReporter = undefined;
   killedListeners.clear();
 }

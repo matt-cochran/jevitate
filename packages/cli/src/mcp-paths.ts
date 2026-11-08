@@ -58,6 +58,9 @@ function inside(root: string, p: string): boolean {
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
+/** The files under `~/.jevitate/` no MCP path argument may name. */
+const OPERATOR_ONLY = ["targets.json", "verify-checkpoint.key"] as const;
+
 export interface ConfineOptions {
   /** A Playwright storage state (session cookies/tokens): also never under a repo's `.jevitate/`. */
   readonly session?: boolean;
@@ -74,6 +77,15 @@ export function confineMcpPath(value: unknown, what: string, roots: readonly str
     throw new McpPathError(
       `'${what}' ${JSON.stringify(value)} resolves outside the paths an MCP tool may use (${roots.join(", ")}): put the file in the project or under ~/.jevitate/`,
     );
+  }
+  // #789: what lifts an MCP run's refusals is written by a person, and what signs a proof's progress is the user's own:
+  // no path argument reaches either, read or written. By the real path too (a linked home), and whatever the case, on a filesystem that folds it.
+  for (const name of OPERATOR_ONLY) {
+    const file = join(homeDataRoot(), name);
+    const forbidden = [file, realish(file)].map((p) => p.toLowerCase());
+    if ([abs, real].some((p) => forbidden.includes(p.toLowerCase()))) {
+      throw new McpPathError(`'${what}' names ~/.jevitate/${name}, the operator's own file, which no MCP tool may touch`);
+    }
   }
   if (opts.session === true) {
     const refusal = sessionFileInProjectRefusal(abs, `'${what}'`);

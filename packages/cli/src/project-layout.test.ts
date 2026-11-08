@@ -59,6 +59,7 @@ describe("project data dir", () => {
   it("init creates the repo's .jevitate at the git root with logs/ ignored, never overwriting; outside git it creates nothing", () => {
     const repo = join(root, "app");
     mkdirSync(join(repo, ".git"), { recursive: true });
+    writeFileSync(join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
     mkdirSync(join(repo, "packages", "web"), { recursive: true });
     const r = initProjectDir(join(repo, "packages", "web"));
     expect(r.dir).toBe(join(repo, ".jevitate"));
@@ -96,6 +97,7 @@ describe("project data dir", () => {
   it("`jevitate init` reports the project dir it created", async () => {
     const repo = join(root, "app");
     mkdirSync(join(repo, ".git"), { recursive: true });
+    writeFileSync(join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
     const lines: string[] = [];
     const program = buildProgram({
       profiles: new ProfileManager("/unused"),
@@ -113,6 +115,7 @@ describe("project data dir", () => {
   it("`jevitate init --dry-run` says 'would create', never 'created' — and creates nothing", async () => {
     const repo = join(root, "app");
     mkdirSync(join(repo, ".git"), { recursive: true });
+    writeFileSync(join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
     const lines: string[] = [];
     const program = buildProgram({
       profiles: new ProfileManager("/unused"),

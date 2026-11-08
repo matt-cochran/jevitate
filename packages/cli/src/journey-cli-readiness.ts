@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { Command } from "commander";
 import { fail, ok } from "./envelope.js";
+import { warnSecretParamsOnArgv } from "./secret-params.js";
 import { browserRunFromFlags, collectParam, emitCommandResult, withBrowserLaunchFlags, type BrowserLaunchFlags, type CliDeps } from "./cli-shared.js";
 import { isEnvironmentError, withEnvironmentFlags, fixtureRebaseUrl, type ResolvedJourneyEnvironment } from "./environments.js";
 import { buildMissionFixtures, withFixtureFlags, type FixtureFlags } from "./fixture-cli.js";
@@ -66,6 +67,7 @@ export function registerJourneyReadiness(journey: Command, program: Command, dep
         return;
       }
       const mode: ReadinessMode = rawMode;
+      await warnSecretParamsOnArgv(program.configureOutput().writeErr, layout.journeysDir, [id, withId], param);
       const { env: envName, baseUrl } = this.opts<{ env?: string; baseUrl?: string }>();
       if (storageStateFlag !== undefined && !existsSync(storageStateFlag)) {
         emitCommandResult(program, fail("E_READINESS_ARGS", `storage state not found: ${storageStateFlag}`), { json: json === true, exitCode: EXIT_CODES.usage, command: "journey readiness" });

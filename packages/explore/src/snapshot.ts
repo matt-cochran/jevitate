@@ -1,4 +1,4 @@
-import type { ElementHandle, Page } from "playwright";
+import type { ElementHandle, Locator, Page } from "playwright";
 import { descriptorLocator } from "@jevitate/interpreter";
 import { computeDescriptor, isSecretField, targetDisplay } from "@jevitate/recorder";
 import type { TargetDescriptor, TargetDisplay } from "@jevitate/recording";
@@ -7,7 +7,7 @@ import { contentHash, clock } from "@jevitate/domain";
 import { DEFAULT_BOUNDS } from "./bounds.js";
 import { occluderOf } from "./occlusion.js";
 import { MESSAGE_FIELD, MESSAGE_INPUT_TYPES, PAIRED_SUBMIT_DISTANCE, RECIPIENT_NAME, SUBMIT_NAME, composerEvidence } from "./composer-evidence.js";
-import { redactControl, redactUrl } from "./redact.js";
+import { redactControl, redactText, redactUrl } from "./redact.js";
 import { TEMPORAL_FORMATS, isTemporalInputType } from "./temporal-value.js";
 
 /**
@@ -520,7 +520,7 @@ function readControlFacts(node: Node): ControlFacts {
     const sel = el as HTMLSelectElement;
     options = Array.from(sel.options)
       .filter((o) => !o.disabled && o.value !== "")
-      .map((o) => norm(o.label || o.text).slice(0, 200))
+      .map((o) => norm(o.label || o.text))
       .filter((o) => o !== "")
       .slice(0, 100);
     const cur = sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex] : undefined;
@@ -564,7 +564,7 @@ function readControlFacts(node: Node): ControlFacts {
       .map((id) => norm(document.getElementById(id)?.textContent ?? ""))
       .join(" ");
     const heading = norm(scopeEl.querySelector("h1, h2, h3, h4")?.textContent ?? "");
-    const label = (norm(scopeEl.getAttribute("aria-label")) || labelledBy || heading).slice(0, 60);
+    const label = norm(scopeEl.getAttribute("aria-label")) || labelledBy || heading;
     scope = label === "" ? kind : `${kind} "${label}"`;
   }
   // #356: the heading the control sits under — the last visible heading before it in document
@@ -574,7 +574,7 @@ function readControlFacts(node: Node): ControlFacts {
     if (h.contains(el)) continue;
     if ((h.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) === 0) break;
     const t = norm(h.textContent);
-    if (t !== "" && h.getClientRects().length > 0) sectionHeading = t.slice(0, 120);
+    if (t !== "" && h.getClientRects().length > 0) sectionHeading = t;
   }
   const buttonType = tag === "button" ? (el.getAttribute("type") ?? "submit").toLowerCase() : null;
   const submits =
@@ -758,6 +758,22 @@ function readCheapNames(els: Element[]): string[] {
 }
 
 /**
+ * The bounded fields, masked first and then cut, here and not in the page: a cut made before the mask
+ * leaves the start of a secret that crosses it, which no value match can find.
+ */
+function boundFacts(f: ControlFacts, secrets: readonly string[]): ControlFacts {
+  const r = (s: string): string => redactText(s, secrets);
+  const quoted = f.scope === null ? null : /^([^"]*) "(.*)"$/s.exec(r(f.scope));
+  return {
+    ...f,
+    options: f.options === null ? null : f.options.map((o) => r(o).slice(0, 200)),
+    selected: f.selected === null ? null : r(f.selected),
+    heading: f.heading === null ? null : r(f.heading).slice(0, 120),
+    scope: f.scope === null ? null : quoted === null ? r(f.scope) : `${quoted[1]} "${(quoted[2] ?? "").slice(0, 60)}"`,
+  };
+}
+
+/**
  * Reads the page's controls. #372: the ONE place a read cut off by a navigation (a server redirect
  * then a client `location.replace` on load) is retried — every caller (`perceive`, so every
  * mission; invariants; screenshots) gets it. Bounded: `navigationRetries` re-reads, all waits within
@@ -775,6 +791,15 @@ const CONTROL_DISPLAY = new WeakMap<TargetDescriptor, TargetDisplay>();
 /** The display perceived for the control whose descriptor this is, if any (#497). */
 export function controlDisplay(descriptor: TargetDescriptor): TargetDisplay | undefined {
   return CONTROL_DISPLAY.get(descriptor);
+}
+
+/**
+ * #789: the role and accessible name of one resolved element, read exactly as a mission reads a
+ * control's (`readControlFacts`), so a replay's refusals judge what a mission's judge.
+ */
+export async function readControlIdentity(element: Locator | ElementHandle): Promise<{ readonly name: string; readonly role: string }> {
+  const { name, role } = await (element as Locator).evaluate(readControlFacts);
+  return { name, role };
 }
 
 export async function snapshot(page: Page, opts?: SnapshotOptions): Promise<Snapshot> {
@@ -905,7 +930,7 @@ async function readSnapshot(page: Page, opts?: SnapshotOptions): Promise<Snapsho
         continue;
       }
       evaluated += 1;
-      const raw = await handle.evaluate(readControlFacts);
+      const raw = boundFacts(await handle.evaluate(readControlFacts), opts?.secrets ?? []);
       // Hidden file inputs are the sole exception (see the module doc).
       if (!raw.visible && raw.inputType !== "file") continue;
       // #272: behind an open modal — never offered (a click there is intercepted by the modal).

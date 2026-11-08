@@ -1,5 +1,6 @@
 import { FsJourneyStore, JourneyReviewSchema, type Journey, type JourneyReview } from "@jevitate/journey";
-import { buildJourneyReview } from "./journey-review.js";
+import { buildJourneyReview, type JourneyAnnotationDraft } from "./journey-review.js";
+import { AnnotationDraftNotFoundError, annotationDraftPath, journeyContentHash, readAnnotationDraft } from "./journey-annotate-api.js";
 import { readApprovedSnapshot, readVerifyRecord, readProofWaiver } from "./journey-review-store.js";
 import { UnknownJourneyError } from "./journey-api.js";
 import { loadCatalog, resolveCatalogDir } from "./catalog-api.js";
@@ -16,6 +17,24 @@ import { loadTargetsFile, resolveTargetConfig } from "./target-config.js";
 import { loadProjectConfig } from "./project-config.js";
 
 /**
+ * #765: the status of a Journey's pending annotation draft — `current` when the Journey is
+ * unchanged since the draft (the same `journeyContentHash` comparison `approveJourneyAnnotations`
+ * makes), `stale` otherwise. No draft is `undefined`. An unreadable or invalid draft is reported
+ * stale, never thrown: review always renders.
+ */
+async function loadAnnotationDraft(journeysDir: string, id: string, journey: Journey): Promise<JourneyAnnotationDraft | undefined> {
+  const path = annotationDraftPath(journeysDir, id);
+  try {
+    const { draft } = await readAnnotationDraft(journeysDir, id);
+    const current = journeyContentHash(journey) === draft.journeyHash;
+    return { status: current ? "current" : "stale", path, next: current ? `jevitate journey annotate ${id} --approve` : `jevitate journey annotate ${id}` };
+  } catch (err) {
+    if (err instanceof AnnotationDraftNotFoundError) return undefined;
+    return { status: "stale", path, next: `jevitate journey annotate ${id}` };
+  }
+}
+
+/**
  * #432: loads one Journey and everything its review sheet needs — the targets.json safety config of
  * its site's origin, its approved snapshot, its last mutation-proof verdict — and builds the sheet.
  * An unknown id is `UnknownJourneyError`, exactly as `journey promote` refuses one. #433: also its
@@ -28,6 +47,8 @@ export async function reviewJourneyById(
 ): Promise<{ journey: Journey; review: JourneyReview }> {
   const journey = await new FsJourneyStore(journeysDir).get(id);
   if (journey === null) throw new UnknownJourneyError(`unknown journey '${id}'`);
+  // #765: the pending annotation draft (if any) — its status is part of the review output.
+  const annotationDraft = await loadAnnotationDraft(journeysDir, id, journey);
   let origin: string | null = null;
   try {
     origin = new URL(journey.recording.site).origin;
@@ -68,6 +89,7 @@ export async function reviewJourneyById(
     lastVerify: await readVerifyRecord(journeysDir, id),
     proofPolicy: loadProjectConfig(opts.catalogDir ?? findProjectDir()).mutationProofPolicy ?? "advisory",
     proofWaiver: await readProofWaiver(journeysDir, id),
+    ...(annotationDraft === undefined ? {} : { annotationDraft }),
   });
   // Fail closed: what is emitted always matches the published schema.
   return { journey, review: JourneyReviewSchema.parse(opts.jev === undefined ? review : { ...review, jev: jevLayerOf(opts.jev) }) };

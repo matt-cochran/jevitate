@@ -39,6 +39,8 @@ export async function reproduceUsabilityHang(ctx: UsabilitySetup, run: Usability
       ...(opts.target?.safety === undefined ? {} : { safety: opts.target.safety }),
       writtenBy: run.sideEffects.map((e) => e.control), // #181
       perceive: {
+        // A replay reads the same page: its hang goes in the same result, so it is masked the same.
+        secrets: ctx.secrets,
         ...(opts.target?.settle === undefined ? {} : { settleConfig: opts.target.settle }),
         ...(opts.target?.hangs === undefined ? {} : { hangConfig: opts.target.hangs }),
       },

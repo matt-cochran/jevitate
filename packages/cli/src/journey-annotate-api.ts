@@ -1,3 +1,4 @@
+import type { MissionFixtures } from "./mission-fixtures.js";
 import { explainCheck, expectedResultFromDelta } from "@jevitate/explore";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -10,17 +11,17 @@ import {
   flatJourneySteps,
   intentCoverage,
   journeyAssertions,
-  secretParamValues,
   type AnnotationChange,
   type AnnotationDraft,
   type IntentCoverage,
   type Journey,
 } from "@jevitate/journey";
-import { assertNoSecretInPayload, redactText, redactUrl, type GenerationPort, type GenerationProvenance } from "@jevitate/ai-core";
+import { redactUrl, type GenerationPort, type GenerationProvenance } from "@jevitate/ai-core";
 import { contentHash, clock } from "@jevitate/domain";
 import type { StepObserver } from "@jevitate/interpreter";
 import { BrowseTheWebToken, type Actor } from "@jevitate/screenplay";
 import { runJourneyProgrammatically, UnknownJourneyError, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
+import { NOT_A_CREDENTIAL_WAY_OUT, fixtureSecretNeeds, secretBoundNeeds } from "./secret-params.js";
 
 /**
  * #246 — `jevitate journey annotate`: replay a Journey, capture redacted before/after page evidence
@@ -78,15 +79,13 @@ function readPage(): { heading: string; text: string } {
 }
 
 /** Redacted page evidence (never throws: an unreadable page is empty evidence). */
-async function capture(actor: Actor, secrets: readonly string[]): Promise<PageEvidence> {
+async function capture(actor: Actor): Promise<PageEvidence> {
   const page = actor.ability(BrowseTheWebToken).session.page;
   const raw = await page.evaluate(readPage).catch(() => ({ heading: "", text: "" }));
-  const scrub = (s: string): string => redactText(s, secrets);
   return {
-    url: scrub(redactUrl(page.url())),
-    heading: scrub(raw.heading.replace(/\s+/g, " ").trim()).slice(0, 300),
-    // Redact the WHOLE text before bounding it, so a cut never splits a secret past the redactor.
-    text: scrub(raw.text.replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim()).slice(0, EVIDENCE_TEXT_CHARS),
+    url: redactUrl(page.url()),
+    heading: raw.heading.replace(/\s+/g, " ").trim().slice(0, 300),
+    text: raw.text.replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim().slice(0, EVIDENCE_TEXT_CHARS),
   };
 }
 
@@ -162,6 +161,25 @@ export interface AnnotateJourneyResult {
   readonly screenshotsSkipped?: Array<{ readonly step: number; readonly reason: string }>;
 }
 
+/** Annotating sends the replay's pages to a model, and nothing secret-bound goes to a model. */
+export class SecretBoundJourneyError extends Error {
+  readonly code = "E_MODEL_REFUSED_SECRET";
+  constructor(id: string, what: readonly string[]) {
+    super(`journey '${id}' needs ${what.join(", ")}, and nothing secret-bound goes to a model, so it can't be annotated; nothing was sent. Write its objective and expected result by hand, or annotate a Journey that needs no secret (sign in with a stored session). ${NOT_A_CREDENTIAL_WAY_OUT}`);
+    this.name = "SecretBoundJourneyError";
+  }
+}
+
+function assertNoSecretForModel(journey: Journey, params: Readonly<Record<string, string>>): void {
+  const needs = secretBoundNeeds(journey, params);
+  if (needs.length > 0) throw new SecretBoundJourneyError(journey.metadata.id, needs);
+}
+
+function assertNoFixtureSecret(id: string, fx: MissionFixtures | undefined): void {
+  const needs = fixtureSecretNeeds(fx);
+  if (needs.length > 0) throw new SecretBoundJourneyError(id, needs);
+}
+
 /**
  * Replays the Journey through `runJourneyProgrammatically` (the same session, site policy, fixtures
  * and fail-closed policy as `journey run`) with an observing interpreter, then drafts. A replay that
@@ -174,33 +192,40 @@ export interface AnnotateJourneyResult {
 export async function annotateJourney(opts: AnnotateJourneyOptions): Promise<AnnotateJourneyResult> {
   const journey = await loadJourney(opts.dir, opts.id);
   const journeyHash = journeyContentHash(journey);
-  const secrets = secretParamValues(journey, opts.params);
+  assertNoSecretForModel(journey, opts.params);
   const flat = flatJourneySteps(journey);
 
   const before = new Map<number, PageEvidence>();
   const after = new Map<number, PageEvidence | null>();
   const observer: StepObserver = {
     beforeStep: async ({ actor, index }) => {
-      before.set(index, await capture(actor, secrets));
+      before.set(index, await capture(actor));
     },
     afterStep: async ({ actor, index, outcome }) => {
-      after.set(index, outcome === "done" ? await capture(actor, secrets) : null);
+      after.set(index, outcome === "done" ? await capture(actor) : null);
     },
   };
   const { gen, now, ...runOpts } = opts;
-  const run = await runJourneyProgrammatically({ ...runOpts, observer });
+  // A fixture is known once it is built: its secret outputs refuse before setup, a hook's after it.
+  let fixture: MissionFixtures | undefined;
+  const fixtures = opts.fixtures === undefined ? {} : {
+    fixtures: (...a: Parameters<NonNullable<typeof opts.fixtures>>) => {
+      fixture = opts.fixtures?.(...a);
+      assertNoFixtureSecret(opts.id, fixture);
+      return fixture;
+    },
+  };
+  const run = await runJourneyProgrammatically({ ...runOpts, ...fixtures, observer });
+  if (fixture !== undefined && fixture.secrets().length > 0) throw new SecretBoundJourneyError(opts.id, ["a fixture secret"]);
   const reachedSteps = before.size;
   const replay: AnnotationDraft["replay"] = run.outcome === "quarantined"
-    ? { outcome: "stopped", reachedSteps, totalSteps: flat.length, reason: redactText(run.reason, secrets).slice(0, 2000) }
+    ? { outcome: "stopped", reachedSteps, totalSteps: flat.length, reason: run.reason.slice(0, 2000) }
     : { outcome: "completed", reachedSteps, totalSteps: flat.length };
 
   const m = journey.metadata;
-  const context = redactText(
-    m.goal ?? [m.name, m.description, journey.recording.intent].filter((s) => s !== undefined && s !== "").join(" — "),
-    secrets,
-  );
+  const context = m.goal ?? [m.name, m.description, journey.recording.intent].filter((s) => s !== undefined && s !== "").join(" — ");
   const clean = (s: string | null | undefined): string | undefined => {
-    const t = s === null || s === undefined ? "" : redactText(s, secrets).trim();
+    const t = s === null || s === undefined ? "" : s.trim();
     return t === "" ? undefined : t;
   };
 
@@ -208,7 +233,7 @@ export async function annotateJourney(opts: AnnotateJourneyOptions): Promise<Ann
   const steps: AnnotationDraft["steps"] = [];
   const stepLines: string[] = [];
   for (const s of flat) {
-    const described = redactText(describeStep(s.recorded.step), secrets);
+    const described = describeStep(s.recorded.step);
     const b = before.get(s.index);
     const needObjective = (s.recorded.objective ?? "").trim() === "";
     const needExpected = (s.recorded.expectedResult ?? "").trim() === "";
@@ -227,7 +252,6 @@ export async function annotateJourney(opts: AnnotateJourneyOptions): Promise<Ann
     } else if (b !== undefined && (needObjective || needExpected)) {
       const a = after.get(s.index) ?? null;
       const input = { journey: context, stepNumber: s.index + 1, totalSteps: flat.length, step: described, before: b, after: a };
-      assertNoSecretInPayload(input, secrets); // fail closed: nothing secret reaches a model
       const { output, provenance: p } = await gen.generate("journey.step", input);
       provenance = p;
       const draftObjective = needObjective ? clean(output.objective) : undefined;
@@ -246,7 +270,7 @@ export async function annotateJourney(opts: AnnotateJourneyOptions): Promise<Ann
         });
       }
     }
-    stepLines.push(`${s.index + 1}. ${described}${objective === undefined ? "" : ` — ${redactText(objective, secrets)}`}`.slice(0, 1200));
+    stepLines.push(`${s.index + 1}. ${described}${objective === undefined ? "" : ` — ${objective}`}`.slice(0, 1200));
   }
 
   let goal: string | undefined;
@@ -254,21 +278,20 @@ export async function annotateJourney(opts: AnnotateJourneyOptions): Promise<Ann
   const unverifiableCriteria: string[] = [];
   // #755: the assertions the Journey already makes (step postconditions and end state) — shown to the
   // model and the only other evidence a drafted success criterion may claim besides the final page.
-  const assertionTexts = journeyAssertions(journey).map((site) => redactText(explainCheck(site.check).text, secrets));
+  const assertionTexts = journeyAssertions(journey).map((site) => explainCheck(site.check).text);
   const needGoal = (m.goal ?? "").trim() === "";
   const needCriteria = (m.successCriteria ?? []).length === 0;
   if (needGoal || needCriteria) {
     const lastReached = [...before.keys()].sort((x, y) => y - x)[0];
     const finalPage = lastReached === undefined ? null : (after.get(lastReached) ?? before.get(lastReached) ?? null);
     const input = {
-      name: redactText(m.name, secrets).slice(0, 500),
-      ...(m.description === undefined ? {} : { description: redactText(m.description, secrets).slice(0, 2000) }),
-      ...(journey.recording.intent === undefined ? {} : { intent: redactText(journey.recording.intent, secrets).slice(0, 2000) }),
+      name: m.name.slice(0, 500),
+      ...(m.description === undefined ? {} : { description: m.description.slice(0, 2000) }),
+      ...(journey.recording.intent === undefined ? {} : { intent: journey.recording.intent.slice(0, 2000) }),
       steps: stepLines.slice(0, 200),
       assertions: assertionTexts.map((a) => a.slice(0, 500)).slice(0, 200),
       finalPage,
     };
-    assertNoSecretInPayload(input, secrets);
     const { output, provenance: p } = await gen.generate("journey.goal", input);
     provenance = p;
     if (needGoal) goal = clean(output.goal);
@@ -304,7 +327,6 @@ export async function annotateJourney(opts: AnnotateJourneyOptions): Promise<Ann
     ...(successCriteria === undefined ? {} : { successCriteria }),
     steps,
   });
-  assertNoSecretInPayload(draft, secrets, "journey annotation draft"); // the last line: never at rest
   const draftPath = annotationDraftPath(opts.dir, opts.id);
   await mkdir(dirname(draftPath), { recursive: true, mode: 0o700 });
   await writeFile(draftPath, `${JSON.stringify(draft, null, 2)}\n`, { mode: 0o600 });

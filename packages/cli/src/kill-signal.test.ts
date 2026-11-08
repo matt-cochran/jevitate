@@ -578,6 +578,19 @@ describe("kill-signal — no browser outlives the CLI (#326)", () => {
     expect(calls.exit).toEqual([129]);
     expect(calls.writeResult).toHaveLength(1);
   });
+
+  it("the parent's death is named in the partial result, with the switch that keeps a detached run going", () => {
+    const { deps, calls } = fakeDeps();
+    let parentGone: (() => void) | undefined;
+    armMissionKillSwitch({ recordingPath: "/tmp/explore-p.json" }, { ...deps, watchParent: (onGone) => (parentGone = onGone) });
+    parentGone?.();
+    expect(calls.writeResult[0]?.[3]).toMatchObject({
+      parentGone: true,
+      signal: "SIGHUP",
+      exitCode: 129,
+      reason: "the parent process went away after 0 steps, no signal was sent (set JEVITATE_PARENT_WATCHDOG=off to keep a detached run going)",
+    });
+  });
 });
 
 describe("watchParentDeath (#326)", () => {

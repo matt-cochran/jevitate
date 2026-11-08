@@ -109,9 +109,11 @@ function placeSelection(
  * Performs `edit` inside the contenteditable `locator` resolves to. Throws (fail-closed) when the
  * target is not a contenteditable or the anchor cannot be placed; the page is untouched then.
  */
-export async function applyTextEdit(page: Page, locator: Locator, edit: TextEdit): Promise<void> {
+export async function applyTextEdit(page: Page, locator: Locator, edit: TextEdit & { readonly beforeType?: () => void; readonly boundSecret?: boolean }): Promise<void> {
   const caret: "start" | "end" | null = edit.action === "insertBefore" ? "start" : edit.action === "insertAfter" ? "end" : null;
-  const placed = await locator.evaluate(placeSelection, { anchor: edit.anchor, caret });
+  // A bound secret stays on this element's document: a handle dies with it, where a locator would find the next page's.
+  const bound = edit.boundSecret === true ? await locator.elementHandle() : null;
+  const placed = bound !== null ? await bound.evaluate(placeSelection, { anchor: edit.anchor, caret }) : await locator.evaluate(placeSelection, { anchor: edit.anchor, caret });
   if (!placed.ok) throw new Error(`editText refused: ${placed.reason}`);
   if (edit.action === "format") {
     if (edit.format === undefined) throw new Error("editText refused: format has no `format`");
@@ -125,7 +127,27 @@ export async function applyTextEdit(page: Page, locator: Locator, edit: TextEdit
     if (edit.action === "replace" && placed.text !== "") await page.keyboard.press("Delete");
     return;
   }
-  await page.keyboard.type(value);
+  edit.beforeType?.();
+  if (edit.boundSecret !== true) {
+    await page.keyboard.type(value);
+    return;
+  }
+  // Real keys, so the app sees real input, one at a time, each only while this element's document is
+  // still there, still holds the focus and still passes the origin check. At most a key in flight is lost.
+  if (bound === null) throw new Error("editText refused: the field to type a secret parameter into is gone");
+  for (const key of value) {
+    const here = await bound.evaluate(holdsFocus).catch(() => false);
+    edit.beforeType?.();
+    if (!here) throw new Error("editText refused: the page left before a secret parameter was all typed; the rest was not");
+    await page.keyboard.type(key);
+  }
+}
+
+/** BROWSER CODE — is `el` still in its document, with the focus in it? */
+function holdsFocus(el: Element): boolean {
+  const root = el.getRootNode() as Document | ShadowRoot;
+  const active = root.activeElement;
+  return el.isConnected && active !== null && (active === el || el.contains(active));
 }
 
 /** A short human description of an edit (transcript/history), without the typed value. */

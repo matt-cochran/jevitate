@@ -11,7 +11,7 @@ import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { cpSync, rmSync } from "node:fs";
-import { writeBuildInfoModule } from "./scripts/generate-build-info.mjs";
+import { isReleaseBuild, writeBuildInfoModule } from "./scripts/generate-build-info.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -21,6 +21,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 // `./engine.ts` reads when `__JEVITATE_*__` isn't defined (the plain `tsc --build` dist that
 // `npm link` runs never goes through esbuild, so it never gets this `define` substitution).
 const { commit, tree, builtAt } = writeBuildInfoModule();
+// #784: only a bundle made under pack-release.sh's explicit signal is a release. This is a `define`,
+// not a generated-module value, so no `tsc --build` output can ever claim to be one.
+const releaseBuild = isReleaseBuild();
 
 const EXTERNAL = [
   "playwright",
@@ -49,6 +52,7 @@ await build({
     __JEVITATE_BUILD_COMMIT__: JSON.stringify(commit),
     __JEVITATE_BUILD_TREE__: JSON.stringify(tree),
     __JEVITATE_BUILT_AT__: JSON.stringify(builtAt),
+    __JEVITATE_RELEASE_BUILD__: JSON.stringify(releaseBuild),
   },
 });
 

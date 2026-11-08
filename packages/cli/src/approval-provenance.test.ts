@@ -390,6 +390,7 @@ describe("#437 init --codeowners", () => {
   async function repo(): Promise<string> {
     const r = join(root, "repo");
     await mkdir(join(r, ".git"), { recursive: true });
+    await writeFile(join(r, ".git", "HEAD"), "ref: refs/heads/main\n");
     return r;
   }
 

@@ -241,6 +241,7 @@ describe("#427 saving a storage state", () => {
   it("retries a transient git check-ignore failure once instead of warning", () => {
     const repo = join(dir, "repo");
     mkdirSync(join(repo, ".git"), { recursive: true });
+    writeFileSync(join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
     useFakeGit([128, 0]);
     expect(checkSaveTarget(join(repo, "auth", "s.json"), "--save").warnings).toEqual([]);
   });
@@ -248,6 +249,7 @@ describe("#427 saving a storage state", () => {
   it("warns 'could not be checked' when git check-ignore fails on both attempts", () => {
     const repo = join(dir, "repo");
     mkdirSync(join(repo, ".git"), { recursive: true });
+    writeFileSync(join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
     useFakeGit([128, 128]);
     expect(checkSaveTarget(join(repo, "auth", "s.json"), "--save").warnings[0]).toMatch(/could not be checked against \.gitignore/);
   });

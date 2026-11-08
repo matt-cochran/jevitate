@@ -1,3 +1,4 @@
+import { journeyReviewHash } from "./journey-review.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -60,7 +61,11 @@ beforeAll(async () => {
       ],
     },
   };
-  await new FsJourneyStore(join(root, "journeys")).put(journey);
+  const store = new FsJourneyStore(join(root, "journeys"));
+  await store.put(journey);
+  // #788: MCP runs a promoted Journey whose approval is current: approved as stored (saving mints step ids).
+  const saved = (await store.get("home"))!;
+  await store.put({ ...saved, metadata: { ...saved.metadata, approval: { contentHash: journeyReviewHash(saved), at: "2026-09-29T00:00:00.000Z" } } });
 });
 
 afterAll(async () => {

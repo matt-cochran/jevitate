@@ -47,13 +47,12 @@ test("the model only ranks: it sees {kind,before,after} facts and control summar
   const generate = vi.fn(async () => ({ output: { order: [1, 0], control: null }, provenance: {} as never }));
   const gen = { generate } as unknown as GenerationPort;
   const healer = makeEvidenceSelfHealer(gen, { inventory: async () => [control("link", "Create"), control("button", "Create", { testId: "tok-123" }), control("menuitem", "Create")] });
-  const p = await healer.proposeCandidates(request({ secrets: ["tok-123"], evidence: [{ ...evidence[0]!, hunk: "@@ -3 +3 @@ secret body" } as ChangeEvidenceRef] }));
+  const p = await healer.proposeCandidates(request({ evidence: [{ ...evidence[0]!, hunk: "@@ -3 +3 @@ secret body" } as ChangeEvidenceRef] }));
   expect(p.usage).toEqual({ modelCalls: 1 });
   expect(p.candidates.map((c) => c.step.kind === "click" && c.step.target.role)).toEqual(["button", "link", "menuitem"]);
   const [kind, input] = generate.mock.calls[0]! as unknown as [string, Record<string, unknown>];
   expect(kind).toBe("heal.rank");
   const sent = JSON.stringify(input);
-  expect(sent).not.toContain("tok-123");
   expect(sent).not.toContain("secret body");
   expect(sent).not.toContain("Toolbar.html");
   expect(input.evidence).toEqual([{ kind: "copy", before: "Create New", after: "Create" }]);

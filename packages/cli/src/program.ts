@@ -7,7 +7,7 @@ import { registerAiCommands } from "./ai-cli.js";
 import { registerCheckCommand } from "./check-cli.js";
 import { registerReportCommands } from "./report-cli.js";
 import { registerInvariantsCommands } from "./invariants-validate.js";
-import { currentEngineInfo, formatVersion } from "./engine.js";
+import { currentBuildTree, currentEngineInfo, markedVersion, formatVersion, type EngineInfo } from "./engine.js";
 import { EXIT_CODES } from "./exit-codes.js";
 import { commandPath, trackActionCommand } from "./cli-refusal.js";
 import {
@@ -53,19 +53,16 @@ export type { CliDeps, RecordCliDeps } from "./cli-shared.js";
 export { fakeDoneJudge } from "./cli-shared.js";
 
 /**
- * `--version`'s display string: the published semver alone once that alone identifies the
- * build (a real npm install), plus commit/tree/builtAt (#534 added the tree) whenever the build could determine them (a
- * dev checkout / `npm link`ed working tree) — issue #83, "`jevitate --version` stays `0.1.0`
- * across 3 rebuilds in one hour ... nothing says which commit produced a result." `"unknown"`
- * (never shown here at all — omitted instead) rather than a fabricated commit/time.
+ * `--version`'s display string: `x.y.z (commit <sha>, tree <tree>, built <iso>)`, so results from
+ * different builds can be told apart (#83, tree #534), with the source marker (`markedVersion`, #784).
  */
-function versionString(): string {
-  return formatVersion(currentEngineInfo());
+export function versionString(engine: EngineInfo = currentEngineInfo(), tree: string = currentBuildTree(), release?: boolean): string {
+  return formatVersion({ ...engine, version: markedVersion(engine, release) }, tree);
 }
 
 export function buildProgram(deps: CliDeps): Command {
   const program = new Command();
-  program.name("jevitate").description("Autonomous browser testing that turns discovered bugs into deterministic regression tests").version(versionString());
+  program.name("jevitate").description("Browser automation and testing in one tool: parameterized Journeys that do real work in your app, and autonomous exploration that turns discovered bugs into deterministic regression tests").version(versionString());
   // #218: the shared refusal path (cli-refusal.ts) needs to know which command is running.
   trackActionCommand(program);
   // #434/#435: the readiness and catalog-analysis pre-approval analyzers (once per process).

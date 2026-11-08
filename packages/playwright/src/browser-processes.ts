@@ -188,13 +188,16 @@ export function ownerMarkerArg(pid: number = process.pid, table: ProcessTable = 
 }
 
 /**
- * The owner a command line's marker names, or undefined for an unmarked process. Matched as a
- * whitespace-delimited token anywhere in an argument: Chromium rewrites its own process title into
- * ONE space-joined `argv[0]`, so `/proc/<pid>/cmdline` of a running browser has no separators.
+ * The owner a command line's marker names, or undefined for an unmarked process. The marker is a real
+ * switch, so it must be a WHOLE argument. Chromium rewrites its own process title into ONE
+ * space-joined `argv[0]` (`/proc/<pid>/cmdline` of a running browser then has no separators), so a
+ * single-argument command line is re-split on whitespace before matching. A marker merely embedded
+ * in some other argument (a shell script, a log line) is not a switch and never matches.
  */
 export function parseOwnerMarker(argv: readonly string[]): OwnerMarker | undefined {
-  for (const a of argv) {
-    const m = /(?:^|\s)--jevitate-owner=(\d+)@(\w+)(?=\s|$)/.exec(a);
+  const tokens = argv.length === 1 ? argv[0]!.split(/\s+/) : argv;
+  for (const a of tokens) {
+    const m = /^--jevitate-owner=(\d+)@(\w+)$/.exec(a);
     if (m !== null) return { pid: Number(m[1]), start: m[2]! };
   }
   return undefined;
@@ -401,7 +404,8 @@ function atomicsSleep(ms: number): void {
 /**
  * #326: closes every browser THIS process launched, SYNCHRONOUSLY — for the kill switch, which must
  * not yield the event loop before it exits (kill-signal.ts). Each marked root (`--jevitate-owner=`
- * naming this pid) and every descendant is sent SIGTERM — the root's whole process group first
+ * naming this pid AND its start token, so a browser left by an earlier process whose pid was reused
+ * never matches) and every descendant is sent SIGTERM — the root's whole process group first
  * (Playwright launches Chromium `detached`, as the leader of its own group, so a signal to the CLI's
  * group never reaches it) — then, after at most `graceMs`, SIGKILL for whatever still runs. Only
  * marked processes and their descendants are ever signalled. Never throws: a teardown is best effort
@@ -423,8 +427,9 @@ export function terminateOwnBrowsersSync(deps: OwnBrowserTeardownDeps = {}): Own
   }
   if (procs === undefined) return { supported: false, roots: [], killed: [] };
   const listing = procs;
+  const start = table.startOf(ownerPid) ?? "0";
   const roots = markedBrowsers(listing)
-    .filter((b) => b.owner.pid === ownerPid)
+    .filter((b) => b.owner.pid === ownerPid && (b.owner.start === "0" || start === "0" || b.owner.start === start))
     .map((b) => b.pid);
   if (roots.length === 0) return { supported: true, roots: [], killed: [] };
   let tree: number[];

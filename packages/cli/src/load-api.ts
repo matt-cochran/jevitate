@@ -1,3 +1,7 @@
+import { assertJourneyRunnable } from "@jevitate/mcp-facade";
+import { inMcpInvocation } from "./approval-provenance.js";
+import { assertMcpRunnable } from "./journey-stale-api.js";
+import { prepareMcpRunGuard, RunGuardRefusedError, type McpRunGuard } from "./mcp-run-guard.js";
 import { FsJourneyStore, JourneyRegistry, journeyParamSchema, secretParamNames, secretParamValues, validateParams } from "@jevitate/journey";
 import { createHttpProbe, httpCheckRefs } from "./http-probe.js";
 import type { SiteGateDeps } from "@jevitate/runtime";
@@ -82,6 +86,10 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
   if (!stored) {
     throw new UnknownLoadJourneyError(`unknown journey '${opts.id}'`);
   }
+  // #788: `load run` replays a promoted Journey, as its help says — on both surfaces. A burst of writes
+  // is nobody's way to try a draft (`journey run` is). Over MCP a stale approval refuses too.
+  if (inMcpInvocation()) await assertMcpRunnable(stored, opts.dir);
+  else if (stored.metadata.promoted !== true) assertJourneyRunnable(opts.id, { promoted: false, approval: "unrecorded" });
   const journey = applyJourneyEnvironment(stored, opts.environment);
   const allowedOrigins = opts.environment === undefined ? [journey.recording.site] : [...opts.environment.allowedOrigins];
 
@@ -95,12 +103,16 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
 
   validateParams(journeyParamSchema(journey), opts.params);
 
+  // #789: under an MCP invocation, each actor's session is guarded; a refusal ends the whole test, below.
+  const guardFor = (): McpRunGuard | undefined => prepareMcpRunGuard({ site: journey.recording.site, allowedOrigins, environment: opts.environment });
+  guardFor();
+  let refusal: unknown;
   const policy = opts.policy ?? safeRunPolicy();
   const browserPortFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   // #488: a relative `upload` fixture resolves against the project root, never the process cwd.
   const fixtureBaseDir = journeyFixtureBaseDir();
 
-  return runLoadTest({
+  const report = await runLoadTest({
     targetOrigin: journey.recording.site,
     authorizedOrigins: opts.authorizedOrigins,
     concurrency: opts.concurrency,
@@ -122,6 +134,8 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
       );
       // #400: a load iteration means the same as a `journey run` — the Journey's end state and
       // each step's `expectRequests` are judged, so a replay whose checks fail is not an ok run.
+      const runGuard = guardFor();
+      await runGuard?.arm(session, opts.params);
       const refs = httpCheckRefs({ params: opts.params, secretParams: secretParamNames(journey, opts.params) });
       const outcomeChecks = new JourneyOutcomeChecks(session.page, journey, {
         secrets: secretParamValues(journey, opts.params),
@@ -131,7 +145,8 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
       });
       const observer = outcomeChecks.observer();
       // #565: a step expectation's references resolve from the same names (a secret one refused).
-      const interpreter = observer === undefined ? new RecordingInterpreter({ fixtureBaseDir, refLookup: refs }) : new RecordingInterpreter({ observer, fixtureBaseDir, refLookup: refs });
+      const guardOption = runGuard === undefined ? {} : { actionGuard: runGuard };
+      const interpreter = observer === undefined ? new RecordingInterpreter({ fixtureBaseDir, refLookup: refs, ...guardOption }) : new RecordingInterpreter({ observer, fixtureBaseDir, refLookup: refs, ...guardOption });
       const runner = new JourneyRunner(actor, interpreter);
 
       // `runLoadTest` calls `run()` exactly `iterationsPerActor` times for
@@ -148,7 +163,12 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
       return {
         run: async () => {
           try {
+            // #789: once refused, no iteration repeats the Journey's earlier writes on the way to the same refusal.
+            if (refusal !== undefined) throw refusal;
             return await outcomeChecks.run(actor, () => runner.run({ journey, params: opts.params, policy }));
+          } catch (err) {
+            if (err instanceof RunGuardRefusedError) refusal = err;
+            throw err;
           } finally {
             remainingIterations--;
             if (remainingIterations <= 0) {
@@ -159,4 +179,7 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
       };
     },
   });
+  // A refused run is not a data point: the report would read as ordinary failed iterations.
+  if (refusal !== undefined) throw refusal;
+  return report;
 }

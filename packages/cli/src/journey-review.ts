@@ -1,7 +1,10 @@
 import { contentHash, legacyContentHash } from "@jevitate/domain";
 import type { JourneyProposal, JourneyReviewProposal } from "@jevitate/journey";
 import {
-  SECRET_PARAM_NAME_RE,
+  isSecretName,
+  journeyApprovalMatches,
+  journeyLegacyReviewHash,
+  journeyReviewHash,
   describeStep,
   flatJourneySteps,
   isNoClaimExpect,
@@ -34,7 +37,7 @@ import type { LocatorHealthDetail } from "./locator-health.js";
 import { evaluateMutationProofPolicy, type MutationProofPolicyMode, type ProofWaiver } from "./mutation-proof-policy.js";
 import { SafetyPolicy, describeCheck, explainCheck, type SafetyConfig } from "@jevitate/explore";
 import { navigateUrlParams, writeClassifier, type Step, type TargetDescriptor, type ValueOrVar } from "@jevitate/recording";
-import { journeyProofHashForContext, type JourneyProofContext } from "./journey-proof-context.js";
+import { currentJourneyProofHash, type JourneyProofContext } from "./journey-proof-context.js";
 import {
   createSheetWriter,
   finishSheet,
@@ -64,31 +67,7 @@ import {
  * as a credential is shown «redacted», and a secret reference is listed by field and manager only.
  */
 
-/** The approval bookkeeping a review hash leaves out: promoting writes them, so they cannot be part of what was reviewed. */
-const BOOKKEEPING = ["promoted", "approval", "acceptedWeak"] as const;
-
-/**
- * #432: the content hash a review sheet shows and an approval binds to — `contentHash` (the same
- * function annotation drafts are bound with) of the Journey WITHOUT its approval bookkeeping
- * (`promoted`, `approval`, `acceptedWeak`), so promoting does not itself change what was approved.
- */
-export function journeyReviewHash(journey: Journey): string {
-  const metadata: Record<string, unknown> = { ...journey.metadata };
-  for (const k of BOOKKEEPING) delete metadata[k];
-  return contentHash({ metadata, recording: journey.recording });
-}
-
-/** Pre-portable-key-order hash, used only to honor an approval written by an older Jevitate. */
-export function journeyLegacyReviewHash(journey: Journey): string {
-  const metadata: Record<string, unknown> = { ...journey.metadata };
-  for (const k of BOOKKEEPING) delete metadata[k];
-  return legacyContentHash({ metadata, recording: journey.recording });
-}
-
-export function journeyApprovalMatches(journey: Journey): boolean {
-  const approved = journey.metadata.approval?.contentHash;
-  return approved !== undefined && (approved === journeyReviewHash(journey) || approved === journeyLegacyReviewHash(journey));
-}
+export { journeyApprovalMatches, journeyLegacyReviewHash, journeyReviewHash };
 
 /** #432: the last `journey verify --mutate` verdict, as recorded beside the Journey. */
 export interface JourneyVerifyRecord {
@@ -105,10 +84,23 @@ export interface JourneyVerifyRecord {
   readonly proofContext?: JourneyProofContext;
   readonly verdict: string;
   readonly reason?: string;
+  /** #787: the proof resumed, reusing this many pairs from an interrupted run of the same configuration. Absent otherwise. */
+  readonly reusedPairs?: number;
   readonly summary: Readonly<Record<string, number>>;
   readonly at: string;
   /** #616: the declared targeted-proof plans the automatic bound refused, read by readiness guidance. */
   readonly suggestedTargetedProofs?: readonly JourneyTargetedProofPlan[];
+}
+
+/**
+ * #765: a pending annotation draft, as a review sheet shows it — its status, sidecar path and the
+ * next command only, never the drafted text. `current` means the Journey is unchanged since the
+ * draft was made (so `--approve` applies it); `stale` means re-drafting is required.
+ */
+export interface JourneyAnnotationDraft {
+  readonly status: "current" | "stale";
+  readonly path: string;
+  readonly next: string;
 }
 
 export interface JourneyReviewContext {
@@ -137,6 +129,8 @@ export interface JourneyReviewContext {
   readonly locatorHealth?: LocatorHealthDetail;
   /** #467: the approval is stale and the only change is minted step ids (`isStepIdOnlyChange`), computed by the caller. */
   readonly stepIdOnly?: boolean;
+  /** #765: the pending annotation draft status (`journey-review-api` loads it; `buildJourneyReview` stays pure). */
+  readonly annotationDraft?: JourneyAnnotationDraft;
 }
 
 function targetOf(step: Step): TargetDescriptor | undefined {
@@ -157,7 +151,7 @@ function reviewTarget(t: TargetDescriptor | undefined): JourneyReviewStep["targe
 
 /** Does the field read as a credential (its name, label or test id)? Its literal value is then never shown. */
 function secretLooking(t: TargetDescriptor): boolean {
-  return [t.name, t.label, t.testId, t.text, t.display?.name].some((s) => s !== undefined && SECRET_PARAM_NAME_RE.test(s));
+  return [t.name, t.label, t.testId, t.text, t.display?.name].some((s) => s !== undefined && isSecretName(s));
 }
 
 function hideValue(v: ValueOrVar): ValueOrVar {
@@ -459,7 +453,7 @@ function multisetDiff(before: readonly string[], after: readonly string[]): { ad
   return { added, removed };
 }
 
-function buildVerify(journey: Journey, hash: string, rec: JourneyVerifyRecord | null | undefined): JourneyReviewVerify {
+function buildVerify(journey: Journey, hash: string, rec: JourneyVerifyRecord | null | undefined, readRequests: readonly string[] | undefined): JourneyReviewVerify {
   if (rec === null || rec === undefined) {
     return { status: "not-verified", hint: `run \`jevitate journey verify ${journey.metadata.id} --mutate\` to prove each assertion can fail` };
   }
@@ -468,7 +462,7 @@ function buildVerify(journey: Journey, hash: string, rec: JourneyVerifyRecord | 
     verdict: rec.verdict,
     at: rec.at,
     // #523: an executable-content change stales the proof; an old record without it compares the full hash.
-    stale: rec.journeyId !== journey.metadata.id || (rec.proofHash === undefined ? rec.contentHash !== hash : rec.proofHash !== journeyProofHashForContext(journey, rec.proofContext)),
+    stale: rec.journeyId !== journey.metadata.id || (rec.proofHash === undefined ? rec.contentHash !== hash : rec.proofHash !== currentJourneyProofHash(journey, rec.proofContext, readRequests)),
     ...(rec.reason === undefined ? {} : { reason: rec.reason }),
     summary: { ...rec.summary },
     ...(rec.suggestedTargetedProofs === undefined ? {} : { suggestedTargetedProofs: rec.suggestedTargetedProofs.map((p) => ({ ...p, relax: [...p.relax] })) }),
@@ -483,7 +477,11 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
   const flat = flatJourneySteps(journey);
 
   const missingIntent: string[] = [];
-  const annotate = `draft it with \`jevitate journey annotate ${m.id}\``;
+  // #765: with a current draft there is nothing left to draft — point at the approval instead.
+  const annotate =
+    ctx.annotationDraft?.status === "current"
+      ? `approve it with \`jevitate journey annotate ${m.id} --approve\``
+      : `draft it with \`jevitate journey annotate ${m.id}\``;
   if ((m.goal ?? "").trim() === "") missingIntent.push(`no goal — ${annotate}`);
   if ((m.successCriteria ?? []).length === 0) missingIntent.push(`no success criteria — ${annotate}`);
   const withoutObjective = steps.filter((s) => s.objective === undefined).length;
@@ -565,8 +563,8 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
       ...(m.acceptedWeak === undefined ? {} : { acceptedWeak: { reason: m.acceptedWeak.reason, rules: [...m.acceptedWeak.rules] } }),
       // #616: the declared targeted-proof plans, copied out of the metadata for review.
       ...(m.targetedProofs === undefined || m.targetedProofs.length === 0 ? {} : { targetedProofs: m.targetedProofs.map((p) => ({ check: p.check, mustFailWhen: p.mustFailWhen, relax: [...p.relax] })) }),
-      verify: buildVerify(journey, hash, ctx.lastVerify),
-      policy: evaluateMutationProofPolicy({ journey, contentHash: hash, record: ctx.lastVerify, mode: ctx.proofPolicy, waiver: ctx.proofWaiver }),
+      verify: buildVerify(journey, hash, ctx.lastVerify, ctx.safety?.readRequests),
+      policy: evaluateMutationProofPolicy({ journey, contentHash: hash, record: ctx.lastVerify, mode: ctx.proofPolicy, waiver: ctx.proofWaiver, readRequests: ctx.safety?.readRequests }),
     },
     changeSinceApproval: buildChange(journey, hash, ctx.approvedSnapshot, ctx.stepIdOnly === true),
     ...(m.approval === undefined
@@ -590,6 +588,8 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
     ...(ctx.locatorHealth === undefined ? {} : { locatorHealth: locatorHealthOf(ctx.locatorHealth) }),
     ...(ctx.proposal === undefined ? {} : { proposal: buildProposal(ctx.proposal, m.id) }),
     ...(anchors.length === 0 ? {} : { anchors }),
+    // #765: the pending draft's status, when the API loaded one (the drafted text is never here).
+    ...(ctx.annotationDraft === undefined ? {} : { annotationDraft: ctx.annotationDraft }),
     contentHash: hash,
   };
   return { ...review, attention: buildAttention(review, endStateExplained.filter((e) => e.weak).map((e) => e.text), m.goal) };
@@ -615,7 +615,7 @@ function buildAttention(r: Omit<JourneyReview, "attention">, weakEndState: reado
   else if (weakSteps.length > 1) warn(`Steps ${stepRanges(weakSteps)} prove nothing: their checks pass even if the step fails`);
   for (const t of weakEndState) warn(`An end-state check proves nothing: ${t}`);
 
-  const annotate = `jevitate journey annotate ${r.id}`;
+  const annotate = r.annotationDraft?.status === "current" ? r.annotationDraft.next : `jevitate journey annotate ${r.id}`;
   const noGoal = (goal ?? "").trim() === "";
   const noCriteria = r.summary.successCriteria.length === 0;
   if (noGoal && noCriteria) warn("No goal or success criteria written", annotate);
@@ -662,6 +662,12 @@ function buildAttention(r: Omit<JourneyReview, "attention">, weakEndState: reado
     const p = r.proposal;
     if (p.stale || p.problem !== undefined) warn(`A self-heal proposal is pending but cannot be accepted: ${p.stale ? "the Journey changed since" : p.problem}`);
     else warn(`A self-heal proposal changes ${plural(p.steps.length, "step")}`, p.acceptCommand);
+  }
+  // #765: a draft awaiting approval (or one staled by a changed Journey) is surfaced with its next
+  // command — never the drafted text. Advisory: it must not turn a plain review or --strict into a failure.
+  if (r.annotationDraft !== undefined) {
+    if (r.annotationDraft.status === "current") info("An annotation draft is pending — approve it to write the reviewed goal and step objectives", r.annotationDraft.next);
+    else info("An annotation draft is stale: the Journey changed since it was made — re-draft it", r.annotationDraft.next);
   }
   const v = r.proof.verify;
   if (v.status === "not-verified") info("Not mutation-tested", `jevitate journey verify ${r.id} --mutate`);

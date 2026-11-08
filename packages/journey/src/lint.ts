@@ -5,7 +5,7 @@ import { assertionRefs, fixtureEscapesRoot, fixtureRootRefusal, fixtureSensitive
 import type { Journey } from "./journey.js";
 import { isNoClaimExpect, isOwnTargetVisible, journeyAssertions, type JourneyAssertionSite } from "./assertions.js";
 import { anchorLintIssues, type AnchorRuleCode } from "./anchor-rules.js";
-import { secretParamNames } from "./intent.js";
+import { isSecretName, loadRefusedParamNames } from "./intent.js";
 
 /**
  * #401: the assertion-strength rules this lint reports; #466: the 0.10 anchor rules (`AnchorRuleCode`,
@@ -13,6 +13,7 @@ import { secretParamNames } from "./intent.js";
  * `serves-outcome`, from catalog-refs.ts).
  */
 export type JourneyLintRule =
+  | "secret-false-credential-name"
   | "own-target-visible"
   | "write-without-effect"
   | "visibility-only"
@@ -165,17 +166,19 @@ function writeRequestsOf(recorded: RecordedStep, classify: WriteClassifier): Wri
   return out;
 }
 
+const READ_METHODS = /^(?:GET|HEAD|OPTIONS)$/i;
+
 function isWriteStep(recorded: RecordedStep, classify: WriteClassifier, requests: readonly WriteRequest[]): boolean {
   if (requests.length > 0) return true;
   // (b) a step's own request expectation names a write method for its path.
   if ((recorded.expectRequests ?? []).some((check) => classify({ method: check.method, path: check.pathGlob }))) return true;
-  // A recorded request is stronger evidence than a page delta.  When every
-  // recorded request is an explicitly configured read, do not turn the step
-  // back into a write merely because loading data changed the page.  Keep the
-  // conservative delta fallback only where there is no parseable network
-  // evidence at all: an unknown or malformed request must never become safe.
-  const hasRecordedRequest = (recorded.delta?.requests ?? []).some((line) => REQUEST_LINE.test(line.trim()));
-  if (hasRecordedRequest || (recorded.expectRequests?.length ?? 0) > 0) return false;
+  // A request the configuration calls a read outranks a page delta: loading data changes the page,
+  // and that must not turn a configured read POST back into a write. Only such a request does: a GET
+  // says nothing about what else the step did, so it keeps the conservative fallback below (#763).
+  const configuredRead = (method: string, path: string): boolean => !READ_METHODS.test(method) && !classify({ method, path });
+  const recordedLines = (recorded.delta?.requests ?? []).map((line) => REQUEST_LINE.exec(line.trim()));
+  if (recordedLines.some((m) => m !== null && configuredRead(m[1]!, m[2]!))) return false;
+  if ((recorded.expectRequests ?? []).some((check) => configuredRead(check.method, check.pathGlob))) return false;
   // (c) a state-changing step whose delta changed the page, even if the request was not recorded.
   return recorded.delta?.verdict === "relevant-change" && STATE_CHANGING.has(recorded.step.kind);
 }
@@ -204,7 +207,7 @@ function isEffectSite(site: JourneyAssertionSite, step: Step | undefined, refsBo
 export function assertionRefsBound(journey: Journey, a: Assertion): boolean {
   const refs = assertionRefs(a);
   if (refs.length === 0) return true;
-  const secret = new Set(secretParamNames(journey));
+  const secret = new Set(loadRefusedParamNames(journey));
   const bound = new Set([...journey.metadata.params, ...(journey.metadata.parameters ?? []).map((p) => p.name)].filter((n) => !secret.has(n)));
   for (const page of journey.recording.pages) {
     for (const r of page.steps) {
@@ -287,6 +290,17 @@ export function lintJourney(journey: Journey, opts: JourneyLintOptions = {}): Jo
   const lastWrite = isWrite.lastIndexOf(true) + 1; // 0 when there is no write step
 
   const findings: JourneyLintFinding[] = [];
+
+  // Where a person approves it: this declaration is what lets the value through MCP, unredacted.
+  for (const p of journey.metadata.parameters ?? []) {
+    if (p.secret !== false || !isSecretName(p.name)) continue;
+    findings.push({
+      rule: "secret-false-credential-name",
+      level: "warning",
+      message: `parameter ${p.name} reads as a credential and declares secret: false: once a person approves this Journey, its value goes through MCP and is not redacted`,
+      fix: "approve only if the value is not a credential; otherwise remove secret: false",
+    });
+  }
 
   const lintTarget = (target: TargetDescriptor, where: string, step?: number): void => {
     const problem = targetDescriptorSelectorProblem(target);

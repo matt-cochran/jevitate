@@ -21,8 +21,8 @@ useSkippingTime({ per: "all" });
  * #246 served e2e: `jevitate journey annotate` replays a Journey in a real browser against a served
  * page, drafts each step's objective with a deterministic fake generator into a SIDECAR (the Journey
  * file is byte-for-byte untouched), `--approve` writes the reviewed draft, an approval against a
- * Journey that changed since the draft is refused, and a secret parameter's value never reaches the
- * model, the draft, the Journey or the output.
+ * Journey that changed since the draft is refused, and a Journey needing a secret is refused before the
+ * model.
  */
 
 const SECRET = "S3cr3t-Tok-9";
@@ -74,8 +74,8 @@ function tokenJourney(): Journey {
       id: "token",
       name: "Save an API token",
       promoted: false,
-      params: ["apiToken"],
-      parameters: [{ name: "apiToken", description: "the token to save", secret: true }],
+      params: ["note"],
+      parameters: [{ name: "note", description: "the token to save" }],
       createdAtIso: "2026-09-28T00:00:00.000Z",
     },
     recording: {
@@ -87,8 +87,8 @@ function tokenJourney(): Journey {
           steps: [
             { step: { kind: "navigate", url: "/app", expect: { kind: "visible", target: { role: "heading", name: "Settings" } } } },
             {
-              step: { kind: "fill", target: { label: "API token" }, value: { var: "apiToken" }, expect: { kind: "visible", target: { label: "API token" } } },
-              variableName: "apiToken",
+              step: { kind: "fill", target: { label: "API token" }, value: { var: "note" }, expect: { kind: "visible", target: { label: "API token" } } },
+              variableName: "note",
             },
             { step: { kind: "click", target: { role: "button", name: "Save" }, expect: { kind: "textIncludes", target: { testId: "status" }, text: "Saved" } } },
           ],
@@ -133,7 +133,7 @@ async function cli(journeysDir: string, args: string[], gen?: GenerationPort): P
 
 describe("jevitate journey annotate — served (#246)", () => {
   it(
-    "drafts an objective per step into the sidecar, never touches the Journey, and never leaks a secret param",
+    "drafts an objective per step into the sidecar and never touches the Journey",
     async () => {
       const journeysDir = join(dir, "j1");
       await new FsJourneyStore(journeysDir).put(tokenJourney());
@@ -141,7 +141,7 @@ describe("jevitate journey annotate — served (#246)", () => {
       const before = await readFile(journeyFile, "utf8");
       const { gen, seen } = recordingFake();
 
-      const r = await cli(journeysDir, ["journey", "annotate", "token", "--param", `apiToken=${SECRET}`, "--json"], gen);
+      const r = await cli(journeysDir, ["journey", "annotate", "token", "--param", `note=${SECRET}`, "--json"], gen);
       expect(r.exitCode).toBe(0);
       const env = JSON.parse(r.out) as { ok: boolean; data: { draftPath: string; replay: unknown; drafted: unknown; proposed: unknown[] } };
       expect(env.ok).toBe(true);
@@ -155,25 +155,18 @@ describe("jevitate journey annotate — served (#246)", () => {
       const draft = JSON.parse(draftRaw) as { steps: Array<{ index: number; objective: string; expectedResult: string }>; goal: string };
       expect(draft.steps.map((s) => s.index)).toEqual([0, 1, 2]);
       expect(draft.steps.every((s) => s.objective.length > 0)).toBe(true);
-      expect(draft.steps[1]!.objective).toContain("<param apiToken>");
+      expect(draft.steps[1]!.objective).toContain("<param note>");
       expect(draft.goal).toBe('Complete "Save an API token" (3 steps).');
-      // Before/after evidence: after Save the page heading showed the token — redacted everywhere.
-      expect(draft.steps[2]!.expectedResult).toBe('The page shows "Saved token «redacted»".');
-
-      // The secret never reached the model, the draft file or the output.
+      // Before/after evidence: after Save the page heading showed the value.
+      expect(draft.steps[2]!.expectedResult).toBe(`The page shows "Saved token ${SECRET}".`);
       expect(seen.length).toBe(4); // 3 × journey.step + 1 × journey.goal
-      expect(JSON.stringify(seen)).not.toContain(SECRET);
-      expect(JSON.stringify(seen)).toContain("«redacted»");
-      expect(draftRaw).not.toContain(SECRET);
-      expect(r.out + r.err).not.toContain(SECRET);
 
-      // `journey run` masks the secret param in its output and reports steps without objectives (informational).
-      const run = await cli(journeysDir, ["journey", "run", "token", "--param", `apiToken=${SECRET}`, "--json"]);
+      // `journey run` reports steps without objectives (informational).
+      const run = await cli(journeysDir, ["journey", "run", "token", "--param", `note=${SECRET}`, "--json"]);
       expect(run.exitCode).toBe(0);
-      expect(run.out).not.toContain(SECRET);
       const runEnv = JSON.parse(run.out) as { data: { outcome: string; output: Record<string, string>; intent: { steps: number; withoutObjective: number } } };
       expect(runEnv.data.outcome).toBe("ok");
-      expect(runEnv.data.output.apiToken).toBe("«redacted»");
+      expect(runEnv.data.output.note).toBe(SECRET);
       expect(runEnv.data.intent).toMatchObject({ steps: 3, withoutObjective: 3 });
 
       // Approval (the human gate) writes the draft into the Journey, then removes the draft.
@@ -186,13 +179,24 @@ describe("jevitate journey annotate — served (#246)", () => {
       expect(annotated.metadata.goal).toBe('Complete "Save an API token" (3 steps).');
       expect(annotated.metadata.promoted).toBe(false); // approval annotates; it never promotes
       expect(annotated.recording.pages[0]!.steps.map((s) => s.objective)).toEqual(draft.steps.map((s) => s.objective));
-      expect(readFileSync(journeyFile, "utf8")).not.toContain(SECRET);
 
-      const rerun = await cli(journeysDir, ["journey", "run", "token", "--param", `apiToken=${SECRET}`, "--json"]);
+      const rerun = await cli(journeysDir, ["journey", "run", "token", "--param", `note=${SECRET}`, "--json"]);
       expect((JSON.parse(rerun.out) as { data: { intent: { withoutObjective: number } } }).data.intent.withoutObjective).toBe(0);
     },
     120_000,
   );
+
+  it("a Journey needing a secret parameter is refused by name, and no model call goes out", async () => {
+    const journeysDir = join(dir, "j-secret");
+    const secret = tokenJourney();
+    secret.metadata.parameters = [{ name: "note", description: "the token to save", secret: true }];
+    await new FsJourneyStore(journeysDir).put(secret);
+    const { gen, seen } = recordingFake();
+    const r = await cli(journeysDir, ["journey", "annotate", "token", "--param", `note=${SECRET}`, "--json"], gen);
+    expect(JSON.parse(r.out)).toMatchObject({ ok: false, error: { code: "E_MODEL_REFUSED_SECRET" } });
+    expect(seen).toEqual([]);
+    expect(r.out + r.err).not.toContain(SECRET);
+  }, 120_000);
 
   it(
     "approval refuses a stale draft (the Journey changed since) and writes nothing",
@@ -200,7 +204,7 @@ describe("jevitate journey annotate — served (#246)", () => {
       const journeysDir = join(dir, "j2");
       const store = new FsJourneyStore(journeysDir);
       await store.put(tokenJourney());
-      const r = await cli(journeysDir, ["journey", "annotate", "token", "--param", `apiToken=${SECRET}`, "--json"], recordingFake().gen);
+      const r = await cli(journeysDir, ["journey", "annotate", "token", "--param", `note=${SECRET}`, "--json"], recordingFake().gen);
       expect(r.exitCode).toBe(0);
 
       // Someone edits the Journey after the draft was made.

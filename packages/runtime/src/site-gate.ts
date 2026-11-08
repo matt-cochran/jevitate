@@ -5,7 +5,7 @@ import { PaceInteractions } from "@jevitate/screenplay";
 import { flattenRecording, isWriteStep } from "./self-heal.js";
 
 /**
- * The site-policy gate for a Journey run (recovered from the removed ActionRunner, see approach.md).
+ * The site-policy gate for a Journey run (recovered from the removed ActionRunner, see docs/design/approach.md).
  * An operator's `jevitate site policy set <origin>` declares, per site and account:
  *
  *  - `interaction` — human-like pacing (think time, typing speed, reading time) applied to every

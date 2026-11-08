@@ -161,7 +161,7 @@ interface PlanReport {
   mutations: { kind: string; step: number; id: string }[];
   pairs: { site: string; check: string; mutation: string; declared?: true }[];
   assertions: { site: string; check: string; mutations: string[] }[];
-  summary: { mutations: number; pairs: number; assertions: number; unpaired: number; minimumReplays: number };
+  summary: { mutations: number; pairs: number; assertions: number; unpaired: number; minimumReplays: number; writeReplays: number };
 }
 
 async function verify(j: Journey, extra: string[] = []): Promise<{ exitCode: number | undefined; report: Report; out: string }> {
@@ -193,7 +193,7 @@ describe("journey verify --mutate (#402, served)", () => {
       expect.objectContaining({ site: "step:3", mutation: "block-write:3" }),
     ]);
     expect(report.assertions.find((assertion) => assertion.site === "step:1")?.mutations).toEqual([]);
-    expect(report.summary).toEqual({ mutations: 2, pairs: 2, assertions: 3, unpaired: 2, minimumReplays: 3 });
+    expect(report.summary).toEqual({ mutations: 2, pairs: 2, assertions: 3, unpaired: 2, minimumReplays: 5, writeReplays: 3 });
   });
 
   it("a weak Journey: the save step's own-target-visible expect still passes when the save is skipped or blocked — insensitive, exit 1", async () => {
@@ -215,7 +215,8 @@ describe("journey verify --mutate (#402, served)", () => {
     const { report } = await verify(weak("weak-fx"), ["--json", "--fixtures", file]);
     // base + skip:3 + block-write:3
     expect(report.mutations).toHaveLength(2);
-    expect(fxLog).toEqual(["setup", "restore", "setup", "restore", "setup", "restore"]);
+    // The base replay, the independence replay, two mutated replays, and the closing replay as recorded.
+    expect(fxLog).toEqual(["setup", "restore", "setup", "restore", "setup", "restore", "setup", "restore", "setup", "restore"]);
   }, 240_000);
 
   it("a strengthened Journey: the step-request status and the reloadThen are sensitive under skip and block-write; the valueEquals under stale-value — exit 0", async () => {
@@ -296,9 +297,9 @@ describe("journey verify --mutate (#402, served)", () => {
     const r = await cli(journeysDir, ["journey", "verify", "refuse", "--json"]);
     expect(r.exitCode).toBe(64);
     expect(r.out).toMatch(/E_JOURNEY_VERIFY_ARGS/);
-    expect(r.out).toMatch(/exactly one of --plan or --mutate/);
+    expect(r.out).toMatch(/exactly one of --plan, --mutate or --status/);
     const both = await cli(journeysDir, ["journey", "verify", "refuse", "--plan", "--mutate", "--json"]);
     expect(both.exitCode).toBe(64);
-    expect(both.out).toMatch(/exactly one of --plan or --mutate/);
+    expect(both.out).toMatch(/exactly one of --plan, --mutate or --status/);
   });
 });

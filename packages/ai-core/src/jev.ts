@@ -2,6 +2,7 @@
 import { type JudgmentPort, type JudgmentState, type Question, type Answer } from "./judgment.js";
 import { type CredentialStore, type JevProvider, resolveJevRoute } from "./credentials.js";
 import { assertNoOutboundCredential } from "./credential-guard.js";
+import { redactModelPayload } from "./redaction.js";
 
 export interface JevClientCall {
   /** `provider` (#429): which Jev route `authHeader`'s key belongs to — absent means `typesafe`. */
@@ -12,9 +13,10 @@ export class JevJudgmentGateway implements JudgmentPort {
   constructor(private readonly store: CredentialStore, private readonly call: JevClientCall, private readonly provider?: JevProvider) {}
   async systemOne(args: { state: JudgmentState; questions: Record<string, Question> }): Promise<Record<string, Answer>> {
     const route = resolveJevRoute(this.store, this.provider); // fail-closed
-    assertNoOutboundCredential(args, this.store);            // never-to-model choke point (redact-before-model already applied by caller)
+    const outbound = redactModelPayload(args);               // the run's secrets, whoever the caller is
+    assertNoOutboundCredential(outbound, this.store);        // never-to-model choke point
     const key = this.store.read(route.key)!;
-    return this.call({ ...args, authHeader: `Bearer ${key}`, provider: route.provider });
+    return this.call({ ...outbound, authHeader: `Bearer ${key}`, provider: route.provider });
   }
 }
 

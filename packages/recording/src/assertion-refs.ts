@@ -16,12 +16,41 @@ import { encodeUrlParamValue } from "./navigate-params.js";
  */
 
 /**
- * A binding NAME that reads as a credential (a parameter, an `extract` output, a fixture output).
- * Defense in depth: a parameter so named is redacted as if it were `secret: true`, and (#564) an
- * assertion may never reference a value so named — its text would be model-visible and persisted.
- * Re-exported by `@jevitate/journey`.
+ * Terms that read as a credential anywhere in a name, separators ignored. Deliberately broad, and it
+ * will match ordinary words (`passengers`, `token_count`, `footprint`): a refusal has a way out, a
+ * Journey's declared `secret: false` with a person's approval, and a credential that slips through
+ * has none. `auth` leaves out `author`, and `ssword` catches a misspelt or accented `password`.
  */
-export const SECRET_PARAM_NAME_RE = /pass(word|code|phrase)?|secret|token|api[_-]?key|otp|pin\b|credential|session|cookie/i;
+const SECRET_ANYWHERE_RE =
+  /pass|pwd|ssword|p4ss|s3cret|secret|t0ken|token|otp|auth(?!or(?!iz))|bearer|jwt|credential|session|sessid|cookie|csrf|xsrf|mfa|2fa|twofactor|cvv|cvc|hmac|nonce|saml|assertion|signature|iban|dsn|apikey|privatekey|accesskey|sshkey|signingkey|encryptionkey|sharedkey|licensekey|pincode|pinnumber|smscode|verificationcode|recoverycode|backupcode|invitecode|securitycode|securityanswer|cardnumber|ccnumber|creditcard|webhookurl|connectionstring|magiclink|resetlink|kennwort|wachtwoord|contrase|senha|clave|parola|пароль|密码|暗号|パスワード/;
+
+/** Short terms that are everyday letters inside other words (`shipping`, `inside`, `classname`), so they need their own edges. */
+const SECRET_BOUNDED_RE = /(?<![\p{L}\p{N}])(?:pins?|pw|sess|sid|ssn|creds?|key|tfa|mdp)(?![\p{L}])|pin(?![\p{L}])|pw(?![\p{L}])/u;
+
+/**
+ * Does this binding NAME read as a credential (a parameter, an `extract` output, a fixture output)?
+ * A name can't prove a value is safe, so this errs on the side of matching. Defense in depth: a
+ * parameter so named is secret, unless it declares `secret: false` and a person approved the Journey
+ * (`declaredNonSecretParams`), and (#564) an assertion may never reference a value so named: its text
+ * would be model-visible and persisted. Re-exported by `@jevitate/journey`.
+ */
+export function isSecretName(name: string): boolean {
+  const lower = name.toLowerCase();
+  if (SECRET_ANYWHERE_RE.test(lower.replace(/[^\p{L}\p{N}]+/gu, ""))) return true;
+  return SECRET_BOUNDED_RE.test(name.replace(/(\p{Ll}|\p{N})(\p{Lu})/gu, "$1_$2").replace(/(\p{Lu}+)(\p{Lu}\p{Ll})/gu, "$1_$2").toLowerCase());
+}
+
+/**
+ * What decides whether a stored Journey loads and whether an assertion may name a value: the older,
+ * narrower rule. `isSecretName` is for refusing a value and for redaction. Widening it must not turn
+ * a Journey that loaded into one that doesn't: a body-shape field or an assertion on `key` stays valid,
+ * and its value is still refused over MCP and redacted.
+ */
+const LOAD_REFUSED_NAME_RE = /pass(word|code|phrase)?|secret|token|api[_-]?key|otp|pin\b|credential|session|cookie/i;
+
+export function isLoadRefusedName(name: string): boolean {
+  return LOAD_REFUSED_NAME_RE.test(name);
+}
 
 /** A `${name}` placeholder (the grammar the `http` check's URL and assertions use, #543). */
 export const PLACEHOLDER_RE = /\$\{([^}]*)\}/g;

@@ -145,6 +145,10 @@ export async function probeResponsive(page: Page, boundMs: number): Promise<bool
  * A countdown rendered as an indeterminate progressbar inside a notification/toast container, or
  * one whose own label says it is a timer, is not a busy indicator (#419).
  *
+ * The name is read past its cut of 60, and the page has no way to know the run's secrets: anything
+ * that keeps this string reads it through `readBusyIndicator` (status.ts), which masks and then cuts.
+ * Reading it here directly is for asking whether one shows.
+ *
  * `gone: true` answers "is no indicator visible?" instead — the form a `waitForFunction` waits on.
  * That wait must pass this FUNCTION, never a source string: a page whose CSP has no `'unsafe-eval'`
  * rejects a string predicate (#491).
@@ -163,7 +167,7 @@ export function visibleBusyIndicator(gone?: true): string | null | boolean {
     const id = (el as HTMLElement).id;
     if (id) return `#${id}`;
     const role = el.getAttribute("role") ?? el.tagName.toLowerCase();
-    const name = (el.getAttribute("aria-label") ?? el.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 60);
+    const name = (el.getAttribute("aria-label") ?? el.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 1084); // 60 + 1024; `readBusyIndicator` makes the cut
     return name ? `role=${role} "${name}"` : `role=${role} <${el.tagName.toLowerCase()}>`;
   };
   const selectors = [
@@ -196,7 +200,8 @@ export function visibleBusyIndicator(gone?: true): string | null | boolean {
 /**
  * BROWSER CODE — the nearest landmark/container around the element `visibleBusyIndicator` would
  * report (same selection, same #419 exclusion), described by role and name, or null when there is
- * no indicator or no container. Self-contained for the same reason as `visibleBusyIndicator`.
+ * no indicator or no container. Self-contained for the same reason as `visibleBusyIndicator`, and
+ * read through `readBusyContainer` for the same reason.
  */
 export function visibleBusyIndicatorContainer(): string | null {
   const shown = (el: Element): boolean => {
@@ -221,7 +226,7 @@ export function visibleBusyIndicatorContainer(): string | null {
       const role = box.getAttribute("role") ?? box.tagName.toLowerCase();
       const labelledBy = box.getAttribute("aria-labelledby");
       const label = box.getAttribute("aria-label") ?? (labelledBy === null ? null : document.getElementById(labelledBy)?.textContent) ?? "";
-      const name = label.trim().replace(/\s+/g, " ").slice(0, 60);
+      const name = label.trim().replace(/\s+/g, " ").slice(0, 1084); // 60 + 1024; `readBusyContainer` makes the cut
       return name ? `role=${role} "${name}"` : `role=${role}`;
     }
   }
@@ -233,7 +238,7 @@ export function visibleBusyIndicatorContainer(): string | null {
  * selection, same #419 exclusion): its aria-label or text, else its live-region container's text, so
  * a declared `--ignore-no-progress` pattern can name what the page says ("Approving*") even when the
  * indicator is described by its test id. Null when there is no indicator or it has no words.
- * Self-contained for the same reason as `visibleBusyIndicator`.
+ * Self-contained for the same reason as `visibleBusyIndicator`, and read through `readBusyText`.
  */
 export function visibleBusyIndicatorText(): string | null {
   const shown = (el: Element): boolean => {
@@ -254,7 +259,7 @@ export function visibleBusyIndicatorText(): string | null {
       if (sel === progressbar && isNotificationTimer(el)) continue;
       const own = words(el);
       const text = own !== "" ? own : words(el.closest('[role="status"], [aria-live]:not([aria-live="off"])'));
-      return text === "" ? null : text.slice(0, 200);
+      return text === "" ? null : text.slice(0, 1224); // 200 + 1024; `readBusyText` makes the cut
     }
   }
   return null;

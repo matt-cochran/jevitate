@@ -117,8 +117,8 @@ describe("#243 fixture identities — mint as the owner, open as a cold recipien
         await writeFile(
           fixtures,
           JSON.stringify({
-            setup: [{ name: "mint-invite", method: "POST", url: "/api/invites", auth, expectStatus: [201], outputs: { link: "$.url", token: "$.token" } }],
-            restore: [{ name: "revoke-invite", method: "DELETE", url: "/api/invites/${setup.token}", auth }],
+            setup: [{ name: "mint-invite", method: "POST", url: "/api/invites", auth, expectStatus: [201], outputs: { link: "$.url", invite: "$.token" } }],
+            restore: [{ name: "revoke-invite", method: "DELETE", url: "/api/invites/${setup.invite}", auth }],
           }),
         );
         const judge = new DoneJudge();
@@ -140,8 +140,8 @@ describe("#243 fixture identities — mint as the owner, open as a cold recipien
         expect(ok, raw).toBe(true);
         expect(data.outcome, raw).toBe("succeeded");
         expect(exitCode).toBe(0);
-        const fx = data.fixtures as { outputs: { link: string; token: string }; identities?: Record<string, string> };
-        const token = fx.outputs.token;
+        const fx = data.fixtures as { outputs: { link: string; invite: string }; identities?: Record<string, string> };
+        const token = fx.outputs.invite;
         expect(fx.outputs.link).toBe(`/join/${token}`);
         expect(fx.identities).toEqual({ owner: ownerState });
         // Minted as the owner, opened COLD by the mission browser, revoked as the owner.

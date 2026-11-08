@@ -1,3 +1,4 @@
+import { prepareMcpRunGuard } from "./mcp-run-guard.js";
 import { journeyParamSchema, secretParamNames, secretParamValues, validateParams } from "@jevitate/journey";
 import { createHttpProbe, httpCheckRefs } from "./http-probe.js";
 import type { SiteGateDeps } from "@jevitate/runtime";
@@ -22,6 +23,8 @@ import {
   type SourceEntry,
 } from "@jevitate/sources";
 import type { SourceApiDeps } from "./source-api.js";
+import { inMcpInvocation } from "./approval-provenance.js";
+import { SecretParamOverMcpError, secretParamArgvWarning, secretParamsCarriedBy } from "./secret-params.js";
 import { JourneyRequiresAuthError, journeyFixtureBaseDir, redactErrorSecrets, redactSecretParams } from "./journey-api.js";
 
 /**
@@ -76,6 +79,9 @@ export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params
   // site plus every gate-approved declared origin.
   const allowedOrigins = [...new Set([file.recording.site, ...file.declaredOrigins])];
 
+  // #789: under an MCP invocation (`sources run`), this run's guard: a production target is refused here.
+  const runGuard = prepareMcpRunGuard({ site: file.recording.site, allowedOrigins });
+
   // The site policy for the Journey's origin, decided before the browser opens.
   const gate = await gateJourney(siteGate, file.recording, { enforceLimits: true });
   const port = new PlaywrightBrowserPort();
@@ -87,6 +93,7 @@ export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params
     ...(storageState !== undefined ? { storageState } : {}),
   });
   try {
+    await runGuard?.arm(session, params);
     const actor = CastActor.named("source-runner").whoCan(new BrowseTheWeb(session, allowedOrigins), ...gate.abilities);
     // #322/#400: a trusted remote Journey's end state and step request checks hold for its replay too.
     // #543: its http end-state checks request only origins in this same allowlist.
@@ -97,9 +104,11 @@ export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params
     });
     const observer = outcomeChecks.observer();
     // #565: a step expectation's references resolve from the same names (a secret one refused).
-    const runner = new JourneyRunner(actor, new RecordingInterpreter({ ...(observer === undefined ? {} : { observer }), fixtureBaseDir: journeyFixtureBaseDir(), refLookup: refs }));
+    const runner = new JourneyRunner(actor, new RecordingInterpreter({ ...(observer === undefined ? {} : { observer }), ...(runGuard === undefined ? {} : { actionGuard: runGuard }), fixtureBaseDir: journeyFixtureBaseDir(), refLookup: refs }));
     try {
-      return await outcomeChecks.run(actor, () => runner.run({ journey: file, params, policy }));
+      const result = await outcomeChecks.run(actor, () => runner.run({ journey: file, params, policy }));
+      runGuard?.check();
+      return result;
     } finally {
       await gate.done();
     }
@@ -124,6 +133,8 @@ export interface RunSourceJourneyRequest {
   sourceName: string;
   journeyId: string;
   params: Record<string, string>;
+  /** Told when a secret parameter's value came from `--param`, on the command line. */
+  warn?: (line: string) => void;
   /** Defaults to `safeRunPolicy()` (Slice 1 fail-closed secret mode). */
   policy?: RunPolicy;
   /**
@@ -190,6 +201,15 @@ export async function runSourceJourney(
   // The full trust boundary: throws on any refusal, returns the validated,
   // ready-to-run file only when every gate passes.
   const file = await resolveForRun(gateDeps, `${req.sourceName}/${req.journeyId}`);
+
+  // A secret parameter's value never travels through an MCP request; on the CLI it is on the command line.
+  if (inMcpInvocation()) {
+    const carried = secretParamsCarriedBy(file, req.params);
+    if (carried.length > 0) throw new SecretParamOverMcpError(carried);
+  } else {
+    const warning = secretParamArgvWarning(file, req.params);
+    if (warning !== undefined) req.warn?.(warning);
+  }
 
   const run = deps.runJourney ?? realResolvedJourneyRunner;
   // #399: a secret parameter (e.g. a token in a navigate URL) never comes back — not in the

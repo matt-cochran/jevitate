@@ -1,7 +1,9 @@
 # Safety model
 
-Jevitate drives a real browser against a real app, sometimes under a model's direction. These are
-the guardrails that hold whatever a model proposes. Each is enforced in code, to the extent each
+Jevitate drives a real browser against a real app, sometimes under a model's direction. It is an
+automation platform that also works as a testing tool: a Journey is a parameterized flow that does
+real work, and its purpose is to prove that users can meet their objectives. Both uses send real
+requests, so both need guardrails. These are the guardrails that hold whatever a model proposes. Each is enforced in code, to the extent each
 bullet states (and no further), and covered by tests that assert the refusal. [SECURITY.md](../SECURITY.md) lists the invariants whose regression is a
 security bug, and how to report one.
 
@@ -48,8 +50,11 @@ security bug, and how to report one.
   images, fonts, frames, fetch/XHR reads, WebSockets, workers) — third-party CDNs and APIs are
   normal and load as usual — and, outside the two cases above, third-party writes (listed in
   `sideEffects`, below).
-- MCP missions can only target a *promoted* mission target, a human act
-  (`jevitate mission target promote`).
+- MCP missions can only target a *promoted* mission target. `jevitate mission target promote`
+  promotes one on the CLI, and the `mission_targets` MCP tool can promote one too, so an agent can
+  promote its own target. The same is true of `site_policy` (an agent can set a looser policy) and
+  `promote_journey` (recorded as an agent's approval, `provenance.channel: "mcp"`). Tracked in
+  [#799](https://github.com/matt-cochran/jevitate/issues/799).
 - `load run` refuses to start without `--authorized-origin`.
 - `jevitate demo` explores and writes, so it needs a named environment (`--env`) and refuses one
   flagged `production: true` in `.jevitate/environments.json`, before anything runs. `demo approve`
@@ -221,6 +226,67 @@ security bug, and how to report one.
   and the run returns to the original identity in a fresh session (or stops `inconclusive`,
   `identity-changed`).
 
+**What guards a Journey run.** A Journey is a flow that does real work in your app, so a run can send
+real writes. Which guards apply depends on who starts it. These are the ones in code today:
+
+| Guard | MCP (`run_journey`, `chain_journeys`, `demo_journey`, `annotate_journey`, `verify_journey`, `journey_readiness`, `run_check`, `load run`, `source run`, `regressions run`, `regressions capture`) | CLI (`journey run`, `regression run`, `regression capture`) |
+| --- | --- | --- |
+| Only a promoted Journey with a current approval runs | On `run_journey`, `chain_journeys`, `run_check` and `load run`. `verify_journey`, `journey_readiness`, `annotate_journey` and `demo_journey` work on Journeys not yet promoted, and a regression is no Journey. Refused before any browser opens with `E_JOURNEY_NOT_PROMOTED`, `E_JOURNEY_APPROVAL_STALE` or `E_JOURNEY_APPROVAL_UNKNOWN`. Promote it, or re-approve it, to lift it | No. It runs anyway and prints a `warning:` line on stderr with the same code. (`load run` on the CLI refuses an unpromoted Journey; `journey chain` runs promoted Journeys unless you pass `--allow-draft`) |
+| No click on a session-ending, destructive or paid control (a `forEach` row's included), and no Enter in a field whose form's default button is one | Yes: `E_RUN_REFUSED_DESTRUCTIVE`. Lifted by `mcpRun.allowDestructive`; a target's own `safety.deny` is never lifted | No |
+| No write to an origin outside the run's allowlist | Yes, at the browser context (popups, form posts and WebSocket frames included, on a self-heal run too): `E_RUN_REFUSED_OFF_ALLOWLIST_WRITE`. Lifted by `mcpRun.allowOffAllowlistWrites` | No. The write is sent and listed in `offAllowlistWrites` in the result |
+| No replay on an environment flagged `production: true` | Yes: `E_RUN_REFUSED_PRODUCTION`, before anything is sent. `verify_fix` refuses it too. Lifted by `mcpRun.allowProduction` | No, and not on `verify-fix` |
+| No write to an origin flagged `production: true`, whatever the allowlist says | Yes: `E_RUN_REFUSED_PRODUCTION`, at the browser context. `verify_fix` has no such guard at the context, so it refuses a mission whose allowlist holds one, before anything opens. Lifted only by that origin's own `mcpRun.allowProduction` | No |
+| Site policy (pacing, minimum interval, budgets, quiet hours) | Yes on a Journey's run, `{error: throttled}` | Yes. With no policy set, nothing is limited |
+| A value-free record of the run in `logs/<date>/journey-run-*.json` | Yes on `run_journey` | Yes on `journey run` |
+
+A control in a closed shadow root is judged only by its host's name. A closed root is opaque, so the click guard
+reads the role and name of the element the step resolved, which is the host (and the step's recorded label, if it
+has one): a Delete button inside a closed root, on a host with an innocent name, is not refused. A target's
+`safety.deny` reads the same name.
+
+The run's record is value-free as far as the run can know: a parameter or extracted value is masked, a non-standard
+method reads `OTHER`, and a path keeps only what the Journey recorded as literal route text, so it is coarse by design.
+A token in an off-site origin that the run never knew as a value can't be masked, and is stored as that origin.
+
+The `mcpRun` settings live in a target's entry in `~/.jevitate/targets.json`:
+`"mcpRun": { "allowDestructive": true, "allowOffAllowlistWrites": ["https://api.example.com"], "allowProduction": true }`.
+No MCP tool takes these as arguments, and MCP path arguments cannot name that file or
+`~/.jevitate/verify-checkpoint.key`, in any case or through a link. A refusal ends
+the run with `outcome: refused` and exit code 2. It is not a failed step, is never healed or
+retried, and names the setting that lifts it. If `targets.json` or `environments.json` cannot be read,
+an MCP run refuses with `E_RUN_GUARD_CONFIG` rather than run unguarded. A redirect from an allowed
+origin to a disallowed one cannot be stopped in the browser; the write may have been sent, and the run ends.
+The destructive check reads a control's name, so it cannot judge what has none: Enter in a form with no
+submit button, or a key the page's own script turns into a write. A press is judged however its key is spelt,
+including `"\n"`, `"\r"`, `NumpadEnter`, `" "` and a chord that holds one, and on what holds focus inside a frame.
+
+What does not guard a run today:
+
+- A CLI run has none of the refusals above. The person at the terminal is the guard.
+- `verify_fix` has only the production refusal of those above. Its replay stays on the origins the finding's mission
+  was allowed: it can't be moved onto another one.
+- Nothing asks for approval before a write. `queue_action` writes an inbox item and no run waits for
+  its answer ([#793](https://github.com/matt-cochran/jevitate/issues/793)).
+- A Journey's parameters are names with string values; nothing checks their type
+  ([#796](https://github.com/matt-cochran/jevitate/issues/796)).
+- There is no reconcile or per-write receipt after a write whose outcome is unknown
+  ([#795](https://github.com/matt-cochran/jevitate/issues/795)).
+- An agent can loosen the limits that are not in `targets.json`: it can set the site policy, promote a
+  target and promote a Journey over MCP ([#799](https://github.com/matt-cochran/jevitate/issues/799)).
+- A `baseUrl` an agent passes can name an origin the configuration doesn't know, and that origin joins the
+  run's write allowlist. Its `production` flag, `safety.deny` and `mcpRun` don't apply there, because nothing
+  says they should. Origins are compared after normalising case, default port and a trailing dot, so an alias
+  of a flagged host is still that host, but an IP or another scheme for the same site can't be known as it
+  ([#799](https://github.com/matt-cochran/jevitate/issues/799)).
+- An authored `allowedOrigins` widens the allowlist after promotion. `author_journey` with `allow` records
+  `metadata.allowedOrigins`, and once `promote_journey` has run, the run's guard allows writes to those origins.
+  `mcpRun.allowOffAllowlistWrites` isn't the only thing that lifts that refusal
+  ([#799](https://github.com/matt-cochran/jevitate/issues/799)).
+- A Journey's approval is a plain hash of its content, with no signature. Forging one needs write access to the
+  Journey's file, which no MCP tool gives, and anyone with that access can forge it.
+- The MCP and CLI rules above are separate; one trust model for both is
+  [#792](https://github.com/matt-cochran/jevitate/issues/792).
+
 **Runs change the app's state — reset it between runs.** The guardrails above keep a run from
 clicking what it must not; they do not undo what it legitimately did. An adversarial run submits
 boundary and malformed values on purpose, and the ones the app accepts **stay in the app**: a
@@ -249,6 +315,8 @@ no content type) whose method name starts with a built-in read verb — `Get`, `
 writes); or it matches an operator-supplied pattern — `--read-rpc <pattern>` (repeatable) or
 `safety.readRequests` in `~/.jevitate/targets.json`: a pattern starting with `/` is a path glob
 (`/api/search*`), any other pattern a glob over the RPC method (`Estimate*`, `pkg.Service/Estimate*`).
+`journey lint`, `journey review`, `journey readiness` and `journey verify` read the same target setting, so a
+proof neither skips nor blocks a request it marks a read.
 An unknown request is always a write — a misclassified read only costs a guard/finding; a
 misclassified write could let a run repeat a real side effect.
 
@@ -278,6 +346,48 @@ built-in verb (`Preview*`, `Recalculate*`, …).
   redacted as the page is read, so a page that displays a secret never reaches a model and never
   ends the run.
 - Code, not the model, types a bound secret into a field. The model sees `«secret:VAR»`.
+- Over MCP a Journey that needs a secret parameter doesn't run: `E_SECRET_PARAM_OVER_MCP`, by name,
+  before anything runs. A person runs it on the CLI, where the value comes from an environment variable
+  through `journey run --secret-field` or `secretFields` in `targets.json`; `--param` still works and
+  warns on stderr. Or it uses a stored session and needs no secret
+  ([Secret parameters on a replay](./journeys.md#secret-parameters-on-a-replay)).
+- A credential-like name is refused however it is spelt, broadly on purpose. `secret: false` lifts that
+  only when a person approved that Journey and the approval still matches it; per Journey. Provenance is
+  detection, not proof: an agent that can edit the Journey file can also write the channel, and git
+  review of `.jevitate/` is what catches that.
+- A value from a binding goes in only at a field, on the binding's origin, read with the field in hand,
+  or the run fails with `E_SECRET_ORIGIN_REFUSED`; a `navigate` URL or `http` check holding one refuses
+  before anything runs. `editText` types real keys and checks before each one that the element's
+  document is there, holds the focus and is on that origin. Limit: a page that navigates in the instant
+  after that check can receive the key in flight, about one character, and nothing after it.
+- Nothing secret-bound goes to a model. A Journey with a secret parameter, a fixture secret or a
+  credential-named output, or a step that can extract a credential, doesn't self-heal. That is decided
+  before it runs, so it holds at step 1, before the extract and when the extract itself is what broke:
+  the step fails as it would without a heal, and says so. `journey annotate`, `annotate_journey` and
+  `create_demo` refuse such a Journey (`E_MODEL_REFUSED_SECRET`). **The cost: a secret-bound Journey
+  can't self-heal or be annotated in 0.29.0.**
+- That includes a working Journey whose only secret is a name, because the name list is broad on
+  purpose: a parameter `passengers` or `key`, or an `extract as: "token_count"`, loses self-heal and
+  annotate. Both refusals name the way out: declare a parameter of that name `"secret": false` and have
+  a person approve the Journey (a typed `journey promote` or a verified PR review). For an `extract`
+  name that means declaring a parameter it doesn't otherwise take. An approval over MCP lifts nothing.
+- `explore --strategy coverage|exploratory` refuse `--secret`
+  (`E_EXPLORE_SECRET_UNSUPPORTED`), since they can't keep it out. `--feature` makes no model call and
+  masks it in its transcript, Recordings and result.
+- Goal, adversarial and usability runs keep their `--secret` masking, applied before any cut, so a
+  secret across a bound on a control's name, heading, option, announcement, page text or busy
+  indicator leaves none of its characters. That covers a replay of a hang, on its fresh page, too. A secret the page transforms (lower-cased, say) is not recognised.
+- The gateways (`OpenRouterGenerationGateway`, `JevJudgmentGateway`) hold a backstop for those three
+  while they run: values of 8 characters or more, masked in every string and key, then checked, so a
+  value still there stops the call, and gone when the run ends. Past 2000 live values a model call
+  fails. A secret under 8 characters isn't masked there. A replay holding one makes no model call at
+  all. Goal, adversarial and usability still make them, and a short secret is masked by their own set,
+  not by the backstop. That masks it as a whole token only: a short secret inside a longer one, such as
+  `abcPw12xdef`, still reaches the prompt.
+- Redaction is for what a person or a model reads, never for what a page gets: a run that would type or
+  navigate with masked text fails (`E_REDACTED_VALUE`), which includes a value that really does contain
+  `«redacted»`. `journey chain` hands on what the producer extracted, except a value under a name the
+  narrower rule refuses (`apiKey`, `token`), so that consumer fails instead.
 - `--storage-state` files go only to the browser. Artifacts record their path, never their
   contents.
 - `jevitate login` (#427, #449) reads credentials only from the environment variables its flags

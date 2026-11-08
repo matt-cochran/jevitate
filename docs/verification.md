@@ -60,8 +60,9 @@ from [fixtures](./fixtures.md). Both take `--headed` and `--slow-mo <ms>` to wat
 
 ## Keeping findings verifiable: the ledger
 
-`verify-fix --result` needs the result file that contained the defect. Run output under
-`.jevitate/logs/` is deleted by retention, but checking months later that a fix still holds needs the
+`verify-fix --result` needs the result file that contained the defect. Its own output goes beside that
+file, unless the file is committed or in a git work tree outside `.jevitate/logs/`: then it goes to the
+project's logs. Run output under `.jevitate/logs/` is deleted by retention, but checking months later that a fix still holds needs the
 same repro material. The ledger stores that material, keyed by fingerprint, in the committed
 regressions store:
 

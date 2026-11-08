@@ -304,6 +304,45 @@ describe("#402 mutationProofVerdict", () => {
       mutationProofVerdict({ basePassed: true, mutations: [ok], assertions: [{ site: "step:1", verdict: "unpaired" }, { site: "step:2", verdict: "sensitive", provedBy: "skip:2" }] }).verdict,
     ).toBe("proven");
   });
+  it("a failed fixture restore keeps every-sensitive assertions from reading proven", () => {
+    expect(mutationProofVerdict({ basePassed: true, mutations: [ok], assertions: [{ site: "step:2", verdict: "sensitive" }], restoreFailed: true }).verdict).toBe("inconclusive");
+  });
+  it("a failed fixture restore outranks an insensitive assertion, which it may have caused", () => {
+    expect(mutationProofVerdict({ basePassed: true, mutations: [ok], assertions: [{ site: "step:2", verdict: "insensitive" }], restoreFailed: true }).verdict).toBe("inconclusive");
+  });
+  it("a failed fixture restore is named as the reason", () => {
+    expect(mutationProofVerdict({ basePassed: true, mutations: [ok], assertions: [{ site: "step:2", verdict: "sensitive" }], restoreFailed: true }).reason).toMatch(/fixture restore failed/);
+  });
+  it("a mutated replay that errored keeps every-sensitive assertions from reading proven", () => {
+    expect(
+      mutationProofVerdict({ basePassed: true, mutations: [ok, { outcome: "error" as const, failedSites: [] }], assertions: [{ site: "step:2", verdict: "sensitive" }] }).verdict,
+    ).toBe("inconclusive");
+  });
+  it("a mutated replay that errored is named as the reason the proof is inconclusive", () => {
+    expect(
+      mutationProofVerdict({ basePassed: true, mutations: [ok, { outcome: "error" as const, failedSites: [] }], assertions: [{ site: "step:2", verdict: "sensitive" }] }).reason,
+    ).toMatch(/1 of 2 mutated replays errored/);
+  });
+  it("an insensitive assertion still reads insensitive when another mutated replay errored", () => {
+    expect(
+      mutationProofVerdict({ basePassed: true, mutations: [ok, { outcome: "error" as const, failedSites: [] }], assertions: [{ site: "step:2", verdict: "insensitive" }] }).verdict,
+    ).toBe("insensitive");
+  });
+  it("a relaxed replay that errored keeps the proof from reading proven", () => {
+    expect(
+      mutationProofVerdict({ basePassed: true, mutations: [{ ...ok, relaxed: { outcome: "error" as const, failedSites: [] } }], assertions: [{ site: "step:2", verdict: "sensitive" }] }).verdict,
+    ).toBe("inconclusive");
+  });
+  it("a targeted replay that errored keeps the proof from reading proven", () => {
+    expect(
+      mutationProofVerdict({ basePassed: true, mutations: [{ ...ok, targeted: [{ site: "end-state:0", relaxedSites: [], outcome: "error" as const, failedSites: [] }] }], assertions: [{ site: "step:2", verdict: "sensitive" }] }).verdict,
+    ).toBe("inconclusive");
+  });
+  it("a refused targeted proof, which ran no replay, is not an errored replay", () => {
+    expect(
+      mutationProofVerdict({ basePassed: true, mutations: [{ ...ok, targeted: [{ site: "end-state:0", relaxedSites: [], outcome: "error" as const, failedSites: [], refused: "not paired" }] }], assertions: [{ site: "step:2", verdict: "sensitive" }] }).verdict,
+    ).toBe("proven");
+  });
   it("any insensitive: insensitive", () => {
     expect(
       mutationProofVerdict({ basePassed: true, mutations: [ok], assertions: [{ site: "step:2", verdict: "sensitive" }, { site: "step:3", verdict: "insensitive" }] }).verdict,

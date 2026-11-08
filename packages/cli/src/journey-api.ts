@@ -1,4 +1,7 @@
-import { FsJourneyStore, JourneyRegistry, ParamValidationError, describeStep, flatJourneySteps, journeyEndState, journeyParamSchema, journeyPrefix, lintJourney, lintUploadFixtures, secretNamedValues, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
+import { NOT_A_CREDENTIAL_WAY_OUT, fixtureSecretNeeds, secretBoundNeeds, type BoundSecretParams } from "./secret-params.js";
+import type { JourneyRunRecorder } from "./journey-run-record.js";
+import { allowedOriginSet, offAllowlistWriteOrigin, prepareMcpRunGuard } from "./mcp-run-guard.js";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError, declaredNonSecretParams, describeStep, isSecretName, loadRefusedParamNames, flatJourneySteps, journeyEndState, journeyParamSchema, journeyPrefix, lintJourney, lintUploadFixtures, secretNamedValues, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
 import { assertHttpChecksAllowed, createHttpProbe, httpCheckRefs } from "./http-probe.js";
 import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
 import { journeyEntry } from "./forge-verify.js";
@@ -86,6 +89,19 @@ export interface RunJourneyProgrammaticallyOptions {
   dir: string;
   id: string;
   params: Record<string, string>;
+  /** #788: decides on the stored Journey, right after it is read and before anything else: throws to refuse the run. */
+  assertRunnable?: (stored: Journey) => Promise<void>;
+  /** #789: the `targets.json` an MCP run's guard reads (default: `~/.jevitate/targets.json`). */
+  runGuardTargetsFile?: string;
+  /** #790: told what the run resolved to and watches its writes, for its value-free record. */
+  runRecorder?: JourneyRunRecorder;
+  /**
+   * The secret parameters an operator's binding supplied (secret-params.ts) → where each may be
+   * typed: its origins, or `allowlist` for this run's allowlist. Checked at type time.
+   */
+  boundSecretParams?: BoundSecretParams;
+  /** Told the run's `output` before it is redacted, for a caller that hands it on to a page (`journey chain`). Never reported. */
+  onRawOutput?: (output: unknown) => void;
   /** Defaults to `safeRunPolicy()` (Slice 1: fail-closed secret mode) when omitted. */
   policy?: RunPolicy;
   /**
@@ -221,16 +237,32 @@ export interface MutationReplayOptions {
    * never sent; what was blocked comes back as `blockedWrites`.
    */
   blockWritesAtStep?: number;
+  /**
+   * With `blockWritesAtStep`: these recorded write lines stay blocked for the rest of the replay, so a
+   * client's retry of an aborted write cannot land later. `exemptSteps` (0-based) record the same line
+   * as their own, so it goes through while they run.
+   */
+  blockAfterWindow?: { requests: readonly string[]; exemptSteps: readonly number[] };
+  /** Mutation proof: runs first as each step ends, before anything that step goes on waiting for. */
+  earliestObserver?: StepObserver;
   /** #402: also return the outcome checks' structured failures (`outcomeFailures`). */
   structuredFailures?: boolean;
+  /** Mutation proof: awaited just before the end state's checks start. */
+  beforeEndState?: () => Promise<void>;
+  /** Mutation proof: called as the end state's checks end. They settle first, so only this shows when the base replay read it. */
+  afterEndState?: () => void;
+  /** A proof must not trust a replay after a failed restore. Called once the run's restore has ended, however the run ended. */
+  onFixtureRestoreFailed?: () => void;
 }
 
 /** #402: what a mutation-proof replay returns beyond `journey run`'s result. */
 export interface MutationReplayFields {
   /** The step-request / end-state checks that failed (`structuredFailures`). */
   outcomeFailures?: OutcomeCheckFailure[];
-  /** The writes aborted in `blockWritesAtStep`'s window. */
+  /** The writes aborted in `blockWritesAtStep`'s window, and after it (`blockAfterWindow`). */
   blockedWrites?: BlockedWrite[];
+  /** `METHOD /path` of a blocked line a server answered after the window all the same (a popup, a worker). */
+  blockEscaped?: string[];
 }
 
 /** #453: what a self-heal run adds to its result — the proposal it wrote and the persisted result file. */
@@ -252,9 +284,12 @@ export function redactSecretParams<T>(result: T, journey: Journey, params: Recor
  * #564: a run's full secret set — its secret-param values plus every value the run bound under a
  * credential-like name (an `extract as: "apiKey"` output, read from the result's `output`).
  */
-export function runSecretValues(secrets: readonly string[], result: unknown): string[] {
+const secretBoundNoHeal = (needs: readonly string[]): string =>
+  `${needs.length === 0 ? "this run holds a secret (a secret parameter, a fixture secret or an extracted credential)" : `this Journey needs ${needs.join(", ")}`}, and nothing secret-bound goes to a model. Fix the step by hand, or heal a Journey that needs no secret. ${NOT_A_CREDENTIAL_WAY_OUT}`;
+
+export function runSecretValues(secrets: readonly string[], result: unknown, nonSecret: ReadonlySet<string> = new Set()): string[] {
   const output = result !== null && typeof result === "object" && "output" in result ? (result as { output: unknown }).output : undefined;
-  return [...new Set([...secrets, ...secretNamedValues(output)])];
+  return [...new Set([...secrets, ...secretNamedValues(output, nonSecret)])];
 }
 
 export function redactSecretValues<T>(result: T, secrets: readonly string[]): T {
@@ -540,10 +575,13 @@ export async function runJourneyProgrammatically(
   if (!stored) {
     throw new UnknownJourneyError(`unknown journey '${opts.id}'`);
   }
+  opts.runRecorder?.noteJourney(stored);
+  await opts.assertRunnable?.(stored);
   // #247: onto the chosen environment (a step on an origin it does not allow is refused here).
   const full = applyJourneyEnvironment(stored, opts.environment);
   // #293: only the prefix up to the anchor runs (its params are the ones those steps take).
   const journey = opts.stopAfterStep === undefined ? full : journeyPrefix(full, opts.stopAfterStep);
+  opts.runRecorder?.noteJourney(journey);
   const allowedOrigins = effectiveAllowedOrigins(journey, opts.environment, opts.allow);
   // #543: an http end-state check reads only an origin the replay allows — refused before any
   // fixture or browser (the probe re-checks every request after substitution).
@@ -566,6 +604,9 @@ export async function runJourneyProgrammatically(
   // #402: the mutated copy replays (and is judged); the stored Journey still names, redacts and gates.
   const replayed = mutation.mutateJourney === undefined || journey !== full ? journey : mutation.mutateJourney(journey);
 
+  // #789: under an MCP invocation, this run's guard: a production target is refused here, before anything opens.
+  const runGuard = prepareMcpRunGuard({ site: journey.recording.site, allowedOrigins, environment: opts.environment, targetsFile: opts.runGuardTargetsFile });
+
   const policy = opts.policy ?? safeRunPolicy();
   // #583 §3: a prepare-only boundary never self-heals — refused before any fixture or browser opens.
   assertHandbackNoHeal(journey, policy.selfHeal.mode !== "fail-closed");
@@ -584,7 +625,8 @@ export async function runJourneyProgrammatically(
     }
     // #140 order: fixture setup (above) → open the browser (#137 launch options, #118 storageState) → run → restore.
     // #250/#251: a recorded or screenshotted run carries the live pixel mask from its first paint.
-    const secrets = secretParamValues(journey, params);
+    // A fixture's credential-named output is redacted by name, wherever a param carried it.
+    const secrets = [...new Set([...secretParamValues(stored, params), ...(fx?.secrets() ?? [])])];
     const mask = opts.mask ?? new SecretPixelMask(secrets);
     const capturing = opts.session === undefined && (opts.browser?.recordVideo !== undefined || opts.screenshots !== undefined);
     const openPort = (): BrowserPort => {
@@ -631,6 +673,8 @@ export async function runJourneyProgrammatically(
     // #485: the origins outside the run's allow list that the page sent a write to (origins only —
     // never a path, query or body). The campaign preflight reads them for an allow-list slip.
     const offAllowlist = watchOffAllowlistWrites(session, allowedOrigins);
+    opts.runRecorder?.attach(session);
+    await runGuard?.arm(session, params, opts.runRecorder?.noteRefusedWrite);
     // #583 §3: a declared boundary watches every first-party write for the whole run (aborting them
     // only with `blockWrites`), so the typed handback state is decided from the run's own evidence.
     const handbackObserver =
@@ -643,12 +687,13 @@ export async function runJourneyProgrammatically(
         new BrowseTheWeb(session, allowedOrigins),
         ...gate.abilities,
       );
+      const boundOption = opts.boundSecretParams === undefined ? {} : { boundSecretParams: new Map(Object.entries(opts.boundSecretParams).map(([n, o]) => [n, o === "allowlist" ? allowedOrigins : o] as const)) };
       const replayDeltas = opts.actionDeltas === true ? new ReplayDeltas({ secrets, recorded: flat.map((f) => f.recorded) }) : undefined;
       // #322/#400: a full replay (never an anchored prefix) must also satisfy the Journey's end state
       // and each step's request expectations.
       // #543: `${name}` from the run's params (a secret param refused) and `${setup.x}` from the
       // fixture bindings — for the end state's checks and (#565) every step expectation's references.
-      const refs = httpCheckRefs({ params, secretParams: secretParamNames(journey, params), ...(fx === undefined ? {} : { bindings: fx.bindings() }) });
+      const refs = httpCheckRefs({ params, secretParams: loadRefusedParamNames(journey, params), ...(fx === undefined ? {} : { bindings: fx.bindings() }) });
       const outcomeChecks = new JourneyOutcomeChecks(session.page, journey === full ? replayed : undefined, {
         ...(mutation.relaxedStepRequests === undefined ? {} : { relaxedStepRequests: mutation.relaxedStepRequests }),
         secrets,
@@ -657,11 +702,12 @@ export async function runJourneyProgrammatically(
         resolveRef: refs,
         ...(opts.stepResponseTimeoutMs === undefined ? {} : { stepResponseTimeoutMs: opts.stepResponseTimeoutMs }),
       });
-      const blocker = mutation.blockWritesAtStep === undefined ? undefined : await stepWriteBlocker(session.page, mutation.blockWritesAtStep, allowedOrigins);
+      const blocker = mutation.blockWritesAtStep === undefined ? undefined : await stepWriteBlocker(session.page, mutation.blockWritesAtStep, allowedOrigins, mutation.blockAfterWindow);
       // #453 (Q2): a guarded click/fill heal probe runs under a per-step write blocker.
       // Context-level (popups, WebSockets), no write exemptions; see heal-probe-guard.ts.
-      const healGuard = opts.heal === undefined || policy.selfHeal.mode === "fail-closed" ? undefined : await installHealProbeGuard(session.page);
+      const healGuard = opts.heal === undefined || policy.selfHeal.mode === "fail-closed" ? undefined : await installHealProbeGuard(session.page, runGuard === undefined ? undefined : (ws) => runGuard.claimSocket(ws));
       const observer = composeObservers(
+        mutation.earliestObserver,
         outcomeChecks.observer(),
         blocker?.observer,
         replayDeltas?.observer(),
@@ -671,21 +717,36 @@ export async function runJourneyProgrammatically(
       const skipStep = mutation.skipStep;
       const selectAlternative = mutation.selectAlternativeAtStep;
       const fixtureBaseDir = opts.fixtureBaseDir ?? journeyFixtureBaseDir();
+      // A value extracted before the run throws has no `output` to be read from, and must still be masked. The guard hears it through the interpreter.
+      // #564: a credential the run extracts joins the redaction set as it binds: the heal payload, the evidence screenshots.
+      const extractedCredentials = new Set<string>();
+      const nonSecretParams = declaredNonSecretParams(stored);
+      const onExtracted = async (value: string, name?: string): Promise<void> => {
+        opts.runRecorder?.noteValue(value);
+        if (name === undefined || !isSecretName(name) || nonSecretParams.has(name) || value.trim() === "") return;
+        extractedCredentials.add(value);
+        await mask.addSecret(value);
+      };
       const interpreter =
         opts.interpreter ??
-        (opts.observer === undefined && shots === undefined && replayDeltas === undefined && outcomeChecks.observer() === undefined && blocker === undefined && healGuard === undefined && skipStep === undefined && selectAlternative === undefined
-          ? new RecordingInterpreter({ fixtureBaseDir, refLookup: refs })
+        (opts.observer === undefined && shots === undefined && replayDeltas === undefined && outcomeChecks.observer() === undefined && blocker === undefined && healGuard === undefined && skipStep === undefined && selectAlternative === undefined && runGuard === undefined
+          ? new RecordingInterpreter({ fixtureBaseDir, refLookup: refs, onExtracted, ...boundOption })
           : new RecordingInterpreter({
+              ...boundOption,
               observer,
               fixtureBaseDir,
               refLookup: refs,
+              onExtracted,
+              ...(runGuard === undefined ? {} : { actionGuard: runGuard }),
               ...(skipStep === undefined ? {} : { skipStep: (i: number) => skipStep(i) }),
               ...(selectAlternative === undefined ? {} : { selectAlternative: (i: number) => (i === selectAlternative.index ? { avoid: selectAlternative.avoid } : undefined) }),
             }));
+      // Decided from the Journey, before it runs: a break can come before the extract, with the value already on the page.
+      const secretBound = [...secretBoundNeeds(stored, params), ...fixtureSecretNeeds(fx)];
       const heal: JourneyHealOptions | undefined =
         opts.heal === undefined || healGuard === undefined
           ? undefined
-          : { scope: opts.heal.scope, riskOf: journeyStepRisk(), writeGuard: healGuard.guard, allowedOrigins, observe: healObserver(healDir, mask) };
+          : { scope: opts.heal.scope, riskOf: journeyStepRisk(), writeGuard: healGuard.guard, allowedOrigins, noHealBecause: () => (secretBound.length > 0 || secrets.length > 0 || extractedCredentials.size > 0 ? secretBoundNoHeal(secretBound) : undefined), observe: healObserver(healDir, mask) };
       const runner = new JourneyRunner(actor, interpreter, undefined, undefined, opts.selfHealer, heal);
       let result: JourneyRunResult;
       // #564: the run's secrets also cover every value it bound under a credential-like name (an
@@ -698,12 +759,15 @@ export async function runJourneyProgrammatically(
         const replayParams = replayed === journey ? params : prefixParams(journey, replayed, params);
         const raw = await outcomeChecks.run(actor, () => runner.run({ journey: replayed, params: replayParams, policy }), {
           collectStepFailuresOnReplayFailure: mutation.structuredFailures === true,
+          ...(mutation.beforeEndState === undefined ? {} : { beforeEndState: mutation.beforeEndState }),
+          ...(mutation.afterEndState === undefined ? {} : { afterEndState: mutation.afterEndState }),
         });
-        runSecrets = runSecretValues(secrets, raw);
+        runGuard?.check();
+        if ("output" in raw) opts.onRawOutput?.(raw.output);
+        runSecrets = [...new Set([...runSecretValues(secrets, raw, nonSecretParams), ...extractedCredentials])];
         result = redactSecretValues(raw, runSecrets);
       } finally {
         await gate.done();
-        await blocker?.guard.disarm();
         await healGuard?.guard.disarm();
         await healGuard?.dispose();
         await handbackObserver?.disarm();
@@ -721,10 +785,6 @@ export async function runJourneyProgrammatically(
       // #583: the typed handback state, decided from the run's own results and network evidence —
       // attached only when the Journey declares a boundary (otherwise the result is unchanged).
       result = attachHandback(result, journey, handbackObserver?.counts() ?? { writes: 0, writesBlocked: 0, observation: "unavailable" });
-      const mutationFields: MutationReplayFields = {
-        ...(mutation.structuredFailures === true ? { outcomeFailures: redactSecretValues([...outcomeChecks.lastFailures], runSecrets) } : {}),
-        ...(blocker === undefined ? {} : { blockedWrites: blocker.guard.drain() }),
-      };
       const slowFields = outcomeChecks.slowSteps.length === 0 ? {} : { slowSteps: [...outcomeChecks.slowSteps] };
       const writeOrigins = offAllowlist.stop();
       const originFields = writeOrigins.length === 0 ? {} : { offAllowlistWrites: redactSecretValues(writeOrigins, runSecrets) };
@@ -732,12 +792,20 @@ export async function runJourneyProgrammatically(
       const deltaFields = replayDeltas === undefined ? {} : { actionDeltas: redactSecretValues(replayDeltaSummary(replayDeltas), runSecrets) };
       // #245: the context closed (its video finalized) before the result naming it is returned.
       const videos = await finalizeVideos(videoDir, closeSession);
+      // After the close: a replay stays open a while before it, and a block holds until then.
+      await blocker?.guard.disarm();
+      const mutationFields: MutationReplayFields = {
+        ...(mutation.structuredFailures === true ? { outcomeFailures: redactSecretValues([...outcomeChecks.lastFailures], runSecrets) } : {}),
+        ...(blocker === undefined ? {} : { blockedWrites: blocker.guard.drain() }),
+        ...(blocker === undefined || blocker.escaped().length === 0 ? {} : { blockEscaped: blocker.escaped() }),
+      };
       if (fx === undefined) return { ...result, ...healFields, ...videos, ...shotFields, ...deltaFields, ...slowFields, ...originFields, ...mutationFields };
       await fx.restore();
       // #399: a fixture output passed in as a secret param (`--param t='${setup.t}'`) is redacted here too.
       return { ...result, ...healFields, ...videos, ...shotFields, ...deltaFields, ...slowFields, ...originFields, ...mutationFields, fixtures: redactSecretValues(fx.record(), runSecrets) };
     } finally {
       offAllowlist.stop();
+      await runGuard?.dispose();
       await closeSession();
     }
   } catch (err) {
@@ -746,10 +814,9 @@ export async function runJourneyProgrammatically(
     throw redactErrorSecrets(err, secretParamValues(journey, { ...inputParams, ...params }));
   } finally {
     await fx?.restore();
+    if (mutation.onFixtureRestoreFailed !== undefined && fx?.restoreFailed() === true) mutation.onFixtureRestoreFailed();
   }
 }
-
-const READ_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
 
 /**
  * #542: a replay's allowlist — the recorded site (or the environment's origins), then the Journey's
@@ -770,25 +837,11 @@ export function effectiveAllowedOrigins(journey: Journey, environment: ResolvedJ
  * A session whose page has no context events (a test double) observes nothing.
  */
 export function watchOffAllowlistWrites(session: BrowserSession, allowedOrigins: readonly string[]): { stop(): string[] } {
-  const allowed = new Set(allowedOrigins.flatMap((o) => {
-    try {
-      return [new URL(o).origin];
-    } catch {
-      return [];
-    }
-  }));
+  const allowed = allowedOriginSet(allowedOrigins);
   const seen: string[] = [];
   const onRequest = (request: { method(): string; url(): string }): void => {
-    if (READ_METHODS.has(request.method().toUpperCase())) return;
-    let origin: string;
-    try {
-      const u = new URL(request.url());
-      if (u.protocol !== "http:" && u.protocol !== "https:") return;
-      origin = u.origin;
-    } catch {
-      return;
-    }
-    if (!allowed.has(origin) && !seen.includes(origin)) seen.push(origin);
+    const origin = offAllowlistWriteOrigin(request.method(), request.url(), allowed);
+    if (origin !== undefined && !seen.includes(origin)) seen.push(origin);
   };
   const page = session.page as Partial<Page> | undefined;
   const context = typeof page?.context === "function" ? page.context() : undefined;
@@ -934,27 +987,82 @@ export function draftOnStored(stored: Journey, draft: ProposedRevisionDraft, env
 const BLOCK_WINDOW_SETTLE_MS = 5_000;
 
 /**
- * #402 block-write: a `ReadOnlyGuard` armed on the page whose action window is ONLY the given step —
- * opened as it begins, closed once the network settled after it. Every held write is aborted (a
- * write navigation too: never answered with a status that could read as a success).
+ * A write on a held line that got an answer, by `line`. A response is the answer: Chromium may never
+ * report the end of a body the page does not read, and a write the server answered did not stay blocked.
  */
-async function stepWriteBlocker(page: Page, index: number, allowedOrigins: readonly string[]): Promise<{ guard: ReadOnlyGuard; observer: StepObserver }> {
+export function watchEscapedWrites(
+  context: { on(event: "request" | "response", listener: (arg: never) => void): unknown },
+  lineIfHeld: (r: { method(): string; url(): string }) => string | undefined,
+): () => string[] {
+  const sent = new Map<unknown, string>();
+  const escaped = new Set<string>();
+  context.on("request", ((r: { method(): string; url(): string }) => {
+    const line = lineIfHeld(r);
+    if (line !== undefined) sent.set(r, line);
+  }) as (arg: never) => void);
+  context.on("response", ((res: { request(): unknown }) => {
+    const line = sent.get(res.request());
+    if (line !== undefined) escaped.add(line);
+  }) as (arg: never) => void);
+  return () => [...escaped];
+}
+
+/**
+ * #402 block-write: a `ReadOnlyGuard` armed on the page whose action window is the given step — opened
+ * as it begins, closed once the network settled after it. Every held write is aborted (a write
+ * navigation too: never answered with a status that could read as a success). The step's own lines
+ * stay blocked after the window (`blockAfterWindow`). What the guard's page route cannot reach is watched
+ * on the context: a matching write answered after the window means the mutation did not hold.
+ */
+async function stepWriteBlocker(
+  page: Page,
+  index: number,
+  allowedOrigins: readonly string[],
+  after: MutationReplayOptions["blockAfterWindow"],
+): Promise<{ guard: ReadOnlyGuard; observer: StepObserver; escaped: () => string[] }> {
   const guard = new ReadOnlyGuard(writeClassifier({}), { allowlist: [...allowedOrigins], navigationWrites: "abort" });
   await guard.arm(page);
   const monitor = monitorFor(page);
   await monitor.instrument();
+  let held: ReadonlySet<string> = new Set();
+  let released = false;
+  const lineOf = (r: { method(): string; url(): string }): string | undefined => {
+    try {
+      return `${r.method().toUpperCase()} ${new URL(r.url()).pathname}`;
+    } catch {
+      return undefined;
+    }
+  };
+  const context = typeof page.context === "function" ? page.context() : undefined;
+  const escaped =
+    after !== undefined && typeof context?.on === "function"
+      ? watchEscapedWrites(context as never, (r) => {
+          const line = lineOf(r);
+          return !released && line !== undefined && held.has(line) ? line : undefined;
+        })
+      : () => [];
   return {
     guard,
+    escaped,
     observer: {
       beforeStep: async ({ index: i }) => {
         if (i === index) guard.beginAction();
+        if (after?.exemptSteps.includes(i) === true) {
+          released = true;
+          guard.releaseHeldLines(true);
+        }
       },
       afterStep: async ({ index: i }) => {
+        if (after?.exemptSteps.includes(i) === true) {
+          released = false;
+          guard.releaseHeldLines(false);
+        }
         if (i !== index) return;
         try {
           await monitor.waitSettled({ ceilingMs: BLOCK_WINDOW_SETTLE_MS });
         } finally {
           guard.settled();
+          if (after !== undefined) held = guard.holdLines(after.requests);
         }
       },
     },

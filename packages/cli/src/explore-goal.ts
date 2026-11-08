@@ -1,4 +1,5 @@
 // explore-goal.ts — the goal-directed explore runner (`runExploration`) and its goal-only helpers (#231).
+import { openModelSecretScope } from "@jevitate/ai-core";
 import { sessionLostReason } from "./session-check.js";
 import { assertHttpChecksAllowed, createHttpProbe, httpCheckRefs } from "./http-probe.js";
 import { logsDirFor } from "./project-dir.js";
@@ -406,6 +407,16 @@ export function withServerCause(reason: string | undefined, outcome: GoalBasedOu
 }
 
 export async function runExploration(opts: RunExplorationOptions): Promise<RunExplorationResult> {
+  // The gateways' backstop, for this run only.
+  const modelSecrets = openModelSecretScope();
+  try {
+    return await runGoalExploration(opts, modelSecrets);
+  } finally {
+    modelSecrets.release();
+  }
+}
+
+async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: ReturnType<typeof openModelSecretScope>): Promise<RunExplorationResult> {
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
   // #543: every http success check's origin, too (the probe re-checks each request after substitution).
@@ -418,6 +429,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
   // the invariant monitor's own evidence.
   const authTokenValues = [...(opts.invariantAuthTokens?.values() ?? [])];
   const bound = [...secretFieldSecrets(opts.secretFields), ...(opts.fixtures?.secrets() ?? []), ...authTokenValues];
+  modelSecrets.add([...bound, ...(opts.secrets ?? [])]);
   const hasCmdField = (opts.secretFields ?? []).some((f) => f.kind === "cmd");
   const secrets = opts.secrets === undefined && bound.length === 0 && !hasCmdField ? undefined : [...(opts.secrets ?? []), ...bound];
   // #324: a value a cmd: binding reads mid-run joins this run's secrets at once, so everything this

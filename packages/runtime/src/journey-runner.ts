@@ -1,7 +1,7 @@
 import type { Actor } from "@jevitate/screenplay";
 import { BrowseTheWebToken, EnterSecret } from "@jevitate/screenplay";
 import { clock, type RunPolicy } from "@jevitate/domain";
-import { journeyParamSchema, secretParamValues, validateParams, type Journey, type SecretRef } from "@jevitate/journey";
+import { journeyParamSchema, validateParams, type Journey, type SecretRef } from "@jevitate/journey";
 import { RecordingInterpreter, checkAssertion, descriptorToTarget, type InterpretResult, type StepResolution, type StepWait } from "@jevitate/interpreter";
 import { RecordingSchema, type Recording, type RecordedStep, type Step } from "@jevitate/recording";
 import {
@@ -111,6 +111,8 @@ export interface JourneyHealOptions {
   readonly writeGuard?: HealWriteGuard;
   /** Handed to the model healer. */
   readonly allowedOrigins?: readonly string[];
+  /** Why this run may not heal right now: it holds a secret. Read at each break, since a run can extract one. */
+  readonly noHealBecause?: () => string | undefined;
 }
 
 /**
@@ -292,6 +294,9 @@ export class JourneyRunner {
       if (result.outcome === "failed") {
         // Invariant #4: fail-closed never heals — quarantine, never mask.
         if (session === undefined) return { outcome: "quarantined", reason: `step ${result.at + 1} failed: ${result.error}`, at: result.at };
+        // Nothing secret-bound goes to a model: the step fails as it would without a heal, and says so.
+        const noHeal = this.heal?.noHealBecause?.();
+        if (noHeal !== undefined) return { outcome: "quarantined", reason: `step ${result.at + 1} failed: ${result.error} — self-heal skipped: ${noHeal}`, at: result.at };
         session.touched = true;
         const healed = await this.#healStep(session, req, recording, result);
         if (healed.kind === "stop") {
@@ -392,7 +397,6 @@ export class JourneyRunner {
     const healer = this.selfHealer;
     let askModel = healer !== undefined && !(guarded && healer.actsOnPage);
     let budgetOut: HealExhaustion | null = null;
-    const secrets = secretParamValues(req.journey, req.params);
     let refuted = 0;
 
     for (;;) {
@@ -413,7 +417,6 @@ export class JourneyRunner {
             evidence,
             tried: tried.map(sanitizeStep),
             ...(this.heal?.allowedOrigins === undefined ? {} : { allowedOrigins: this.heal.allowedOrigins }),
-            ...(secrets.length === 0 ? {} : { secrets }),
             deadlineAtMs: s.meter.deadlineAtMs(),
             maxModelCalls: s.meter.remainingModelCalls(),
           });

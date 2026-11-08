@@ -282,6 +282,8 @@ export const JourneyReviewSchema = z
     proposal: ReviewProposalSchema.optional(),
     /** The Journey's anchors (name + 1-based step). Additive. */
     anchors: z.array(z.object({ name: z.string(), step: z.number().int().min(1) }).strict()).optional(),
+    /** #765: the pending annotation draft's status and next command, never the drafted text. Additive. */
+    annotationDraft: z.object({ status: z.enum(["current", "stale"]), path: z.string(), next: z.string() }).strict().optional(),
     /** Everything that needs a decision, ordered by severity; empty means every gate is clear. Additive. */
     attention: z.array(ReviewAttentionSchema).optional(),
     /** `journeyReviewHash`: what `journey promote --reviewed-hash` binds an approval to. */

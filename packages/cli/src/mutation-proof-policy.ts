@@ -1,7 +1,7 @@
 import { contentHash } from "@jevitate/domain";
 import { journeyWriteSteps, journeyParamSchema, ProofWaiverSchema, type ProofWaiver, type Journey, type JourneyReview } from "@jevitate/journey";
 import type { JourneyVerifyRecord } from "./journey-review.js";
-import { journeyProofHashForContext } from "./journey-proof-context.js";
+import { currentJourneyProofHash } from "./journey-proof-context.js";
 
 export type MutationProofPolicyMode = "advisory" | "require-attempt" | "require-proven";
 export { ProofWaiverSchema, type ProofWaiver };
@@ -22,10 +22,12 @@ function nonMutationTestable(journey: Journey, counts: Readonly<Record<string, n
 export function evaluateMutationProofPolicy(input: {
   journey: Journey; contentHash: string; record?: JourneyVerifyRecord | null;
   mode?: MutationProofPolicyMode; waiver?: ProofWaiver | null;
+  /** The target's `safety.readRequests` as they stand: a proof run under others is stale. */
+  readRequests?: readonly string[] | undefined;
 }): NonNullable<JourneyReview["proof"]["policy"]> {
   const { journey, contentHash: reviewedHash, record, waiver } = input;
   const mode = input.mode ?? "advisory";
-  const proofHash = journeyProofHashForContext(journey, record?.proofContext);
+  const proofHash = currentJourneyProofHash(journey, record?.proofContext, input.readRequests);
   const freshness = record == null ? "missing" : (record.journeyId !== journey.metadata.id || (record.proofHash === undefined ? record.contentHash !== reviewedHash : record.proofHash !== proofHash)) ? "stale" : "fresh";
   const verdict = record?.verdict ?? "not-verified";
   const counts = { ...(record?.summary ?? {}) };
