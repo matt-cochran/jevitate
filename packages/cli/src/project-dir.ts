@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { homedir as osHomedir } from "node:os";
+import { homedir as osHomedir, userInfo } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { clock } from "@jevitate/domain";
 
@@ -33,13 +33,57 @@ export function homeDataRoot(deps: LayoutDeps = {}): string {
   return join((deps.homedir ?? osHomedir)(), ".jevitate");
 }
 
+/**
+ * The real home while a test run has moved `HOME` (`test/global-temp-cleanup.ts`, which every process the
+ * run spawns inherits): a checkout under it must not take its `~/.jevitate` for a project. Never set
+ * otherwise. If it is set, it names a home and nothing more: only the walk's arrival at exactly that
+ * directory, from below, is passed over, and never where that directory is the working directory's own
+ * project root, so it can't hide a project or the `production: true` flag in its `environments.json`.
+ */
+function realHomeUnderTest(cwd: string): string | null {
+  const real = process.env.JEVITATE_TEST_REAL_HOME;
+  if (real === undefined || real === "") return null;
+  const home = resolve(real);
+  return home === cwd || findGitRoot(cwd) === home ? null : home;
+}
+
+/** The account's home in the passwd database, whatever `HOME` says; null when it has no entry (a container's arbitrary uid). */
+function passwdHome(): string | null {
+  try {
+    return resolve(userInfo().homedir);
+  } catch {
+    return null;
+  }
+}
+
+/** What only a per-user data dir holds: a project's `.jevitate/` never does. */
+const PER_USER_MARKERS = ["credentials.json", "targets.json", "profiles", "db.sqlite", "verify-checkpoint.key"];
+
+/**
+ * With `HOME` moved, the account's own `~/.jevitate` is still its per-user dir, not a project of
+ * whatever sits below it. But the account's home can be a real project (a container with
+ * `useradd -d /workspace`), whose `environments.json` and `production: true` flag must not be lost,
+ * so it is passed over only when it doesn't look like one: an `environments.json` always counts,
+ * then the working directory's git root decides, then what the directory holds.
+ */
+function isAccountHomeProject(dir: string, cwd: string): boolean {
+  const candidate = join(dir, ".jevitate");
+  if (existsSync(join(candidate, "environments.json"))) return true;
+  const root = findGitRoot(cwd);
+  if (root !== null) return root === dir;
+  return !PER_USER_MARKERS.some((m) => existsSync(join(candidate, m)));
+}
+
 /** The nearest `.jevitate/` walking up from the working directory — never the per-user one. */
 export function findProjectDir(deps: LayoutDeps = {}): string | null {
   const home = homeDataRoot(deps);
-  let dir = resolve((deps.cwd ?? (() => process.cwd()))());
+  const cwd = resolve((deps.cwd ?? (() => process.cwd()))());
+  const realHome = realHomeUnderTest(cwd);
+  const account = passwdHome();
+  let dir = cwd;
   for (;;) {
     const candidate = join(dir, ".jevitate");
-    if (candidate !== home && isDir(candidate)) return candidate;
+    if (candidate !== home && dir !== realHome && isDir(candidate) && (dir !== account || isAccountHomeProject(dir, cwd))) return candidate;
     const parent = dirname(dir);
     if (parent === dir) return null;
     dir = parent;
@@ -102,11 +146,16 @@ export function allResultDirs(deps: LayoutDeps = {}): string[] {
   return [...dated, ...legacyResultDirs(deps)];
 }
 
-/** The nearest directory holding `.git` (a directory, or a worktree's file), walking up from `cwd`. */
+/**
+ * The nearest directory holding a real `.git`, walking up from `cwd`: a worktree/submodule pointer
+ * (a file), or a directory containing a `HEAD` entry. An empty `.git` directory (e.g. a sandbox
+ * placeholder under /tmp) is not a repository, so the walk continues past it.
+ */
 export function findGitRoot(cwd: string): string | null {
   let dir = resolve(cwd);
   for (;;) {
-    if (existsSync(join(dir, ".git"))) return dir;
+    const git = join(dir, ".git");
+    if (existsSync(git) && (!isDir(git) || existsSync(join(git, "HEAD")))) return dir;
     const parent = dirname(dir);
     if (parent === dir) return null;
     dir = parent;

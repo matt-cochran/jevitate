@@ -1,3 +1,4 @@
+import { journeyReviewHash } from "./journey-review.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -71,6 +72,9 @@ beforeAll(async () => {
   await store.put(journey("accept-then-fail", "/accept?token=${inviteToken}", [
     { step: { kind: "assert", check: { kind: "urlIncludes", text: "/nowhere" } } },
   ]));
+  // #788: MCP runs a promoted Journey whose approval is current: approved as stored (saving mints step ids).
+  const saved = (await store.get("accept-invite"))!;
+  await store.put({ ...saved, metadata: { ...saved.metadata, approval: { contentHash: journeyReviewHash(saved), at: "2026-10-07T00:00:00.000Z" } } });
   await store.put(journey("drop", "/drop?token=${inviteToken}", [], { kind: "urlIncludes", text: "/drop" }));
   await store.put({
     ...journey("go", "/${dest}", [], { kind: "urlIncludes", text: "/" }),
@@ -244,7 +248,7 @@ describe("#399 navigate ${param} — served", () => {
     for (const p of [env.data?.resultPath, env.data?.transcriptPath]) if (p !== undefined) expectNoToken(p, await readFile(p, "utf8"));
   }, 180_000);
 
-  it("MCP run_journey takes the same param (parity) — no token in its result or artifacts", async () => {
+  it("MCP run_journey refuses the same param by name: a secret never travels through a request", async () => {
     const media = join(root, "media-mcp");
     seen.length = 0;
     const tool = buildMcpTools({ journeysDir: join(root, "journeys"), pathRoots: [root] }).find((t) => t.name === "run_journey")!;
@@ -255,10 +259,10 @@ describe("#399 navigate ${param} — served", () => {
       screenshots: `steps:${join(media, "shots")}`,
     });
     const text = res.content.map((c) => c.text).join("\n");
-    expect(res.isError, text).toBeUndefined();
-    expect((JSON.parse(res.content[0]!.text) as { outcome: string }).outcome).toBe("ok");
-    expect(seen).toEqual([SECRET]);
+    expect(res.isError, text).toBe(true);
+    expect(JSON.parse(res.content[0]!.text)).toMatchObject({ code: "E_SECRET_PARAM_OVER_MCP", params: ["inviteToken"] });
+    expect(seen).toEqual([]);
     expectNoToken("MCP result", text);
-    for (const f of await filesUnder(media)) expectNoToken(f.path, f.text);
+    expect(await filesUnder(media)).toEqual([]);
   }, 120_000);
 });

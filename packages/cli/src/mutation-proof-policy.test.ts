@@ -7,6 +7,7 @@ import { FakeClock, installClock, resetClock } from "@jevitate/domain";
 import { ProfileManager } from "@jevitate/daemon";
 import { buildJourneyReview, journeyReviewHash, renderReviewText, type JourneyVerifyRecord } from "./journey-review.js";
 import { evaluateMutationProofPolicy, mutationReceiptDigest, ProofWaiverSchema, type ProofWaiver } from "./mutation-proof-policy.js";
+import { journeyProofContext, journeyProofHashForContext, type JourneyProofContext } from "./journey-proof-context.js";
 import { readProofWaiver, writeVerifyRecord, proofWaiverPath } from "./journey-review-store.js";
 import { buildProgram } from "./program.js";
 import { runAsMcpInvocation, type ApprovalDeps } from "./approval-provenance.js";
@@ -26,6 +27,54 @@ function waiver(j = journey(), r = record(j)): ProofWaiver {
 let root: string;
 beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "jev-708-")); installClock(new FakeClock({ startMs: Date.parse("2026-10-26T01:00:00Z") })); });
 afterEach(() => { resetClock(); process.exitCode = undefined; });
+
+describe("a proof is bound to the target's read requests", () => {
+  const readRequests = ["/api/estimate"];
+  const proved = (j: Journey, proofContext?: JourneyProofContext): JourneyVerifyRecord => ({ ...record(j), ...(proofContext === undefined ? {} : { proofContext }), proofHash: journeyProofHashForContext(j, proofContext) });
+  const fresh = (rec: JourneyVerifyRecord, current?: readonly string[]): string => evaluateMutationProofPolicy({ journey: journey(), contentHash: journeyReviewHash(journey()), record: rec, ...(current === undefined ? {} : { readRequests: current }) }).freshness;
+
+  it("a receipt records them, in one order, and none at all leaves it as it was", () => {
+    expect(journeyProofContext(undefined, undefined, ["/b", "/a", "/a"])).toEqual({ readRequests: ["/a", "/b"] });
+    expect(journeyProofContext(undefined, undefined, [])).toBeUndefined();
+    expect(journeyProofContext(undefined, undefined, undefined)).toBeUndefined();
+  });
+
+  it("adding one, changing one or dropping one stales the receipt; the same set in another order does not", () => {
+    const j = journey();
+    const none = proved(j);
+    const some = proved(j, journeyProofContext(undefined, undefined, readRequests));
+    expect(fresh(none)).toBe("fresh");
+    expect(fresh(none, readRequests)).toBe("stale");
+    expect(fresh(some, readRequests)).toBe("fresh");
+    expect(fresh(some, ["/api/other"])).toBe("stale");
+    expect(fresh(some)).toBe("stale");
+    const two = proved(j, journeyProofContext(undefined, undefined, ["/a", "/b"]));
+    expect(fresh(two, ["/b", "/a"])).toBe("fresh");
+  });
+
+  it("the review sheet reads the target's current ones, and its browser context still counts", () => {
+    const j = journey();
+    const emulation = { device: "iPhone 15" };
+    const rec = proved(j, journeyProofContext(undefined, emulation, readRequests));
+    expect(rec.proofContext).toEqual({ emulation, readRequests });
+    expect(buildJourneyReview(j, { lastVerify: rec, safety: { readRequests } }).proof.verify).toMatchObject({ stale: false });
+    expect(buildJourneyReview(j, { lastVerify: rec, safety: { readRequests: ["/api/other"] } }).proof.verify).toMatchObject({ stale: true });
+    expect(buildJourneyReview(j, { lastVerify: rec }).proof.policy?.freshness).toBe("stale");
+  });
+
+  it("journey review over a real targets file: changing it after the proof stales the proof", async () => {
+    const dir = join(root, "journeys");
+    const targetsFile = join(root, "targets.json");
+    const j = journey();
+    await new FsJourneyStore(dir).put(j);
+    const write = (list: readonly string[]): Promise<void> => writeFile(targetsFile, JSON.stringify({ [new URL(j.recording.site).origin]: { safety: { readRequests: list } } }));
+    await writeVerifyRecord(dir, proved(j, journeyProofContext(undefined, undefined, readRequests)));
+    await write(readRequests);
+    expect((await reviewJourneyById(dir, j.metadata.id, { targetsFile, catalogDir: null })).review.proof.policy?.freshness).toBe("fresh");
+    await write(["/api/other"]);
+    expect((await reviewJourneyById(dir, j.metadata.id, { targetsFile, catalogDir: null })).review.proof.policy?.freshness).toBe("stale");
+  });
+});
 
 describe("#708 shared mutation proof policy", () => {
   for (const summary of [{ sensitive: 0, unpaired: 5, cascade: 0 }, { sensitive: 6, unpaired: 0, cascade: 1 }]) {

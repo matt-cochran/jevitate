@@ -16,6 +16,7 @@ import { parseScreenshotsArg, type ScreenshotsSpec } from "../run-screenshots.js
 import { GitHubIssueFiler } from "../github-issue-filer.js";
 import { TargetConfigError, loadTargetsFile, resolveTargetConfig, type TargetConfig } from "../target-config.js";
 import { setupRefFreeUrl } from "../fixture-cli.js";
+import { warnSecretParamsOnArgv } from "../secret-params.js";
 import type { FilingConfig, IssueFilerPort } from "@jevitate/domain";
 import { LITERAL_SECRET_WARNING, SecretArgError, resolveSecretArgs } from "../secret-args.js";
 import { withEngine } from "../engine.js";
@@ -127,6 +128,7 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
           refuse("--from-journey and --at-step go together (and --param, --env, --base-url and --journeys-dir need them)");
           return;
         }
+        await warnSecretParamsOnArgv(program.configureOutput().writeErr, resolveJourneysDir(deps, o.journeysDir), [o.fromJourney], o.param);
         if (o.url !== undefined) {
           refuse("--url cannot be combined with --from-journey: the mission starts where the Journey's prefix leaves the page");
           return;
@@ -269,6 +271,11 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
         const resolved = resolveSecretArgs(o.secret, process.env, "--secret");
         if (resolved.literals > 0) program.configureOutput().writeErr?.(LITERAL_SECRET_WARNING);
         o.secret = [...resolved.secrets, ...(journeyPrefix?.secrets ?? [])];
+        // These two carry no redaction set: the value would reach the model and the transcript.
+        if (o.secret.length > 0 && o.feature === undefined && (strategy === "coverage" || strategy === "exploratory")) {
+          emitExplore(fail("E_EXPLORE_SECRET_UNSUPPORTED", `--strategy ${strategy} can't keep a --secret out of its model calls and transcript, so nothing ran. Use goal, adversarial or usability, which mask it, or leave the value off the page`));
+          return;
+        }
       } catch (err) {
         if (!(err instanceof SecretArgError)) throw err;
         emitExplore(fail("E_EXPLORE_ARGS", err.message));

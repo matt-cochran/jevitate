@@ -16,6 +16,9 @@ import { MAX_STEP_RESPONSE_TIMEOUT_MS } from "../journey-network-checks.js";
 import { type ChangeScope, SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
 import { ok, fail } from "../envelope.js";
 import { runJourneyProgrammatically, UnknownJourneyError, JourneyRequiresAuthError } from "../journey-api.js";
+import { resolveCatalogDir } from "../catalog-api.js";
+import { journeyDraftWarning } from "../journey-stale-api.js";
+import { runRecordErrorOf, withJourneyRunRecord } from "../journey-run-record.js";
 import { ExtensionMismatchError } from "../browser-run-options.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "../run-screenshots.js";
 import { withSiteGate } from "../site-gate-cli.js";
@@ -26,13 +29,16 @@ import { withRecordedFixtures, fixtureDriftFor, type FixtureDrift } from "../jou
 import { withEngine } from "../engine.js";
 import { BoundaryNoHealError, handbackExitCode, handbackLine } from "../journey-handback.js";
 import { type EmulationSpec } from "@jevitate/playwright";
+import { SecretFieldSpecError } from "@jevitate/explore";
+import { BoundSecretOutsideFieldError, SecretFieldAmbiguousError, withSecretParams, warnSecretParamsOnArgv, type BoundSecretParams } from "../secret-params.js";
 import { environmentFromFlags, fixtureRebaseUrl, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
 
 /** Registers `jevitate journey run`. */
 export function registerJourneyRun(journey: Command, program: Command, deps: CliDeps): void {
   withScreenshotsFlag(withReplayAllowFlag(withEnvironmentFlags(withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(withProjectFlags(journey.command("run <id>"))))), { recordVideo: true }))))
     .option("--dir <path>", DEPRECATED_DIR_HELP)
-    .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
+    .option("--param <kv>", "param as key=value (repeatable); a secret one is on the command line: use --secret-field", collectParam, {} as Record<string, string>)
+    .option("--secret-field <binding>", "a secret parameter from the environment, off the command line: '<label|testId|id|name>=<value>=env:<VAR>' (repeatable), matched on the recorded step that types it, e.g. 'label=Password=env:APP_PASSWORD'. The environment's secretFields in ~/.jevitate/targets.json apply the same way; --param wins", (v: string, prev: string[]) => [...prev, v], [] as string[])
     .option(
       "--storage-state <file>",
       "Playwright storageState JSON to start the session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist",
@@ -83,7 +89,8 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         ...(ownFixtureFlags.after === undefined && environment?.hooks?.after !== undefined ? { after: environment.hooks.after } : {}),
       };
       const {
-        param,
+        param: paramFlags,
+        secretField,
         storageState: storageStateFlag,
         selfHeal,
         real,
@@ -112,6 +119,7 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         actionDeltas?: boolean;
         stepResponseTimeout?: number;
         param: Record<string, string>;
+        secretField: string[];
         storageState?: string;
         selfHeal: string;
         real?: boolean;
@@ -119,6 +127,21 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         jevProvider?: string;
         json?: boolean;
       } & EmulationFlags & ScreenshotsFlags>();
+      // A secret parameter from the environment (--secret-field, targets.json), before any browser opens.
+      let param: Record<string, string>;
+      let boundSecretParams: BoundSecretParams | undefined;
+      try {
+        ({ params: param, bound: boundSecretParams } = await withSecretParams({ dir: runJourneysDir, id, params: paramFlags, flags: secretField, targetFields: environment?.secretFields, targetOrigin: environment?.baseUrl, env: deps.explore?.env ?? process.env }));
+      } catch (err) {
+        if (err instanceof BoundSecretOutsideFieldError) {
+          emitJson(program, fail(err.code, err.message));
+          return;
+        }
+        if (!(err instanceof SecretFieldSpecError || err instanceof SecretFieldAmbiguousError)) throw err;
+        emitJson(program, fail("E_JOURNEY_RUN_ARGS", err.message));
+        return;
+      }
+      await warnSecretParamsOnArgv(program.configureOutput().writeErr, runJourneysDir, [id], paramFlags);
       // --storage-state wins; else the environment's own session (~/.jevitate/targets.json[<origin>]).
       const storageState = storageStateFlag ?? environment?.storageState;
 
@@ -211,12 +234,18 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         // the flag; a `--secret-mode` override is a later slice's concern.
         // #544: no --fixtures → the Journey's recorded fixtures (a missing file is refused before any browser).
         const recorded = await withRecordedFixtures(fixtureFlags, { dir: runJourneysDir, id });
+        // #788: a draft runs here, as authoring needs, and says once what MCP would answer.
+        const unapproved = await journeyDraftWarning(runJourneysDir, id, resolveCatalogDir(deps.catalogDir));
+        if (unapproved !== undefined) program.configureOutput().writeErr?.(unapproved);
         let fixtureDrift: FixtureDrift | undefined;
-        const result = await withSiteGate(resolveDbPath(deps), (siteGate) => runJourneyProgrammatically({
+        // #790: every run leaves one value-free record, whatever it comes to.
+        const result = await withJourneyRunRecord({ channel: "cli", id, params: param, logsRoot: deps.logs?.logsRoot }, (runRecorder) => withSiteGate(resolveDbPath(deps), (siteGate) => runJourneyProgrammatically({
+          runRecorder,
           ...(siteGate === undefined ? {} : { siteGate }),
           dir: runJourneysDir,
           id,
           params: param,
+          ...(boundSecretParams === undefined ? {} : { boundSecretParams }),
           policy,
           selfHealer,
           ...(healScope === undefined ? {} : { heal: { scope: healScope } }),
@@ -247,7 +276,8 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
             checkSetupRefs({ "--param": Object.values(param) }, fx);
             return fx;
           },
-        })).then((r) => withEngine(healUsage === undefined ? r : { ...r, usage: healUsage.snapshot() }));
+        }))).then((r) => withEngine(healUsage === undefined ? r : { ...r, usage: healUsage.snapshot() }));
+        if (result.runRecordError !== undefined) program.configureOutput().writeErr?.(`warning: ${result.runRecordError}\n`);
         if (fixtureDrift !== undefined && !json) program.configureOutput().writeErr?.(`warning: ${(fixtureDrift as FixtureDrift).message}\n`);
         // #246 (informational, never failing): how many steps say why — `journey annotate` drafts the rest.
         const intent = await journeyIntentCoverage(runJourneysDir, id);
@@ -272,6 +302,8 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
           process.exitCode = code;
         }
       } catch (err) {
+        const recordProblem = runRecordErrorOf(err);
+        if (recordProblem !== undefined) program.configureOutput().writeErr?.(`warning: ${recordProblem}\n`);
         if (err instanceof SiteGateRefusedError || isEnvironmentError(err) || err instanceof HttpCheckOffAllowlistError) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof UnknownJourneyError) {

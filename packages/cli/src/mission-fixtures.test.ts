@@ -694,3 +694,48 @@ describe("#560/#561: rebaseUrl rewrites every resolved step URL", () => {
     expect(calls.map((c) => c.url)).toEqual([`${ORIGIN}/api/x`]);
   });
 });
+
+describe("a fixture restore that fails", () => {
+  const answering = (status: number): MissionFixtures =>
+    new MissionFixtures({
+      ...BOUNDS,
+      spec: parseFixtureSpec({ restore: [{ method: "DELETE", url: "/api/items/x" }] }, BOUNDS),
+      auth: {},
+      fetchImpl: (async () => new Response(null, { status })) as typeof fetch,
+    });
+  const restored = async (fx: MissionFixtures): Promise<MissionFixtures> => {
+    await fx.setup();
+    await fx.restore();
+    return fx;
+  };
+
+  it("does not throw", async () => {
+    const fx = answering(500);
+    await fx.setup();
+    await expect(fx.restore()).resolves.toBeUndefined();
+  });
+  it("reports that a restore failed", async () => {
+    expect((await restored(answering(500))).restoreFailed()).toBe(true);
+  });
+  it("stays reported after a later restore works", async () => {
+    let status = 500;
+    const fx = new MissionFixtures({
+      ...BOUNDS,
+      spec: parseFixtureSpec({ restore: [{ method: "DELETE", url: "/api/items/x" }] }, BOUNDS),
+      auth: {},
+      fetchImpl: (async () => new Response(null, { status })) as typeof fetch,
+    });
+    await restored(fx);
+    status = 204;
+    await fx.reset();
+    await fx.restore();
+    expect(fx.restoreFailed()).toBe(true);
+  });
+  it("reports nothing when the restore works", async () => {
+    expect((await restored(answering(204))).restoreFailed()).toBe(false);
+  });
+  it("reports an --after hook that exits non-zero", async () => {
+    const fx = new MissionFixtures({ ...BOUNDS, hooks: { after: "exit 3" }, allowShellHooks: true, auth: {} });
+    expect((await restored(fx)).restoreFailed()).toBe(true);
+  });
+});

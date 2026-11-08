@@ -16,6 +16,7 @@ import { runJourneyChain, chainSucceeded, type JourneyChainResult } from "./jour
 import { journeyContentHash } from "./journey-annotate-api.js";
 import { reviewJourneyById } from "./journey-review-api.js";
 import { verifyRecordPath } from "./journey-review-store.js";
+import { journeyReadRequests } from "./target-config.js";
 import { verifyJourneyMutations } from "./journey-verify.js";
 import { runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 
@@ -548,10 +549,13 @@ export async function runJourneyReadiness(opts: JourneyReadinessOptions, deps: J
         }
         const proofParams = consumer ? (boundConsumerParams as Record<string, string>) : params;
         try {
+          // #763: as this receipt's review classified the Journey's writes. An unreadable targets file already refused that review.
+          const readRequests = journeyReadRequests(ctx.journey, opts.targetsFile === undefined ? {} : { targetsFile: opts.targetsFile });
           await verify({
             dir: opts.journeysDir,
             id: ctx.id,
             params: proofParams,
+            ...(readRequests === undefined ? {} : { readRequests }),
             environment,
             ...(opts.storageState === undefined ? {} : { storageState: opts.storageState }),
           ...(opts.browser === undefined ? {} : { browser: opts.browser }),

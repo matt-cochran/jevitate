@@ -1,4 +1,6 @@
 // ux-usability.ts — the live usability mission runner (`explore --strategy usability`) (#231).
+import { withModelSecrets } from "@jevitate/ai-core";
+import { secretFieldSecrets } from "@jevitate/explore";
 import type { JudgmentPort, GenerationPort, UsageTracker, UsageCounts } from "@jevitate/ai-core";
 import type { BrowserPort, EmulationSpec } from "@jevitate/playwright";
 import type { BrowserRunOptions } from "./browser-run-options.js";
@@ -282,6 +284,10 @@ export interface RunUsabilityMissionResult {
  * ignored by explore). The temp profile dir is always removed.
  */
 export async function runUsabilityMission(opts: RunUsabilityMissionOptions): Promise<RunUsabilityMissionResult> {
+  return withModelSecrets([...(opts.secrets ?? []), ...secretFieldSecrets(opts.secretFields)], () => runUsability(opts));
+}
+
+async function runUsability(opts: RunUsabilityMissionOptions): Promise<RunUsabilityMissionResult> {
   const ctx = await setUpUsabilityMission(opts);
   try {
     const loop = await runUsabilityLoop(ctx);

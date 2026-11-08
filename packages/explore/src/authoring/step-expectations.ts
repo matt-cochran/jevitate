@@ -1,6 +1,6 @@
 import type { Assertion, NetworkCheck, RecordedStep, Recording, Step, StatusSpec, TargetDescriptor } from "@jevitate/recording";
 import { writeClassifier, type WriteClassifier } from "@jevitate/recording";
-import { SECRET_PARAM_NAME_RE, isOwnTargetVisible } from "@jevitate/journey";
+import { isSecretName, isOwnTargetVisible } from "@jevitate/journey";
 import { REDACTION_MASK } from "@jevitate/ai-core";
 import { normalizeRoute } from "../adversarial/defect-fingerprint.js";
 import { expectedResultFromDelta } from "../replay-deltas.js";
@@ -139,7 +139,7 @@ function fillExpect(step: Extract<Step, { kind: "fill" }>, secret: ReadonlySet<s
   const v = step.value;
   if ("var" in v) {
     // #565: the exact supplied text, by reference — never a secret (it would be model-visible).
-    if (secret.has(v.var) || SECRET_PARAM_NAME_RE.test(v.var)) return null;
+    if (secret.has(v.var) || isSecretName(v.var)) return null;
     return { kind: "valueEquals", target: { ...step.target }, value: { var: v.var } };
   }
   if (v.redacted) return null;

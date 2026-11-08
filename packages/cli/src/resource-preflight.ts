@@ -131,7 +131,7 @@ export interface DoctorReport {
     readonly memoryCeilingBytes: number | null;
   };
   readonly load: { readonly level: string; readonly reasons: readonly string[]; readonly loadPerCore: number | null; readonly memAvailableBytes: number | null };
-  readonly slots: Array<{ readonly index: number; readonly pid: number | null; readonly host: string | null; readonly acquiredAt: string | null; readonly stale: string | null }>;
+  readonly slots: Array<{ readonly index: number; readonly pid: number | null; readonly host: string | null; readonly acquiredAt: string | null; readonly stale: string | null; /** The path, when something other than a regular file holds this slot. */ readonly notRegularFile?: string }>;
   /** Every jevitate-launched browser on this machine; null where the platform has no process reader. */
   readonly browsers: Array<{ readonly pid: number; readonly ownerPid: number; readonly orphan: string | null }> | null;
   readonly cleanup?: {
@@ -146,6 +146,7 @@ const slotRow = (s: SlotState): DoctorReport["slots"][number] => ({
   host: s.holder?.host ?? null,
   acquiredAt: s.holder?.acquiredAt ?? null,
   stale: s.stale,
+  ...(s.notRegularFile === true ? { notRegularFile: s.path } : {}),
 });
 
 /** `jevitate doctor`'s report; with `cleanup`, orphaned browsers are closed and stale slots cleared first. */
@@ -190,7 +191,7 @@ export function formatDoctor(r: DoctorReport): string {
   ].filter((x) => x !== null);
   lines.push(`host: ${r.load.level}${load.length === 0 ? "" : ` (${load.join(", ")})`}${r.load.reasons.length === 0 ? "" : ` — ${r.load.reasons.join("; ")}`}`);
   lines.push(`machine browser slots held: ${r.slots.length}`);
-  for (const s of r.slots) lines.push(`  slot ${s.index}: ${s.pid === null ? "unreadable" : `pid ${s.pid} on ${s.host}`}${s.stale === null ? "" : ` — stale: ${s.stale}`}`);
+  for (const s of r.slots) lines.push(`  slot ${s.index}: ${s.notRegularFile !== undefined ? `${s.notRegularFile} is not a regular file; it holds this slot until removed by hand` : s.pid === null ? "unreadable" : `pid ${s.pid} on ${s.host}`}${s.stale === null ? "" : ` — stale: ${s.stale}`}`);
   if (r.browsers === null) lines.push("jevitate browsers: not listed (no process reader on this platform)");
   else {
     const orphans = r.browsers.filter((b) => b.orphan !== null);

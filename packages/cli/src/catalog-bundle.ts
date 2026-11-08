@@ -1,5 +1,5 @@
 import { JOURNEY_MISSION_OUTCOME, JOURNEY_RUN_OUTCOMES, MISSION_EXIT_CODES, MISSION_OUTCOMES, isRecord, type MissionOutcome } from "@jevitate/domain";
-import { flatJourneySteps, SECRET_PARAM_NAME_RE, type CatalogApproval, type Journey } from "@jevitate/journey";
+import { flatJourneySteps, isSecretName, type CatalogApproval, type Journey } from "@jevitate/journey";
 import { CatalogInputError, findJob, findPersona, type Catalog, type CatalogJourney } from "./catalog.js";
 import { CATALOG_CONTRACT_IDENTITY } from "./catalog-contract-identity.js";
 import { describeRefIssue, jobRefIssues, journeyRefIssues, RESERVED_ANCHORS } from "./catalog-refs.js";
@@ -481,7 +481,7 @@ function clearValues(node: unknown, path: string, out: Array<{ path: string; val
   if (!isRecord(node)) return;
   // A step whose target reads as a credential (password, token, otp, …): its literal is a secret.
   const target = node.target;
-  const secretHere = isRecord(target) && ["name", "label", "testId", "text"].some((k) => typeof target[k] === "string" && SECRET_PARAM_NAME_RE.test(target[k]));
+  const secretHere = isRecord(target) && ["name", "label", "testId", "text"].some((k) => typeof target[k] === "string" && isSecretName(target[k]));
   if (node.redacted === false && typeof node.value === "string") out.push({ path, value: node.value, secretField });
   for (const [k, v] of Object.entries(node)) clearValues(v, `${path}.${k}`, out, k === "value" ? secretHere || secretField : secretField);
 }

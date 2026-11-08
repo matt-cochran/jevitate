@@ -10,7 +10,7 @@
  * replay whose steps all passed but whose outcome is absent is a failed run, never `ok`.
  */
 import type { Page } from "playwright";
-import { SECRET_PARAM_NAME_RE, journeyEndState, type Journey } from "@jevitate/journey";
+import { isLoadRefusedName, journeyEndState, type Journey } from "@jevitate/journey";
 import type { NetworkCheck } from "@jevitate/recording";
 import type { JourneyRunResult } from "@jevitate/runtime";
 import type { Actor } from "@jevitate/screenplay";
@@ -215,7 +215,7 @@ export class JourneyOutcomeChecks {
       const value = output[name];
       if (typeof value !== "string") return undefined;
       // #564: an `extract` output named like a credential (`apiKey`) is a secret whatever its value.
-      return { value, secret: this.#secrets.includes(value) || SECRET_PARAM_NAME_RE.test(name) };
+      return { value, secret: this.#secrets.includes(value) || isLoadRefusedName(name) };
     };
   }
 
@@ -231,7 +231,13 @@ export class JourneyOutcomeChecks {
   async run(
     actor: Actor,
     replay: () => Promise<JourneyRunResult>,
-    opts: { readonly collectStepFailuresOnReplayFailure?: boolean } = {},
+    opts: {
+      readonly collectStepFailuresOnReplayFailure?: boolean;
+      /** Awaited just before the end state's checks start. Never reached by a replay that failed first. */
+      readonly beforeEndState?: () => Promise<void>;
+      /** Called as the end state's checks end, however they ended. */
+      readonly afterEndState?: () => void;
+    } = {},
   ): Promise<JourneyRunResult> {
     this.#lastFailures = [];
     this.#slowSteps = [];
@@ -291,6 +297,7 @@ export class JourneyOutcomeChecks {
     }
     let end: SuccessCheckResult[] = [];
     if (this.#end.length > 0) {
+      await opts.beforeEndState?.();
       try {
         end = await evaluateOutcomeChecks(this.#end, {
           actor,
@@ -306,6 +313,8 @@ export class JourneyOutcomeChecks {
         const detail = `success checks could not be evaluated after the last step: ${e instanceof Error ? e.message : String(e)}`;
         this.#lastFailures = [{ where: "unevaluable", detail }];
         return { outcome: "quarantined", reason: detail };
+      } finally {
+        opts.afterEndState?.();
       }
     }
     // `evaluateOutcomeChecks` keeps the checks' order, which is `journeyEndState`: `endState` then

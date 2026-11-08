@@ -111,6 +111,9 @@ function readJson(path: string): unknown {
 
 const UX_REPORT = /^usability-.*\d{3}Z\.json$/;
 
+/** #767: a verify-fix run's result artifact (`verify-fix-<stamp>.result.json`) is not a mission run. */
+const VERIFY_FIX_RESULT = /^verify-fix-.*\.result\.json$/;
+
 /** Is this file name one a result scan reads? (Recordings, transcripts and drafts are not.) */
 function isResultName(name: string): boolean {
   return name.endsWith(".result.json") || UX_REPORT.test(name);
@@ -118,6 +121,9 @@ function isResultName(name: string): boolean {
 
 /** Reads one persisted result file into a run. Null for a file that is not a result. */
 export function loadRunFile(path: string): RunRecord | null {
+  // #767: a verify-fix artifact is a report about a replay, not a mission run — skip it cleanly
+  // (reading it as one would mistag it as a run with no findings).
+  if (VERIFY_FIX_RESULT.test(basename(path))) return null;
   let raw: unknown;
   try {
     raw = readJson(path);

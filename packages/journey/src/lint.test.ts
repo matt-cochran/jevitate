@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Recording, RecordedStep } from "@jevitate/recording";
-import { lintJourney, lintUploadFixtures, type Journey } from "./index.js";
+import { journeyWriteSteps, lintJourney, lintUploadFixtures, type Journey } from "./index.js";
 
 // #401 Part A — the pure assertion-strength lint. Fixtures are small inline Journeys (see
 // assertions.test.ts / journey.test.ts for the shape).
@@ -233,22 +233,6 @@ describe("#401 lintJourney", () => {
     expect(lintJourney(journey).some((f) => f.rule === "no-persistence-check")).toBe(true);
   });
 
-  it("does not require persistence for a relevant UI transition with only recorded reads", () => {
-    const journey = j([
-      {
-        step: { kind: "click", target: { testId: "use-template" }, expect: { kind: "textIncludes", target: { role: "heading" }, text: "Campaign Objective" } },
-        delta: {
-          verdict: "relevant-change",
-          why: "template context loaded into an unsaved draft",
-          changes: ["heading"],
-          requests: ["GET /api/v1/tool/organizations/agent-profiles → 200"],
-          overheadMs: 1,
-        },
-      },
-    ]);
-    expect(lintJourney(journey).some((f) => f.rule === "no-persistence-check")).toBe(false);
-  });
-
   it("flags no-persistence-check for a step whose expectRequests names a write request", () => {
     const journey = j([
       {
@@ -267,6 +251,16 @@ describe("#401 lintJourney", () => {
       },
     ]);
     expect(lintJourney(journey, { readRequests: ["Estimate*"] }).some((f) => f.rule === "no-persistence-check")).toBe(false);
+  });
+
+  it("keeps the page-delta fallback for a step whose only recorded request is a GET", () => {
+    const steps = [
+      {
+        step: { kind: "click", target: { testId: "save" }, expect: { kind: "textIncludes", target: { css: "#status" }, text: "Saved" } },
+        delta: { verdict: "relevant-change", why: "saved", changes: ["Saved"], requests: ["GET /api/status → 200"] },
+      },
+    ];
+    expect(journeyWriteSteps(j(steps as never)).map((w) => w.step)).toEqual([1]);
   });
 
   it("does not override an explicitly configured read-only REST POST with the page-delta fallback", () => {
@@ -462,4 +456,15 @@ describe("#565 lintJourney: parameter-relative checks", () => {
   it("a check naming an unbound reference proves nothing", () => {
     expect(lintJourney(publishWith("Published ${nobody}")).map((f) => f.rule)).toContain("write-without-effect");
   });
+});
+
+it("secret: false on a credential-like name is a warning a reviewer sees; on any other name, or without it, nothing", () => {
+  const withParameters = (parameters: Journey["metadata"]["parameters"]): Journey => ({
+    metadata: { id: "j", name: "j", promoted: false, params: [], parameters, createdAtIso: "2026-11-05T00:00:00.000Z" },
+    recording: { version: "1", site: "https://a.test", pages: [{ url: "/", steps: [{ step: { kind: "navigate", url: "/", expect: { kind: "visible", target: { testId: "x" } } } }] }] },
+  }) as unknown as Journey;
+  const rule = (j: Journey) => lintJourney(j).filter((f) => f.rule === "secret-false-credential-name");
+  expect(rule(withParameters([{ name: "password", secret: false }]))).toEqual([expect.objectContaining({ level: "warning" })]);
+  expect(rule(withParameters([{ name: "password" }]))).toEqual([]);
+  expect(rule(withParameters([{ name: "sku", secret: false }]))).toEqual([]);
 });

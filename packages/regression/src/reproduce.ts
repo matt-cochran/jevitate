@@ -1,16 +1,18 @@
 import type { Actor } from "@jevitate/screenplay";
 import type { Recording } from "@jevitate/recording";
-import { RecordingInterpreter } from "@jevitate/interpreter";
+import { RecordingInterpreter, type ReplayActionGuard } from "@jevitate/interpreter";
 import { fingerprintFailure, matchesFingerprint, type FailureFingerprint } from "./fingerprint.js";
 
 /** #498: the project root a replayed `upload` fixture must lie inside (absent ⇒ an upload step is refused). */
 export interface ReplayFixtureOptions {
   readonly fixtureBaseDir?: string;
+  /** #789: what may end a replay, an MCP-driven one. A refusal passes through every function here to the caller. */
+  readonly actionGuard?: ReplayActionGuard;
 }
 
-/** The interpreter options for `opts` (only a given root is passed). */
-export function fixtureOptions(opts: ReplayFixtureOptions): { fixtureBaseDir?: string } {
-  return opts.fixtureBaseDir === undefined ? {} : { fixtureBaseDir: opts.fixtureBaseDir };
+/** The interpreter options for `opts` (only what was given is passed). */
+export function fixtureOptions(opts: ReplayFixtureOptions): { fixtureBaseDir?: string; actionGuard?: ReplayActionGuard } {
+  return { ...(opts.fixtureBaseDir === undefined ? {} : { fixtureBaseDir: opts.fixtureBaseDir }), ...(opts.actionGuard === undefined ? {} : { actionGuard: opts.actionGuard }) };
 }
 
 export class NeverFailedError extends Error {}

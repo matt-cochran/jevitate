@@ -73,6 +73,10 @@ jobs:
         suite:
         - unit
         - browser
+        # The real-clock mutation-proof matrices: about 23 and 15 minutes each, on a 2-vCPU runner,
+        # because a held request or a running job is real time. In the browser lane they took it from
+        # about 21 minutes to about 44, at its cap. Their own lane keeps both lanes well under it.
+        - browser-proofs
     runs-on: ${{ vars.CI_RUNNER_MODE == 'blacksmith' && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     timeout-minutes: 45
     env:
@@ -128,7 +132,16 @@ jobs:
         else
           # Browser is independently capped at two real-Chromium files by the
           # browser Vitest project, so it can run beside the unit lane safely.
-          pnpm exec vitest run --project browser packages apps
+          # The proof lane runs exactly the files the browser lane excludes.
+          proofs="packages/cli/src/journey-verify-soundness-served.test.ts packages/cli/src/journey-verify-control-served.test.ts"
+          for f in $proofs; do test -f "$f" || { echo "missing proof file $f"; exit 1; }; done
+          if [ "$TEST_SUITE" = browser-proofs ]; then
+            pnpm exec vitest run --project browser $proofs
+          else
+            excludes=""
+            for f in $proofs; do excludes="$excludes --exclude $f"; done
+            pnpm exec vitest run --project browser packages apps $excludes
+          fi
         fi
     - name: Lint
       if: env.REUSED != 'true'

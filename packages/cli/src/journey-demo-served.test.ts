@@ -150,7 +150,9 @@ describe("[realtime] jevitate journey demo — served (#248)", () => {
       const guide = join(dir, "out1", "token-guide.md");
 
       const r = await cli(journeysDir, ["journey", "demo", "token", "--param", `apiToken=${SECRET}`, "--video", video, "--guide", guide, "--pace", PACE, "--json"]);
-      expect(r.err).toBe("");
+      // The secret's --param warning, by name: nothing else, and never the value.
+      expect(r.err).toMatch(/^warning: --param apiToken: [^\n]*\n$/);
+      expect(r.err).not.toContain(SECRET);
       expect(r.exitCode).toBe(0);
       const env = JSON.parse(r.out) as { ok: boolean; data: { outcome: string; video: string; subtitles: string; guide: string; steps: Array<{ number: number; caption: string; screenshot: string }> } };
       expect(env.ok).toBe(true);

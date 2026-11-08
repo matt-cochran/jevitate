@@ -2,7 +2,7 @@
 
 > Generated from the CLI — do not edit by hand; run `pnpm docs:cli`.
 
-Autonomous browser testing that turns discovered bugs into deterministic regression tests
+Browser automation and testing in one tool: parameterized Journeys that do real work in your app, and autonomous exploration that turns discovered bugs into deterministic regression tests
 
 **Options**
 
@@ -1754,11 +1754,12 @@ jevitate journey run [options] <id>
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
-| `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
+| `--param <kv>` | param as key=value (repeatable); a secret one is on the command line: use --secret-field | `{}` |  |  |  |
 | `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--real` | use live Jev + OpenRouter gateways for self-heal (requires keys) | `false` |  |  |  |
 | `--record-video [dir]` | record a video of each browser context (works headless too); default: next to the run's result; listed as videoPaths |  |  |  |  |
 | `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
+| `--secret-field <binding>` | a secret parameter from the environment, off the command line: '<label\|testId\|id\|name>=<value>=env:<VAR>' (repeatable), matched on the recorded step that types it, e.g. 'label=Password=env:APP_PASSWORD'. The environment's secretFields in ~/.jevitate/targets.json apply the same way; --param wins | `[]` |  |  |  |
 | `--self-heal <mode>` | self-heal policy mode: fail-closed \| hybrid \| full (#453: hybrid/full need --changes and/or --change-note; a heal is proposed for review, exit 5 — never a pass) | `fail-closed` |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--step-response-timeout <ms>` | #486: how long a step's responseStatus check waits for a matching request that was sent but has no response yet, e.g. a cold start after a deploy (default 15000). A late 2xx is an advisory slow-step finding (slowSteps), not a quarantine; a non-2xx, or no response within the bound, fails. A step's own responseTimeoutMs overrides it; at most 300000 |  |  |  |  |
@@ -1809,6 +1810,8 @@ preview or prove that each Journey assertion fails when its outcome is absent
 | `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
 | `--plan` | print the static mutation/assertion plan without opening a browser |  |  |  |  |
 | `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
+| `--resume` | with --mutate: continue an interrupted proof of the same Journey and configuration, or one that ended inconclusive on errored replays, reusing finished pairs after the base replay passes again and running errored pairs again; any mismatch, a damaged or over-24h checkpoint, or a live verifier is refused and never starts over |  |  |  |  |
+| `--status` | read a proof's durable progress and whether its verifier is live, exited or stale; no browser, no hook, nothing of the app's |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start each replay authenticated (as journey run) |  |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
 

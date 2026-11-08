@@ -26,6 +26,7 @@ const OTHER = "https://other.example";
 function repo(name: string): string {
   const r = join(dir, name);
   mkdirSync(join(r, ".git"), { recursive: true });
+  writeFileSync(join(r, ".git", "HEAD"), "ref: refs/heads/main\n");
   return r;
 }
 

@@ -1,7 +1,7 @@
 import type { Page } from "playwright";
 import type { Actor } from "@jevitate/screenplay";
 import type { InvariantSpec, Recording } from "@jevitate/recording";
-import { RecordingInterpreter, type ReplayTargetFailure } from "@jevitate/interpreter";
+import { RecordingInterpreter, ReplayRefusal, type ReplayActionGuard, type ReplayTargetFailure } from "@jevitate/interpreter";
 import { ReplayDeltas } from "./replay-deltas.js";
 import { deltaRecord } from "./action-delta.js";
 import { perceive, type PerceiveOptions } from "./perceive.js";
@@ -56,6 +56,8 @@ export interface VerifySession {
 }
 
 export interface VerifyFixParams {
+  /** #789: what may end a declared-invariant replay, an MCP-driven regression's. Its refusal is thrown, never read as an attempt. */
+  readonly actionGuard?: ReplayActionGuard;
   readonly recording: Recording;
   /** Flat index of the last Recording step to replay (the defect's `repro.recordingStepIndex`). */
   readonly recordingStepIndex: number;
@@ -374,7 +376,7 @@ async function runOneInvariantReplay(params: VerifyFixParams, inv: VerifyInvaria
     await monitorFor(session.page).instrument();
     const index = params.recordingStepIndex;
     const upTo = truncateAt(observeAfterStep(params.recording, index), index);
-    const interpreter = new RecordingInterpreter({ targetTimeoutMs: targetWaitOf(params), ...fixtureBaseOf(params) });
+    const interpreter = new RecordingInterpreter({ targetTimeoutMs: targetWaitOf(params), ...fixtureBaseOf(params), ...(params.actionGuard === undefined ? {} : { actionGuard: params.actionGuard }) });
     const settle = (): Promise<unknown> =>
       perceive(session.page, { ...(params.settleCeilingMs === undefined ? {} : { renderWaitMs: params.settleCeilingMs }) }).catch(() => undefined);
     const failedAt = (r: Awaited<ReturnType<RecordingInterpreter["run"]>>): SingleReplayAttempt | null => {
@@ -428,6 +430,8 @@ async function runOneInvariantReplay(params: VerifyFixParams, inv: VerifyInvaria
     }
     return { ran: true, fired: false, observed, replay, detail: `replay reached the defect's step and invariant ${inv.id} held`, targetMismatch: false };
   } catch (e) {
+    // A guard's refusal ends the whole check: it is no attempt that failed, and another would be refused too.
+    if (e instanceof ReplayRefusal) throw e;
     return {
       ran: false,
       fired: false,

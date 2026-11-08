@@ -24,12 +24,20 @@ export const JourneyProofContextSchema = z
       .strict()
       .optional(),
     emulation: z.object({ viewport: ViewportSchema.optional(), device: z.string().optional(), geolocation: GeolocationSchema.optional() }).strict().optional(),
+    /** The target's `safety.readRequests` the proof ran under: they decide which steps it mutates as writes. */
+    readRequests: z.array(z.string()).optional(),
   })
   .strict();
 export type JourneyProofContext = z.infer<typeof JourneyProofContextSchema>;
 
+/** One text for one set of patterns. None at all is no field, so a target that declares none keeps its receipts' hash. */
+function canonicalReadRequests(readRequests: readonly string[] | undefined): string[] | undefined {
+  return readRequests === undefined || readRequests.length === 0 ? undefined : [...new Set(readRequests)].sort();
+}
+
 /** Canonical, secret-free execution context for a verify receipt. */
-export function journeyProofContext(browser: BrowserRunOptions | undefined, emulation: EmulationSpec | undefined): JourneyProofContext | undefined {
+export function journeyProofContext(browser: BrowserRunOptions | undefined, emulation: EmulationSpec | undefined, readRequests?: readonly string[]): JourneyProofContext | undefined {
+  const reads = canonicalReadRequests(readRequests);
   const browserContext = {
     ...(browser?.executablePath === undefined ? {} : { executablePath: browser.executablePath }),
     ...(browser?.channel === undefined ? {} : { channel: browser.channel }),
@@ -42,6 +50,7 @@ export function journeyProofContext(browser: BrowserRunOptions | undefined, emul
   const context = {
     ...(Object.keys(browserContext).length === 0 ? {} : { browser: browserContext }),
     ...(emulation === undefined ? {} : { emulation }),
+    ...(reads === undefined ? {} : { readRequests: reads }),
   };
   return Object.keys(context).length === 0 ? undefined : JourneyProofContextSchema.parse(context);
 }
@@ -50,4 +59,15 @@ export function journeyProofContext(browser: BrowserRunOptions | undefined, emul
 export function journeyProofHashForContext(journey: Journey, context: JourneyProofContext | undefined): string {
   const executableHash = journeyProofHash(journey);
   return context === undefined ? executableHash : contentHash({ v: 1, executableHash, context });
+}
+
+/**
+ * The hash a receipt must hold to be current now. Its browser context is its own, as no reader has a browser to
+ * compare with; its read requests are the target's as they stand, so a change to them stales the proof.
+ */
+export function currentJourneyProofHash(journey: Journey, context: JourneyProofContext | undefined, readRequests: readonly string[] | undefined): string {
+  const { readRequests: _recorded, ...rest } = context ?? {};
+  const reads = canonicalReadRequests(readRequests);
+  const current = { ...rest, ...(reads === undefined ? {} : { readRequests: reads }) };
+  return journeyProofHashForContext(journey, Object.keys(current).length === 0 ? undefined : current);
 }

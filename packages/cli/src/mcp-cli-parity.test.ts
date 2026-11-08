@@ -238,6 +238,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       stepResponseTimeoutMs: "--step-response-timeout",
     },
     omitted: {
+      "--secret-field": OMIT.envSecret,
       "--allow": OMIT.mcpOrigins,
       "--ignore-host-load": OMIT.hostLoad,
       "--dir": OMIT.storeDir,

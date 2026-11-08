@@ -2,7 +2,7 @@ import { journeyFixtureBaseDir } from "./journey-api.js";
 import { BranchReplayInputError, anchoredRecording, prefixFromBranch, prefixedOpener, recordedBranchOf, type JourneyPrefix, type PrefixFromBranchOptions, type RecordedBranch } from "./journey-prefix.js";
 import { readFile } from "node:fs/promises";
 import { resolveTargetConfig, type TargetConfig } from "./target-config.js";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { InvariantSpecSchema, RecordingSchema, validateInvariantSpec, type InvariantSpec, type Recording, type RecordingEmulation } from "@jevitate/recording";
 import { loadInvariantFiles, resolveInvariantAuthTokens } from "./invariants-file.js";
 import { buildMissionFixtures, type FixtureFlags } from "./fixture-cli.js";
@@ -19,7 +19,7 @@ import {
   type MissionFixtures,
 } from "./mission-fixtures.js";
 import { PlaywrightBrowserPort, resolveEmulation, type BrowserPort, type EmulationSpec } from "@jevitate/playwright";
-import { dirname as dirnameOf, join as joinPath, resolve as resolveFile } from "node:path";
+import { basename, dirname as dirnameOf, join as joinPath, resolve as resolveFile, sep as pathSep } from "node:path";
 import { assertSameExtensionBuild, listVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
 import { artifactStamp } from "./mission-journal.js";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
@@ -37,6 +37,10 @@ import { verifyServerLogDefect } from "./server-log-verify.js";
 import { defectSignalText, persistedDefect, replayWithEvidence, signalCheckable, type DefectEvidence } from "./defect-evidence.js";
 import { RunScreenshots, screenshotsDirFor, type ScreenshotsResult, type ScreenshotsSpec } from "./run-screenshots.js";
 import { clock, isRecord } from "@jevitate/domain";
+import { writeMissionResult } from "./mission-journal.js";
+import { findGitRoot, logsDirFor, type LayoutDeps } from "./project-dir.js";
+import { prepareMcpRunGuard } from "./mcp-run-guard.js";
+import { redactSensitivePath, redactSensitiveValue, redactThrown, type RedactionFieldRule } from "./terminal-result.js";
 
 /**
  * The programmatic surface behind `jevitate verify-fix` and the MCP `verify_fix` tool: loads a
@@ -61,6 +65,8 @@ export const VERIFY_FIX_EXIT_CODES: Readonly<Record<VerifyFixVerdict, number>> =
 export interface RunVerifyFixOptions {
   /** Path of the mission's `<stem>.result.json`. */
   readonly resultPath: string;
+  /** `targets.json` as the MCP floor reads it (default: `~/.jevitate/targets.json`). */
+  readonly runGuardTargetsFile?: string;
   /**
    * #293: a finding a journey-anchored run found (its result's `branch`) is replayed THROUGH the same
    * Journey prefix — every replay session replays it first, and the finding's Recording starts on
@@ -126,6 +132,27 @@ export interface RunVerifyFixOptions {
   readonly env?: string;
   /** The environments file `env` is read from (default: the repo's `.jevitate/environments.json`). */
   readonly environmentsFile?: string;
+  /**
+   * #767: opt-in — write this run's `VerifyFixReport` as `verify-fix-<stamp>.result.json`, where
+   * `verifyFixArtifactPath` says, and return its path on the report. Default off, so a ledger/check
+   * caller writes nothing.
+   */
+  readonly resultArtifact?: boolean;
+  /**
+   * #767: the stamp both this writer and the CLI's terminal layer use (`verify-fix-<stamp>.json`), so
+   * a signal or parent death overwrites the same path instead of leaving two artifacts. Default: now.
+   */
+  readonly resultStamp?: string;
+  /**
+   * #767: called just before each replay session opens, so the CLI's terminal layer can report one
+   * `progress()` per replay (the inactivity bound restarts). Never called outside a replay.
+   */
+  readonly onReplay?: (replay: number) => void;
+  /**
+   * Called with each secret this run learns beyond `secrets` (an invariant's auth token, a fixture's
+   * secret output), as soon as it is known, so the CLI's terminal layer masks it from a later signal.
+   */
+  readonly onSecrets?: (values: readonly string[]) => void;
 }
 
 /** #484: the replay ran with an allow list other than the one stored with the result — which, and where from. */
@@ -187,6 +214,8 @@ export interface VerifyFixEvidence {
 
 export interface VerifyFixReport extends VerifyFixResult {
   readonly exitCode: number;
+  /** The result file could not be written; the verdict above still stands (#767). */
+  readonly artifactError?: string;
   /** #293: the Journey step the finding branched from, when its replays went through that prefix. */
   readonly branch?: RecordedBranch;
   /** #293: why the replays proved nothing — `journey-stale` when the prefix no longer replays. */
@@ -204,6 +233,8 @@ export interface VerifyFixReport extends VerifyFixResult {
   readonly screenshotsSkipped?: ScreenshotsResult["screenshotsSkipped"];
   /** #484: present only when `--allow`/`--env` replaced the stored allow list — the origins used, and what changed. */
   readonly allowlistOverride?: AllowlistOverride;
+  /** #767: the `<vfArtifact stem>.result.json` this run wrote, when `resultArtifact` was requested. */
+  readonly resultPath?: string;
 }
 
 export class VerifyFixInputError extends Error {
@@ -416,7 +447,87 @@ function describeEmulation(e: RecordingEmulation): string {
   return e.device !== undefined ? `--device "${e.device}"` : `--viewport ${e.viewport.width}x${e.viewport.height}`;
 }
 
+/** `path` with every link resolved, as far as it exists: an input that is not there yet still has a real parent. */
+function realPathAsFarAsItExists(path: string): string {
+  const missing: string[] = [];
+  for (let at = path; ; at = dirnameOf(at)) {
+    try {
+      return joinPath(realpathSync(at), ...missing);
+    } catch {
+      if (dirnameOf(at) === at) return path;
+      missing.unshift(basename(at));
+    }
+  }
+}
+
+/** Where `file` stands in a data directory or a git work tree, and whether a file beside it would land in something committed. */
+function artifactPlace(file: string): { readonly committed: boolean; readonly project: string | undefined } {
+  const dir = dirnameOf(file);
+  const parts = dir.split(pathSep);
+  const dataDir = parts.lastIndexOf(".jevitate");
+  const inLogs = dataDir !== -1 && parts[dataDir + 1] === "logs";
+  const repo = findGitRoot(dir);
+  return {
+    committed: parts.at(-1) === "ledger" || parts.includes("regressions") || (dataDir !== -1 && !inLogs) || (repo !== null && !inLogs),
+    project: dataDir === -1 ? (repo ?? undefined) : parts.slice(0, dataDir).join(pathSep) || pathSep,
+  };
+}
+
+/**
+ * Where a verify-fix run's own output is based (`verify-fix-<stamp>.json`: its result, videos and
+ * screenshots unless a flag says otherwise). Beside a mission result, which is itself run output. But
+ * not beside anything committed: a ledger entry, anything else under `.jevitate/` but `logs/`, or anything
+ * in a git work tree but its `.jevitate/logs/`, such as a fixture. That run's output goes to the TTL logs of
+ * the project holding the input, else the working directory's.
+ * Decided on the real path as well as the given one, so a link into a ledger is still a ledger.
+ * The one path the CLI's terminal layer and this report's writer share.
+ */
+export function verifyFixArtifactPath(resultPath: string, stamp: string, deps: LayoutDeps = {}): string {
+  const input = resolveFile(resultPath);
+  const real = artifactPlace(realPathAsFarAsItExists(input));
+  const given = artifactPlace(input);
+  const name = `verify-fix-${stamp}.json`;
+  if (!real.committed && !given.committed) return joinPath(dirnameOf(input), name);
+  const project = real.committed ? real.project : given.project;
+  return joinPath(logsDirFor(stamp, project === undefined ? deps : { ...deps, cwd: () => project }), name);
+}
+
+/** Closed vocabularies, identifiers and digests: a short `--param` or a hex shape must not rewrite them. */
+const REPORT_VERBATIM_FIELDS: ReadonlySet<string> = new Set([
+  "verdict",
+  "fingerprint",
+  "observedFingerprints",
+  "outcome",
+  "kind",
+  "rule",
+  "identity",
+  "specHash",
+  "missionIdentity",
+  "secretOutputs",
+]);
+const REPORT_PATH_FIELDS: ReadonlySet<string> = new Set(["videoPaths", "videoPath", "screenshots", "screenshotPaths", "screenshotIndex", "journeysDir"]);
+const reportFieldRule: RedactionFieldRule = (key) => (REPORT_VERBATIM_FIELDS.has(key) ? "verbatim" : REPORT_PATH_FIELDS.has(key) ? "path" : undefined);
+
+/**
+ * Runs the replay and returns its report. The returned report and the artifact are one redacted
+ * object: every surface (`--json`, the human summary, the artifact, the MCP result) prints that, and
+ * a thrown error's text gets the same rule. Its verdict, exit code and paths stay as they are.
+ */
 export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFixReport> {
+  const known = new Set((opts.secrets ?? []).filter((s) => s !== ""));
+  const learn = (values: readonly string[]): void => {
+    const fresh = values.filter((v) => v !== "" && !known.has(v));
+    for (const v of fresh) known.add(v);
+    if (fresh.length > 0) opts.onSecrets?.(fresh);
+  };
+  try {
+    return await replayFinding(opts, known, learn);
+  } catch (err) {
+    throw redactThrown(err, [...known]);
+  }
+}
+
+async function replayFinding(opts: RunVerifyFixOptions, known: ReadonlySet<string>, learn: (values: readonly string[]) => void): Promise<VerifyFixReport> {
   let raw: unknown;
   try {
     raw = JSON.parse(await readFile(opts.resultPath, "utf8"));
@@ -434,6 +545,15 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   }
   // Guardrail #1: the replay may only ever touch the mission's own authorized origins.
   const origin = assertAuthorizedExploreTarget(mission.target.seedUrl, mission.target.allowlist);
+  // #789: over MCP a finding is not replayed on a production origin, with one in its allowlist, or under a production environment's allow list, before anything opens. The CLI is the person's.
+  prepareMcpRunGuard({
+    site: origin,
+    allowedOrigins: mission.target.allowlist,
+    refuseProductionInAllowlist: true,
+    environment: opts.env === undefined ? undefined : resolveJourneyEnvironment({ env: opts.env, targets: {}, ...(opts.environmentsFile === undefined ? {} : { environmentsFile: opts.environmentsFile }) }),
+    targetsFile: opts.runGuardTargetsFile,
+    environmentsFile: opts.environmentsFile,
+  });
   const target = resolveTargetConfig(opts.targets ?? {}, origin);
   // #175: the operator's targets.json session is the last fallback (verify_fix over MCP of a
   // mission recorded without one); never an MCP argument.
@@ -444,11 +564,18 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
 
   const portFactory = opts.browserPortFactory ?? (() => new PlaywrightBrowserPort());
   // #245: every replay (and observer) session is shown/recorded alike — videos in
-  // `verify-fix-<stamp>.videos/` beside the mission result (or under `--record-video <dir>`).
-  const vfArtifact = joinPath(dirnameOf(resolveFile(opts.resultPath)), `verify-fix-${artifactStamp(clock.nowIso())}.json`);
+  // `verify-fix-<stamp>.videos/` beside the artifact (or under `--record-video <dir>`).
+  // #767: the CLI supplies the stamp so its terminal-layer artifact and this report share one path.
+  const vfArtifact = verifyFixArtifactPath(opts.resultPath, opts.resultStamp ?? artifactStamp(clock.nowIso()));
   const videoDir = runVideoDir(opts.browser, vfArtifact);
+  // The dated logs folder may not exist yet, unlike the folder of a mission result.
+  if (videoDir !== undefined || opts.screenshots !== undefined) mkdirSync(dirnameOf(vfArtifact), { recursive: true });
   const shown = sessionLaunchOptions(opts.browser, videoDir);
   const perceiveOpts = {
+    // Read at each perception: a fixture or a prefix can add to what the run knows after this.
+    get secrets(): readonly string[] {
+      return [...known];
+    },
     ...(opts.settleCeilingMs === undefined ? {} : { renderWaitMs: opts.settleCeilingMs }),
     ...(target.settle === undefined ? {} : { settleConfig: target.settle }),
     ...(target.hangs === undefined ? {} : { hangConfig: target.hangs }),
@@ -466,6 +593,7 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
       if (e instanceof BranchReplayInputError) throw new VerifyFixInputError(e.message);
       throw e;
     }
+    learn(prefix.secrets);
   }
   const recording = prefix === undefined ? found : anchoredRecording(found);
   // #256: replay only under the extension build the finding was recorded with (none ⇔ none).
@@ -514,9 +642,9 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   } catch (e) {
     throw new VerifyFixInputError(e instanceof Error ? e.message : String(e));
   }
-  const authTokenValues = [...(invariantAuthTokens?.values() ?? [])];
+  learn([...(invariantAuthTokens?.values() ?? [])]);
   const primaryActor = mission.target.actors?.find((a) => a.role === "primary")?.name;
-  const fx = missionFixtures(mission, opts.fixtureFlags ?? {}, storageState, [...(opts.secrets ?? []), ...authTokenValues], target.personas);
+  const fx = missionFixtures(mission, opts.fixtureFlags ?? {}, storageState, [...known], target.personas, learn);
   const declared =
     finding.kind === "invariant" && finding.invariantId !== undefined && invariantSpec !== undefined
       ? {
@@ -538,7 +666,13 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
           ...(primaryActor === undefined ? {} : { primaryActor }),
         }
       : undefined;
+  let replayOpened = 0;
   const openSession = async (): Promise<VerifySession> => {
+    // #767: one progress report per replay, so the terminal layer's inactivity bound restarts.
+    replayOpened += 1;
+    opts.onReplay?.(replayOpened);
+    // The fixture was set up afresh just before this: its secret outputs are this replay's to mask.
+    if (fx !== undefined) learn(fx.secrets());
     const session = await portFactory().open({
       ...shown,
       allowedOrigins: [...mission.target.allowlist],
@@ -603,7 +737,7 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
         ...(finding.occurrences === undefined ? {} : { occurrences: finding.occurrences }),
         ...(opts.settleCeilingMs === undefined ? {} : { settleCeilingMs: opts.settleCeilingMs }),
         ...(opts.replays === undefined ? {} : { replays: opts.replays }),
-        ...(opts.actionDeltas === true ? { actionDeltas: true, secrets: [...(opts.secrets ?? []), ...authTokenValues] } : {}),
+        ...(opts.actionDeltas === true ? { actionDeltas: true, secrets: [...known] } : {}),
         openSession: replaySession,
       });
     }
@@ -619,7 +753,7 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
   let evidence: VerifyFixEvidence | undefined;
   let shotFields: Partial<ScreenshotsResult> = {};
   if (opts.browser?.recordVideo !== undefined || opts.screenshots !== undefined) {
-    const secrets = [...(opts.secrets ?? []), ...authTokenValues];
+    const secrets = [...known];
     const stored = persistedDefect(raw, finding.fingerprint);
     const storedEvidence = stored !== undefined && isRecord(stored.evidence) ? stored.evidence : undefined;
     const beforeVideo = typeof storedEvidence?.videoPath === "string" ? storedEvidence.videoPath : undefined;
@@ -664,7 +798,8 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
     };
     shotFields = shots === undefined ? {} : await shots.finish();
   }
-  return {
+  if (fx !== undefined) learn(fx.secrets());
+  const report: VerifyFixReport = {
     ...result,
     exitCode: VERIFY_FIX_EXIT_CODES[result.verdict],
     ...(branch === undefined ? {} : { branch }),
@@ -677,6 +812,19 @@ export async function runVerifyFix(opts: RunVerifyFixOptions): Promise<VerifyFix
     // Every replay closed its own session (finalizing its video) before verifyFix returned.
     ...(videoDir === undefined ? {} : { videoPaths: listVideos(videoDir) }),
   };
+  // A `reason` or `title` can quote a secret, or a URL with a token in it. Nothing past here sees the raw report.
+  const secrets = [...known];
+  const redacted = redactSensitiveValue(report, secrets, reportFieldRule) as VerifyFixReport;
+  // #767: opt-in, through the mission result writer.
+  if (opts.resultArtifact !== true) return redacted;
+  // The verdict is what the replays paid for: a folder that can't take the file must not cost it.
+  try {
+    mkdirSync(dirnameOf(vfArtifact), { recursive: true });
+    const written = writeMissionResult(vfArtifact, report.verdict, report.exitCode, redacted);
+    return { ...redacted, resultPath: redactSensitivePath(written, secrets) };
+  } catch (err) {
+    return { ...redacted, artifactError: redactSensitiveValue(err instanceof Error ? err.message : String(err), secrets) as string };
+  }
 }
 
 /**
@@ -691,6 +839,7 @@ function missionFixtures(
   secrets: readonly string[],
   /** #243: the origin's targets.json personas — bind a fixture identity no flag or saved path names. */
   personas?: TargetConfig["personas"],
+  learn?: (values: readonly string[]) => void,
 ): MissionFixtures | undefined {
   const saved = mission.fixtures;
   if (saved === undefined && flags.fixtures === undefined && flags.before === undefined && flags.after === undefined && (flags.fixtureIdentity ?? []).length === 0) {
@@ -723,6 +872,7 @@ function missionFixtures(
       const secret = process.env[name];
       return secret === undefined ? [] : [{ descriptor: name, matcher: { key: "name" as const, value: name }, name, kind: "value" as const, secret }];
     });
+    learn?.(secretFields.map((f) => f.secret));
     const { fixtures: _file, ...hookFlags } = flags;
     return buildMissionFixtures(hookFlags, {
       ...bounds,

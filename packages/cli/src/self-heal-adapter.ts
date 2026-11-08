@@ -7,7 +7,6 @@ import { BrowseTheWebToken } from "@jevitate/screenplay";
 import { clock } from "@jevitate/domain";
 import { describeStep } from "@jevitate/journey";
 import type { Step, TargetDescriptor } from "@jevitate/recording";
-import { redactSecretValues } from "./journey-api.js";
 
 /**
  * #453: the CLI's `SelfHealer` — EVIDENCE-ONLY. It never acts on the page (`actsOnPage: false`), so
@@ -16,7 +15,7 @@ import { redactSecretValues } from "./journey-api.js";
  *  - the broken step (sanitised: `hideValue`),
  *  - a read-only snapshot of the page's controls (the observed inventory: role, name, test id, label),
  *  - the change evidence as `{kind, before, after}` facts only — never a raw hunk, never a credential
- *    (every string is scrubbed of the run's secret params, `redactSecretValues`).
+ *    (a run holding a secret never heals, so none is here).
  *
  * It proposes single-step RETARGETS of the broken step: the step with only its `target` changed, its
  * proof (`expect`, `value`, …) as recorded. Deterministic candidates come first: an inventory control
@@ -39,7 +38,7 @@ export interface InventoryControl {
 }
 
 /** Reads the live page's controls without acting on it. */
-export type ControlInventoryReader = (actor: Actor, secrets: readonly string[]) => Promise<readonly InventoryControl[]>;
+export type ControlInventoryReader = (actor: Actor) => Promise<readonly InventoryControl[]>;
 
 export interface EvidenceSelfHealerOptions {
   /** Test seam; default: `snapshot()` of the actor's page (read-only). */
@@ -60,14 +59,14 @@ const DEFAULT_MAX_CONTROLS = 80;
 const MAX_CANDIDATES = 8;
 
 /** The default inventory: the explore snapshot's controls (read-only, already redacted). */
-export const snapshotInventory: ControlInventoryReader = async (actor, secrets) => {
+export const snapshotInventory: ControlInventoryReader = async (actor) => {
   let page;
   try {
     page = actor.ability(BrowseTheWebToken).session.page;
   } catch {
     return [];
   }
-  const snap = await snapshot(page, { secrets, maxCandidates: 120 });
+  const snap = await snapshot(page, { maxCandidates: 120 });
   return snap.controls.map(inventoryOf);
 };
 
@@ -89,16 +88,15 @@ export function makeEvidenceSelfHealer(generation?: GenerationPort, opts: Eviden
   return {
     actsOnPage: false,
     async proposeCandidates(req: HealerRequest): Promise<HealerProposal> {
-      const secrets = req.secrets ?? [];
       const broken = req.brokenStep;
       if (!("target" in broken) || broken.target === undefined) {
         return { candidates: [], usage: { modelCalls: 0 }, reason: `a ${broken.kind} step has no target to retarget onto a page control` };
       }
-      // Only the change FACTS, scrubbed of the run's secrets.
-      const evidence = redactSecretValues(req.evidence.map(factOf), secrets);
+      // Only the change FACTS. A run holding a secret never gets here (`noHealBecause`).
+      const evidence = req.evidence.map(factOf);
       let inventory: readonly InventoryControl[];
       try {
-        inventory = redactSecretValues((await readInventory(req.actor, secrets)).filter((c) => c.enabled && fits(broken, c)), secrets);
+        inventory = (await readInventory(req.actor)).filter((c) => c.enabled && fits(broken, c));
       } catch {
         inventory = [];
       }
@@ -114,15 +112,12 @@ export function makeEvidenceSelfHealer(generation?: GenerationPort, opts: Eviden
       }
 
       const shown = inventory.slice(0, maxControls);
-      const input = redactSecretValues(
-        {
-          step: describeStep(sanitizeStep(broken)).slice(0, 1000),
-          evidence: evidence.slice(0, 40).map((e) => ({ kind: e.kind.slice(0, 40), before: clip(e.before), after: clip(e.after) })),
-          candidates: deterministic.slice(0, 40).map((c, index) => ({ index, summary: c.hypothesis.slice(0, 300) })),
-          controls: shown.map((c, index) => ({ index, summary: c.summary.slice(0, 300) })),
-        },
-        secrets,
-      );
+      const input = {
+        step: describeStep(sanitizeStep(broken)).slice(0, 1000),
+        evidence: evidence.slice(0, 40).map((e) => ({ kind: e.kind.slice(0, 40), before: clip(e.before), after: clip(e.after) })),
+        candidates: deterministic.slice(0, 40).map((c, index) => ({ index, summary: c.hypothesis.slice(0, 300) })),
+        controls: shown.map((c, index) => ({ index, summary: c.summary.slice(0, 300) })),
+      };
       const tokensSoFar = (): number => {
         const c = opts.usage?.snapshot();
         return c === undefined ? 0 : c.inputTokens + c.outputTokens;

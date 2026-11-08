@@ -3,7 +3,7 @@ import type { Page, Request } from "playwright";
 import { DEFAULT_LONG_POLL_MS, urlMatcher, type SettleConfig } from "./settle-config.js";
 import { visibleBusyIndicator } from "./hang.js";
 import { clock, isExternalSchemeUrl } from "@jevitate/domain";
-import { SECRET_PARAM_NAME_RE } from "@jevitate/recording";
+import { isSecretName } from "@jevitate/recording";
 import { RPC_CONTENT, rpcStatusOfResponse, type RpcStatus } from "./rpc-status.js";
 import { clockBounded } from "./clock-bound.js";
 import { bodyValues } from "./request-body-values.js";
@@ -123,6 +123,8 @@ const TRANSIENT_DIALOG_SELECTOR = "[role=dialog],[role=alertdialog],dialog";
 const TRANSIENT_MAX = 50;
 /** Bound (chars) on one announcement's text. */
 const TRANSIENT_TEXT_MAX = 200;
+/** Read past the cut, which the reader makes once it has masked: a secret across it leaves nothing. */
+const TRANSIENT_TEXT_READ = TRANSIENT_TEXT_MAX + 1024;
 
 /** One announcement the page made (raw page text — redact before keeping or sending it). */
 export interface TransientNote {
@@ -180,7 +182,7 @@ const INSTRUMENT = `(() => {
       }
       if (el === null || seen.has(el)) continue;
       seen.add(el);
-      const text = (el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, ${TRANSIENT_TEXT_MAX});
+      const text = (el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, ${TRANSIENT_TEXT_READ});
       if (text === "") continue;
       const role = el.getAttribute("role") || (el.tagName === "DIALOG" ? "dialog" : "live");
       const last = state.transients[state.transients.length - 1];
@@ -317,7 +319,7 @@ function declaredFieldType(value: unknown): DeclaredFieldType {
 
 /** Appends `value`'s declared field under `name`, dropping credential-named fields and past the cap. */
 function pushDeclaredField(out: DeclaredField[], name: string, value: unknown): void {
-  if (out.length >= MAX_DECLARED_FIELDS || SECRET_PARAM_NAME_RE.test(name)) return;
+  if (out.length >= MAX_DECLARED_FIELDS || isSecretName(name)) return;
   out.push({ name, type: declaredFieldType(value) });
 }
 
@@ -352,7 +354,7 @@ function declaredFields(body: string | null, contentType: string | undefined): D
   if (type.includes("application/x-www-form-urlencoded")) {
     for (const [key] of new URLSearchParams(body)) {
       if (out.length >= MAX_DECLARED_FIELDS) break;
-      if (out.some((f) => f.name === key) || SECRET_PARAM_NAME_RE.test(key)) continue;
+      if (out.some((f) => f.name === key) || isSecretName(key)) continue;
       out.push({ name: key, type: "string" });
     }
     return out;
@@ -400,6 +402,17 @@ export class RequestCapture {
   /** @internal — the page's monitor saw `key` sent. */
   began(key: object, r: CapturedRequest): void {
     this.#inflight.set(key, { ...r, status: null, failed: false, pending: true });
+  }
+
+  /**
+   * @internal — `key`'s response arrived. A status is judged on the response, and Chromium may never
+   * report the end of a body nobody reads (a `no-store` response), so it stops awaiting one here.
+   */
+  responded(key: object, status: number, contentType: string | null): void {
+    const sent = this.#inflight.get(key);
+    if (sent === undefined) return;
+    const { pending: _pending, ...answered } = sent;
+    this.#inflight.set(key, { ...answered, status, contentType });
   }
 
   /**
@@ -673,6 +686,8 @@ export class PageMonitor {
       const type = res.headers()["content-type"] ?? "";
       if (type !== "") this.#contentTypes.set(res.request(), type);
       if (RPC_CONTENT.test(type) || res.headers()["grpc-status"] !== undefined) this.#rpcReads.set(res.request(), rpcStatusOfResponse(res));
+      // An RPC's own result can be in its body's trailer, so only its end says how it went (#378).
+      else for (const c of this.#captures) c.responded(res.request(), res.status(), type === "" ? null : type);
       if (STREAMING_CONTENT.test(type)) {
         this.#background.set(res.request(), "stream");
         this.#touch(); // wake a settle wait that was counting it as pending
@@ -717,7 +732,7 @@ export class PageMonitor {
 
   /**
    * Registers a per-request hook fed the declared field names and JSON types of each write's body
-   * (never values; credential-named fields are dropped by `SECRET_PARAM_NAME_RE`). Returns an
+   * (never values; credential-named fields are dropped by `isSecretName`). Returns an
    * unsubscribe function. Nothing is added to the capture's `CapturedRequest` records.
    */
   onDeclaredFields(hook: (fields: DeclaredFields) => void): () => void {

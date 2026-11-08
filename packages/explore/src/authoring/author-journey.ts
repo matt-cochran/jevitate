@@ -152,7 +152,7 @@ export function goalResultDiagnostics(r: GoalBasedResult): AuthorTakeDiagnostics
  *
  * #369: a field code typed itself (a `--secret-field`/`--totp` binding, or a value holding a run
  * secret — recorded `{ redacted: true }`) has no value the Journey may keep: it becomes a SECRET
- * parameter (`secret1`, `secret2`, …, declared `secret: true`) supplied with `--param` at replay.
+ * parameter (`secret1`, `secret2`, …, declared `secret: true`) that the operator's binding supplies at replay.
  */
 export async function authorJourney(req: AuthorJourneyRequest): Promise<AuthorJourneyResult> {
   const takes = req.takes ?? 1;
@@ -204,7 +204,7 @@ export async function authorJourney(req: AuthorJourneyRequest): Promise<AuthorJo
     secretParams.push({
       name,
       secret: true,
-      description: "a value code typed during authoring (a --secret-field/--totp binding, or one holding a --secret) — never kept in the Journey; pass it with --param at replay",
+      description: "a value code typed during authoring (a --secret-field/--totp binding, or one holding a --secret) — never kept in the Journey; at replay the operator binds it: journey run --secret-field, or secretFields in targets.json (a --totp code has no binding on a replay: --param on the CLI)",
     });
     return { step: d.step, classify: "variable", name };
   });

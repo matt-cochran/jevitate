@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { journeyParamSchema } from "./param-schema.js";
-import { secretParamNames } from "./intent.js";
+import { loadRefusedParamNames } from "./intent.js";
 import type { Journey } from "./journey.js";
 
 /**
@@ -406,7 +406,7 @@ export function handoffSchemaIssues(journey: Journey): HandoffIssue[] {
   if (inputs !== undefined) {
     const declared = new Set([...journey.metadata.params, ...(journey.metadata.parameters ?? []).map((p) => p.name)]);
     const required = journeyParamSchema(journey).required;
-    const secret = new Set(secretParamNames(journey));
+    const secret = new Set(loadRefusedParamNames(journey));
     const allowed = new Set([...declared, ...required]);
     for (const [param, binding] of Object.entries(inputs.bindings)) {
       if (!allowed.has(param)) {

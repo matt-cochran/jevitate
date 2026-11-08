@@ -138,3 +138,63 @@ export function redactCredentialShapes(text: string): string {
   const found = revealedSecretsIn(text);
   return found.length === 0 ? text : redactText(text, found);
 }
+
+/** Shorter than this, a value is an ordinary word as often as a secret (`2`, `Save`), so the backstop leaves it alone. */
+const MIN_MODEL_SECRET_LENGTH = 8;
+/** The most values live runs may hold. Past it a model call fails: nothing is ever dropped from a run still going. */
+const MAX_MODEL_SECRETS = 2000;
+const liveScopes = new Set<Set<string>>();
+
+/** Too many live secrets to hold: the call fails rather than passing one in clear. */
+export class ModelSecretsFullError extends Error {
+  constructor() {
+    super(`more than ${MAX_MODEL_SECRETS} secret values are live in this process, so no model call goes out until a run ends`);
+    this.name = "ModelSecretsFullError";
+  }
+}
+
+/**
+ * A run's values for the gateways to mask, while it lasts: one run's values never touch another's
+ * calls once it has ended. A backstop only: what a model may be shown is decided before the call,
+ * and a secret-bound run makes none (docs/safety.md).
+ */
+export function openModelSecretScope(): { add(values: readonly string[]): void; release(): void } {
+  const values = new Set<string>();
+  liveScopes.add(values);
+  return {
+    add: (more) => {
+      // The mask's own text can't be proved gone, so a value it holds, or that holds it, stays out.
+      for (const v of more) if (typeof v === "string" && v.trim().length >= MIN_MODEL_SECRET_LENGTH && !REDACTION_MASK.includes(v) && !v.includes(REDACTION_MASK)) values.add(v);
+    },
+    release: () => void liveScopes.delete(values),
+  };
+}
+
+/** `fn` as a run holding `values`. */
+export async function withModelSecrets<T>(values: readonly string[] | undefined, fn: () => Promise<T>): Promise<T> {
+  const scope = openModelSecretScope();
+  scope.add(values ?? []);
+  try {
+    return await fn();
+  } finally {
+    scope.release();
+  }
+}
+
+function maskStrings(value: unknown, secrets: readonly string[]): unknown {
+  if (typeof value === "string") return redactText(value, secrets);
+  if (Array.isArray(value)) return value.map((v) => maskStrings(v, secrets));
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).map(([k, v]) => [redactText(k, secrets), maskStrings(v, secrets)]));
+}
+
+/** The backstop every payload passes on its way to a model: masked, then proved gone. Longest first, so a secret that starts another can't split it. */
+export function redactModelPayload<T>(payload: T): T {
+  const secrets = [...new Set([...liveScopes].flatMap((s) => [...s]))].sort((a, b) => b.length - a.length);
+  if (secrets.length === 0) return payload;
+  if (secrets.length > MAX_MODEL_SECRETS) throw new ModelSecretsFullError();
+  const masked = maskStrings(payload, secrets) as T;
+  // Proved gone: a registered value still here (a number, say, which only strings get masked in) stops the call.
+  assertNoSecretInPayload(masked, secrets);
+  return masked;
+}

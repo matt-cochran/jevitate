@@ -21,7 +21,7 @@ export class JourneyRegistry {
     return all.filter((m) => m.promoted)
       .filter((m) => {
         if (q === "") return true;
-        const fields = [m.id, m.name, m.description ?? ""].map((value) => value.toLowerCase());
+        const fields = [m.id, m.name, m.description ?? "", m.goal ?? ""].map((value) => value.toLowerCase());
         return fields.some((value) => value.includes(q)) || terms.every((term) => fields.some((value) => value.includes(term)));
       });
   }

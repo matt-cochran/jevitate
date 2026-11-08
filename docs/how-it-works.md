@@ -1,6 +1,12 @@
 # How Jevitate works
 
-Jevitate splits browser testing into two halves that are allowed to behave very differently:
+Jevitate is an automation platform that also works as a testing tool. A Journey is a parameterized
+flow that can be executed: it does real work in a real browser, and its purpose is to prove that users
+can meet their objectives in an application. Both uses are first-class, and they share one engine. This
+page follows the testing side, which has the most machinery. For what stops a Journey run from doing
+damage, which differs between MCP and the CLI, see [safety](./safety.md).
+
+Browser testing splits into two halves that are allowed to behave very differently:
 
 - **Discovery** decides what to try. It may be nondeterministic: a judgment model choosing the
   next step toward a goal, or a code strategy walking a state space.

@@ -3,6 +3,8 @@ import { FsMissionQueueStore } from "@jevitate/missions";
 import { existsSync } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { runAsMcpInvocation, type McpInvocation } from "../approval-provenance.js";
+import { RunGuardRefusedError, runGuardRefusalBody } from "../mcp-run-guard.js";
 import { stampRunMetadata, withRunMetadata } from "../run-metadata.js";
 import { browserRunFromFlags, emulationFromFlags } from "../cli-shared.js";
 import { parseScreenshotsArg } from "../run-screenshots.js";
@@ -214,9 +216,14 @@ export function findingTools(ctx: McpToolCtx): McpToolGroup {
         // Try the next candidate dir.
       }
     }
+    // #789: an MCP invocation, so the floor applies (the production refusal, and a branch-point finding's Journey prefix).
+    const invocation: McpInvocation = {};
+    const guardRefusal = (): McpToolResult | undefined => (invocation.refusal instanceof RunGuardRefusedError ? errorResult(runGuardRefusalBody(invocation.refusal)) : undefined);
     try {
       const fingerprint = args.fingerprint;
-      const report = await withRunMetadata({ tags: tagged.tags }, () => verifyFixImpl({ ...options, resultPath, fingerprint }));
+      const report = await runAsMcpInvocation(() => withRunMetadata({ tags: tagged.tags }, () => verifyFixImpl({ ...options, resultPath, fingerprint })), invocation);
+      const refused = guardRefusal();
+      if (refused !== undefined) return refused;
       const body = stampRunMetadata(
         {
           id: args.id,
@@ -230,6 +237,8 @@ export function findingTools(ctx: McpToolCtx): McpToolGroup {
       // signal fired on SOME but not all fresh-context replays — never trustworthy as "fixed".
       return report.verdict === "inconclusive" || report.verdict === "intermittent" ? errorResult(body) : jsonResult(body);
     } catch (err) {
+      const refused = guardRefusal();
+      if (refused !== undefined) return refused;
       return errorResult({ error: "verify_fix_refused", message: err instanceof Error ? err.message : String(err) });
     }
   };
