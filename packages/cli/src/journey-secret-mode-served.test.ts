@@ -245,11 +245,21 @@ describe("0.30.0 §5.3 secrets in automation mode over MCP (real Chromium)", { t
     expect(filesWithSecret()).toEqual([]);
   });
 
-  it("verify_journey on the same Journey holds instead of refusing: the tool's answer is the hold", async () => {
+  it("§5.4 verify_journey on the same Journey never holds: the proof ends inconclusive E_HUMAN_STEP_IN_PROOF naming the step, before any browser, and nothing is held", async () => {
     await putApproved(journey("login-v"));
+    const holdsBefore = readdirSync(holdsDir).length;
     const r = await call(targetsFile("none", {}), "verify_journey", { id: "login-v", mutate: true });
-    expect(r.body, r.text).toMatchObject({ outcome: "held", code: "E_RUN_HELD", kind: "handback", exitCode: 2 });
+    expect(r.body, r.text).toMatchObject({ error: "inconclusive", outcome: "inconclusive", code: "E_HUMAN_STEP_IN_PROOF", kind: "handback", step: 2, retryable: false, exitCode: 2 });
+    expect(r.body["holdId"]).toBeUndefined();
+    expect(readdirSync(holdsDir)).toHaveLength(holdsBefore);
+    expect(launches.count).toBe(0);
     expect(logins).toEqual([]);
+    // A secret parameter nobody supplied: the same, kind 'secret'.
+    await putApproved(journey("login-vp", { secretParam: true }));
+    const p = await call(targetsFile("none", {}), "verify_journey", { id: "login-vp", mutate: true });
+    expect(p.body, p.text).toMatchObject({ outcome: "inconclusive", code: "E_HUMAN_STEP_IN_PROOF", kind: "secret", step: 2, exitCode: 2 });
+    expect(readdirSync(holdsDir)).toHaveLength(holdsBefore);
+    expect(filesWithSecret()).toEqual([]);
   });
 
   it("acceptance 2: targets.json binds the field on the run's origin: vault-autofill types it; MARKER_S is in no result, evidence, hold, checkpoint or log", async () => {

@@ -293,7 +293,8 @@ author one) and a production origin are refused in test mode as in automation mo
 refusals before any browser opens: a Journey approved over MCP, `ci` or `non-interactive` is refused on an automation-mode
 target over MCP (`E_APPROVAL_CHANNEL_FOR_MODE`), and a Journey with a human step is refused on a test-mode
 target (`E_HUMAN_STEP_IN_TEST_MODE`). A step only a person can do on an automation-mode target holds the
-run instead (see [holds](./run-modes.md#holds-and-resume)).
+run instead (see [holds](./run-modes.md#holds-and-resume)), except in a proof: a proof never holds, and ends
+`inconclusive` with `E_HUMAN_STEP_IN_PROOF`, so a resume can never pass off a plain run as a proof.
 
 What does not guard a run today:
 
@@ -306,8 +307,6 @@ What does not guard a run today:
   run hooks, so they get no run mode, no hold and no mode refusal.
 - The `targets.json` secret route covers `run_journey` and holds. It is not read by every tool that can run
   a Journey.
-- A hold reached during a proof replay (`verify_journey`, `journey_readiness`) resumes as a plain run. The
-  resume continues the run; it does not return to the proof.
 - An agent with write access to `.jevitate/` or `~/.jevitate/` can forge a target's `trust`, an approval's
   `provenance.channel` and a Journey's approval hash. A Journey's approval is a plain hash of its content,
   with no signature. A hold and its checkpoint carry a keyed MAC under `~/.jevitate/verify-checkpoint.key`,

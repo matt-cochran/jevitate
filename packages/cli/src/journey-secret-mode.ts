@@ -8,7 +8,7 @@ import { Secret, SecretOriginMismatchError, SecretUnresolvableError, type Secret
 import { currentMcpInvocation, inMcpInvocation, noteMcpRefusal } from "./approval-provenance.js";
 import type { ResolvedJourneyEnvironment } from "./environments.js";
 import { takeApprovedHandback } from "./journey-hold.js";
-import { hasRunHooks, holdRunAt, RunHeldError, type RunHookContext, type RunHoldRequest } from "./journey-run-hooks.js";
+import { hasRunHooks, holdRunAt, inProof, ProofHoldRefusedError, RunHeldError, type RunHookContext, type RunHoldRequest } from "./journey-run-hooks.js";
 import { approvalAuthorisesAutomation, E_HUMAN_STEP_IN_TEST_MODE, E_SECRET_MODE_UNAVAILABLE, E_SECRET_ORIGIN_REFUSED, resolveRunTarget, RunModeRefusedError, type RunTarget } from "./journey-run-mode-gate.js";
 import type { RunMode } from "./run-mode.js";
 import { fieldMatchesTarget, missingSecretParams, secretParamTargets, withSecretParamsFor, type BoundSecretParams } from "./secret-params.js";
@@ -250,6 +250,13 @@ export function planSecretRun(req: SecretRunRequest): SecretRunPlan {
     return { ...common, secretMode: "vault-autofill", heldSecretParams: [], secretRefs: vault.refs, secretManager: new BoundFieldSecrets(vault.values), holdKinds: new Map() };
   }
   if (!canHold || (human.length === 0 && held.length === 0)) return { ...NO_PLAN, ...common };
+  // §5.4: a proof's replay never holds. It is refused here, before any browser, at the first step that would.
+  if (inProof()) {
+    const first = Math.min(...holdKinds.keys());
+    const err = new ProofHoldRefusedError(holdKinds.get(first) ?? "handback", first + 1);
+    if (req.mcp) noteMcpRefusal(err);
+    throw err;
+  }
   return { ...common, secretMode: "visible-handback", heldSecretParams: held, holdKinds };
 }
 
@@ -335,8 +342,8 @@ export function secretHandbackHandler(a: { readonly ctx: () => RunHookContext; r
       try {
         await holdRunAt(SECRET_MODE_OWNER, { ...base, step, kind: "handback", locator: a.page.locator(":root") }, { kind, reason });
       } catch (err) {
-        // The tool call's answer is the hold, whatever the command made of the error (mcp-cli-tools.ts).
-        if (err instanceof RunHeldError && inMcpInvocation()) noteMcpRefusal(err);
+        // The tool call's answer is the hold (or a proof's refusal to hold), whatever the command made of the error (mcp-cli-tools.ts).
+        if ((err instanceof RunHeldError || err instanceof ProofHoldRefusedError) && inMcpInvocation()) noteMcpRefusal(err);
         throw err;
       }
     },

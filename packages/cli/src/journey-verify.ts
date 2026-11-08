@@ -100,6 +100,8 @@ import {
   type ResumeState,
 } from "./journey-verify-checkpoint.js";
 import { composeObservers } from "./run-screenshots.js";
+import { asProof, ProofHoldRefusedError } from "./journey-run-hooks.js";
+import { noteMcpRefusal } from "./approval-provenance.js";
 
 /** `journey run`'s options a proof passes through to every replay (params, environment, auth, fixtures, browser, gate). */
 export type VerifyJourneyOptions = Omit<
@@ -1019,8 +1021,11 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
   const endHold = (opts.slotGovernor ?? sharedResourceGovernor()).holdSlotBetweenSessions();
   const owned: { session?: ProofCheckpointSession } = {};
   try {
-    return await proveJourneyMutations(opts, run, owned);
+    // 0.30.0 §5.4: a proof never holds; a replay that reaches a human step ends it `E_HUMAN_STEP_IN_PROOF`.
+    return await asProof(() => proveJourneyMutations(opts, run, owned));
   } catch (err) {
+    // The tool call's answer, whatever the command made of it (mcp-cli-tools.ts).
+    if (err instanceof ProofHoldRefusedError) noteMcpRefusal(err);
     // In an MCP server the process outlives the proof, so its pid no longer says the proof is running.
     owned.session?.interrupted();
     throw err;
@@ -1317,6 +1322,8 @@ async function attemptReplay(c: ReplayContext, m: JourneyMutation, describe: (j:
           }),
     };
   } catch (err) {
+    // A proof that reached a human step ends, as the base would have: never one mutation's error.
+    if (err instanceof ProofHoldRefusedError) throw err;
     // A stall ends the proof: it never reads as one mutation's error, which could still end `proven`.
     if (err instanceof JourneyVerifyStalledError) {
       // A stall leaves a resumable checkpoint, so what the replay left open has to be on it. A replay whose close
@@ -1528,7 +1535,7 @@ async function concludeProof(c: ConcludeContext): Promise<JourneyVerifyReport> {
       const closing = await boundedRun({ ...runOpts }, { structuredFailures: true }, { id: "closing replay, as recorded" });
       if (closing.outcome !== "ok") notIsolated = "the Journey as recorded no longer passes after the mutated replays, so state one left behind may have decided another; isolate the replays (a fixture restore, or a longer job's end) and run the proof again";
     } catch (err) {
-      if (err instanceof JourneyVerifyStalledError) throw err;
+      if (err instanceof JourneyVerifyStalledError || err instanceof ProofHoldRefusedError) throw err;
       notIsolated = "the closing replay as recorded errored, so the proof cannot say the replays stayed isolated; retry it";
     }
   }
@@ -1763,7 +1770,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
         const unheld = await boundedRun({ ...runOpts, observer: unheldProbe.observer() }, { structuredFailures: true }, { id: "independence replay, unheld" }, false, unheldProbe);
         if (unheld.outcome !== "ok") taint("state-stuck");
       } catch (err) {
-        if (err instanceof JourneyVerifyStalledError) throw err;
+        if (err instanceof JourneyVerifyStalledError || err instanceof ProofHoldRefusedError) throw err;
         taint("independence-errored");
         return;
       }

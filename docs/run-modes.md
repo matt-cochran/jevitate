@@ -142,8 +142,15 @@ It holds no value. The run ends `outcome: "held"` with `E_RUN_HELD` (exit 2).
 A hold lives 24 hours by default. After that, resume ends the run `inconclusive` with `E_HOLD_EXPIRED` (exit
 2), and running the Journey again makes a new hold. Every other hold refusal ran nothing and exits 64.
 
-A hold reached during a proof replay (`verify_journey`, `journey_readiness`) resumes as a plain run of the
-Journey. It does not return to the proof.
+A proof never holds. A proof (`journey verify --mutate`, `verify_journey`, the proof inside
+`journey_readiness`) is many replays of the Journey judged together, and a resume would continue one replay
+as a plain run, which proves nothing. So a proof's replay that reaches a step only a person can do (a
+handback, a secret nobody supplied, an action a hook asked to hold) ends the proof `inconclusive` with
+`E_HUMAN_STEP_IN_PROOF` (exit 2), naming the step and the kind of hold. A handback or a missing secret is
+refused before any browser opens. Nothing is held: no hold record, no checkpoint and no inbox item, so
+there is nothing to resume. To prove a Journey with a secret step, supply the secret to every replay: the
+test target's `secretFields`, an automation-mode target's binding for a Journey a person approved, or
+`--secret-field` on the CLI. A Journey with a handback step cannot be proved; run it instead.
 
 ## The ratchet
 
@@ -186,6 +193,7 @@ retry: it is refused the same way until a person changes the setting it names. E
 | `E_SECRET_ORIGIN_REFUSED` | 2 | a `secretFields` binding exists for the field on another origin only | bind it for this origin in that origin's `secretFields`, or run the Journey on the bound origin |
 | `E_SECRET_MODE_UNAVAILABLE` | 2 | `--secret-mode vault-autofill` and the target has no binding on this origin for every secret step | add the `secretFields` binding, or use `--secret-mode auto` or `visible-handback` |
 | `E_RUN_HELD` | 2 | not a refusal: the run reached a human step in automation mode and is held | `jevitate inbox approve <id>` at a terminal, then `jevitate inbox resume <id>` |
+| `E_HUMAN_STEP_IN_PROOF` | 2 | a proof's replay reached a step only a person can do (a handback, a secret nobody supplied, a held action); the proof ends `inconclusive` and nothing is held | supply the secret to every replay (`secretFields`, or `--secret-field` on the CLI); a Journey with a handback step cannot be proved |
 | `E_HOLD_EXPIRED` | 2 | the hold's 24 hours ran out before the answer or resume; the run ends `inconclusive` | run the Journey again, and answer the new hold in time |
 | `E_HOLD_BINDING` | 64 | the Journey, parameters, target origin or pending action changed since the hold, or the hold changed while it was being answered | run the Journey again and approve the new hold; for parameters, pass the same `--param` set |
 | `E_HOLD_NOT_APPROVED` | 64 | resume of a hold with no answer, or one not answered by a person at a terminal | `jevitate inbox approve <id>` at a terminal |

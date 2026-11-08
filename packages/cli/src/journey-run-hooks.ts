@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { ReplayRefusal, type ReplayActionGuard } from "@jevitate/interpreter";
 import type { Journey } from "@jevitate/journey";
 import type { RunEvidence } from "@jevitate/adjudicator";
@@ -103,6 +104,52 @@ export class RunHeldError extends ReplayRefusal {
   }
 }
 
+/**
+ * 0.30.0 §5.4: a proof (`journey verify --mutate`, MCP `verify_journey`, the proof inside
+ * `journey_readiness`) never holds. A proof is many replays of the Journey judged together; a hold stops
+ * one of them, and a resume continues that one replay as a plain run, which proves nothing. So a replay
+ * of a proof that reaches a step only a person can do (a handback, a secret nobody supplied, an action a
+ * hook asked to hold) ends the proof `inconclusive` with `E_HUMAN_STEP_IN_PROOF`, naming the step and
+ * its kind. Nothing is held: no hold record, no checkpoint, no inbox item.
+ */
+export const E_HUMAN_STEP_IN_PROOF = "E_HUMAN_STEP_IN_PROOF" as const;
+
+export class ProofHoldRefusedError extends ReplayRefusal {
+  override readonly name = "ProofHoldRefusedError";
+  readonly code = E_HUMAN_STEP_IN_PROOF;
+  readonly retryable = false;
+  constructor(
+    readonly kind: RunHoldRequest["kind"],
+    /** 1-based, as `StepEvidence.index`. */
+    readonly step: number,
+  ) {
+    super(
+      `${E_HUMAN_STEP_IN_PROOF}: step ${step} needs a person (${kind === "approval" ? "an approval" : `a ${kind}`} hold), and a proof replays the Journey many times without waiting for anyone, so it does not hold there; the proof is inconclusive and nothing was held. ` +
+        (kind === "secret"
+          ? "Supply the secret to the proof's replays: a test-mode target's targets.json secretFields, an automation-mode target's binding for a Journey a person approved, or --secret-field on the CLI."
+          : "A Journey with a handback step cannot be proved; run it instead, where it holds for a person on an automation-mode target.") +
+        " This is not a failed run to retry.",
+    );
+  }
+}
+
+/** The MCP body of a proof that reached a human step: `inconclusive`, exit 2, never held and never a pass. */
+export function proofHoldRefusalBody(err: ProofHoldRefusedError): Record<string, unknown> {
+  return { error: "inconclusive", outcome: "inconclusive", code: err.code, kind: err.kind, step: err.step, message: err.message, retryable: false, exitCode: 2 };
+}
+
+const proofScope = new AsyncLocalStorage<true>();
+
+/** Runs `fn` as a proof: every replay it starts refuses to hold (`ProofHoldRefusedError`). */
+export function asProof<T>(fn: () => Promise<T>): Promise<T> {
+  return proofScope.run(true, fn);
+}
+
+/** Whether the current run is one of a proof's replays. */
+export function inProof(): boolean {
+  return proofScope.getStore() === true;
+}
+
 interface Registered {
   readonly owner: string;
   readonly hooks: RunHooks;
@@ -183,6 +230,8 @@ export async function runBeforeWriteHooks(ctx: RunHookContext & PendingAction): 
  * the run with `RunHeldError`. For a step that waits for a person without a write (a handback, §5.3).
  */
 export async function holdRunAt(owner: string, ctx: RunHookContext & PendingAction, hold: RunHoldRequest): Promise<never> {
+  // §5.4: a proof's replay never holds; nothing is made durable for it.
+  if (inProof()) throw new ProofHoldRefusedError(hold.kind, ctx.step);
   await each("onHold", (hook) => hook({ ...ctx, hold }));
   throw new RunHeldError(owner, hold, { at: ctx.step });
 }
