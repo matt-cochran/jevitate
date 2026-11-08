@@ -1,5 +1,42 @@
 === DECLARATION (src/index.ts, TS compiler API) ===
 
+# @jevitate/adjudicator (35 exports)
+  AdvisoryJudgment: type-alias
+  AdvisoryJudgmentSchema: variable
+  BoundaryEvidence: type-alias
+  BoundaryEvidenceSchema: variable
+  DoneCheckEvidence: type-alias
+  DoneCheckEvidenceSchema: variable
+  DoneCheckSpec: type-alias
+  DoneCheckSpecSchema: variable
+  DoneReading: type-alias
+  DoneReadingSchema: variable
+  EvidenceApprovalChannelSchema: variable
+  EvidenceSubject: type-alias
+  EvidenceSubjectSchema: variable
+  Known: type-alias
+  KnownSchema: function
+  MutationEvidence: type-alias
+  MutationEvidenceSchema: variable
+  MutationKindSchema: variable
+  RefusalCodeSchema: variable
+  ReplayEvidence: type-alias
+  ReplayEvidenceSchema: variable
+  RunContext: type-alias
+  RunContextSchema: variable
+  RunEvidence: type-alias
+  RunEvidenceSchema: variable
+  StepEvidence: type-alias
+  StepEvidenceSchema: variable
+  TargetTrustSchema: variable
+  UnknownReason: type-alias
+  UnknownReasonSchema: variable
+  WriteMethodSchema: variable
+  WritesEvidence: type-alias
+  WritesEvidenceSchema: variable
+  WriteShape: type-alias
+  WriteShapeSchema: variable
+
 # @jevitate/ai-core (181 exports)
   aggregateOf: function
   AI_CORE: variable
@@ -1231,7 +1268,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (308 exports)
+# @jevitate/journey (316 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1432,6 +1469,7 @@
   lintUploadFixtures: function
   listJourneyAnchors: function
   loadRefusedParamNames: function
+  matchesParameterType: function
   MAX_DECLARED_RELAXATIONS: variable
   MAX_TARGETED_RELAXATIONS: variable
   Metric: type-alias
@@ -1472,6 +1510,12 @@
   paceTailMs: function
   PAIR_RELATIONS: variable
   PairRelation: type-alias
+  PARAMETER_TYPES: variable
+  ParameterEnumSchema: variable
+  ParameterType: type-alias
+  parameterTypeIssues: function
+  ParameterTypeSchema: variable
+  ParamIssue: interface
   ParamSchema: interface
   ParamValidationError: class
   PersonaReview: type-alias
@@ -1538,6 +1582,7 @@
   thinSites: function
   validateFieldValue: function
   validateParams: function
+  validateParamTypes: function
   validateRecords: function
   validateRequests: function
 

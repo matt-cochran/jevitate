@@ -45,6 +45,16 @@ importers:
         specifier: ^5.0.0
         version: 5.12.5
 
+  packages/adjudicator:
+    dependencies:
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@jevitate/journey':
+        specifier: workspace:*
+        version: link:../journey
+
   packages/ai-core:
     dependencies:
       '@jevitate/domain':

@@ -1,5 +1,27 @@
 === RUNTIME (dist/index.js) ===
 
+# @jevitate/adjudicator (20 exports)
+  AdvisoryJudgmentSchema: object
+  BoundaryEvidenceSchema: object
+  DoneCheckEvidenceSchema: object
+  DoneCheckSpecSchema: object
+  DoneReadingSchema: object
+  EvidenceApprovalChannelSchema: object
+  EvidenceSubjectSchema: object
+  KnownSchema: function
+  MutationEvidenceSchema: object
+  MutationKindSchema: object
+  RefusalCodeSchema: object
+  ReplayEvidenceSchema: object
+  RunContextSchema: object
+  RunEvidenceSchema: object
+  StepEvidenceSchema: object
+  TargetTrustSchema: object
+  UnknownReasonSchema: object
+  WriteMethodSchema: object
+  WriteShapeSchema: object
+  WritesEvidenceSchema: object
+
 # @jevitate/ai-core (127 exports)
   AI_CORE: const (string)
   ALL_CREDENTIAL_KEYS: array
@@ -791,7 +813,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (184 exports)
+# @jevitate/journey (190 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -860,7 +882,10 @@
   OUTCOME_MEASURES: array
   OutcomeTargetSchema: object
   PAIR_RELATIONS: array
+  PARAMETER_TYPES: array
   ParamValidationError: class
+  ParameterEnumSchema: object
+  ParameterTypeSchema: object
   PersonaReviewSchema: object
   PrReviewSchema: object
   ProofWaiverSchema: object
@@ -927,6 +952,7 @@
   lintUploadFixtures: function
   listJourneyAnchors: function
   loadRefusedParamNames: function
+  matchesParameterType: function
   mutationErrored: function
   mutationPairIssues: function
   mutationProofVerdict: function
@@ -943,6 +969,7 @@
   paceMarginOf: function
   paceTailMs: function
   pacedReplay: function
+  parameterTypeIssues: function
   planJourneyMutations: function
   prefixLandingPath: function
   readRecords: function
@@ -973,6 +1000,7 @@
   targetedProofPlanIssues: function
   thinSites: function
   validateFieldValue: function
+  validateParamTypes: function
   validateParams: function
   validateRecords: function
   validateRequests: function
