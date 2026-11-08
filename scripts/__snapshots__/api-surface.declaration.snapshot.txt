@@ -1628,7 +1628,7 @@
   targetAllowlist: function
   UnknownOrUnpromotedMissionTargetError: class
 
-# @jevitate/playwright (164 exports)
+# @jevitate/playwright (165 exports)
   AdmissionRecord: interface
   AdmissionTimeoutError: class
   admissionViolation: function
@@ -1778,6 +1778,7 @@
   sameExtensionBuild: function
   sharedBrowserPool: function
   sharedResourceGovernor: function
+  singletonSocketPathRefusal: function
   SlotHolder: interface
   SlotState: interface
   SpawnFn: type-alias
