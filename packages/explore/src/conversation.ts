@@ -4,7 +4,7 @@ import { monitorFor } from "./page-monitor.js";
 import { visibleBusyIndicator } from "./hang.js";
 import { redactPageText } from "./redact.js";
 import { backgroundEndpoints, endpointKey } from "./stuck-actions.js";
-import { clock } from "@jevitate/domain";
+import { clock, type JobAttainment, type JobBasis, type JobVerdict } from "@jevitate/domain";
 import { clockBounded } from "./clock-bound.js";
 import { SUBMIT_NAME } from "./composer-evidence.js";
 import { writesAllSucceeded, type WriteEvidence } from "./write-evidence.js";
@@ -519,11 +519,19 @@ export type RunOutcome =
       readonly verifiedBy: "success-condition" | "grounded-judgment" | "grounded-answer" | "sign-in-signals" | "save-signals" | "succeeded-writes";
       /** #514: what the proof leaves open, for the result and the transcript (`WRITES_DONE_NOTE`). */
       readonly note?: string;
+      /** 0.30.0: the job verdict, present only when a job done check was configured (`cfg.doneCheck`). */
+      readonly job?: JobVerdict;
     }
   | { readonly status: "incomplete"; readonly reason: string };
 
 /** A proposed `done`, weighed by code. */
-export type DoneVerdict = { readonly accept: true; readonly outcome: RunOutcome } | { readonly accept: false; readonly reason: string };
+export type DoneVerdict =
+  | { readonly accept: true; readonly outcome: RunOutcome; readonly attainment: JobAttainment; readonly basis: JobBasis }
+  // A rejection carries job fields only when the done check itself rejected it (`not-achieved`).
+  | { readonly accept: false; readonly reason: string; readonly attainment?: JobAttainment; readonly basis?: JobBasis };
+
+/** 0.30.0: a verdict code accepted without a job done check proves nothing about the job. */
+const NO_CHECK = { attainment: "unverified", basis: "no-check" } as const;
 
 /**
  * Probability the advisory goal judgment must reach before code accepts an un-oracled `done`
@@ -610,33 +618,33 @@ export function groundDone(e: DoneEvidence): DoneVerdict {
   }
   if (e.successCheck !== undefined) {
     return e.successCheck
-      ? { accept: true, outcome: { status: "completed", verifiedBy: "success-condition" } }
+      ? { accept: true, outcome: { status: "completed", verifiedBy: "success-condition" }, ...NO_CHECK }
       : { accept: false, reason: "the success condition is not met on this page" };
   }
   // #225: code evidence first — the save went through, visibly — when the goal is only that save.
   const sv = e.save;
   if (sv !== undefined && sv.completed && sv.goalIsSave !== null && sv.goalIsSave >= GOAL_MET_THRESHOLD) {
-    return { accept: true, outcome: { status: "completed", verifiedBy: "save-signals" } };
+    return { accept: true, outcome: { status: "completed", verifiedBy: "save-signals" }, ...NO_CHECK };
   }
   const p = e.goalMetProbability;
   if (p !== undefined && p !== null && p >= GOAL_MET_THRESHOLD) {
-    return { accept: true, outcome: { status: "completed", verifiedBy: "grounded-judgment" } };
+    return { accept: true, outcome: { status: "completed", verifiedBy: "grounded-judgment" }, ...NO_CHECK };
   }
   const s = e.signIn;
   if (s !== undefined && s.completed && s.goalIsSignIn !== null && s.goalIsSignIn >= GOAL_MET_THRESHOLD) {
-    return { accept: true, outcome: { status: "completed", verifiedBy: "sign-in-signals" } };
+    return { accept: true, outcome: { status: "completed", verifiedBy: "sign-in-signals" }, ...NO_CHECK };
   }
   if (p === undefined || p === null) return { accept: false, reason: "goal completion could not be judged on this page" };
   const w = e.writes;
   if (w !== undefined && writesAllSucceeded(w) && w.goalIsWrites !== null && w.goalIsWrites >= GOAL_MET_THRESHOLD) {
-    return { accept: true, outcome: { status: "completed", verifiedBy: "succeeded-writes", note: WRITES_DONE_NOTE } };
+    return { accept: true, outcome: { status: "completed", verifiedBy: "succeeded-writes", note: WRITES_DONE_NOTE }, ...NO_CHECK };
   }
   // #645: the writes went through AND code read back what they sent from the app — a phantom write
   // (2xx, nothing kept) cannot get here. The page judgment then only has to find the goal more likely
   // met than not: on the accuracy lab it scored complete jobs 0.57–0.74 and phantoms up to 0.95, so
   // the threshold alone could not separate them; the read-back does.
   if (w !== undefined && writesAllSucceeded(w) && e.readBack === true && p >= GOAL_CHECK_TRIGGER) {
-    return { accept: true, outcome: { status: "completed", verifiedBy: "succeeded-writes", note: READ_BACK_DONE_NOTE } };
+    return { accept: true, outcome: { status: "completed", verifiedBy: "succeeded-writes", note: READ_BACK_DONE_NOTE }, ...NO_CHECK };
   }
   const notMet = `the goal is not observably achieved on this page (p=${p.toFixed(2)})`;
   // #514: the writes went through but the scope judgment won't vouch for them — say so, so the reader
