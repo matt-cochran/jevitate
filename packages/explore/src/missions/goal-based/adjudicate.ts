@@ -130,7 +130,9 @@ export function adjudicate(ctx: Adjudication, run: ExploreRun, evaluated: Succes
     ? "succeeded"
     : onlyVacuous
       ? "inconclusive"
-      : run.stop === "exhausted"
+      : run.boundary !== undefined
+        ? "boundary"
+        : run.stop === "exhausted"
         ? "exhausted"
         : modelClaimedDone
           ? "failed"

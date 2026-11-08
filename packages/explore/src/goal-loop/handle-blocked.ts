@@ -14,6 +14,7 @@ import type { RunContext } from "./context.js";
 import type { ActionableControlEvidence, ActionableControlKind, ActionableControlOutcome, ActionableControlResume } from "./context/types.js";
 import { terms } from "./goal-focus.js";
 import { JOB_WAIT_SLICE_MS, MAX_EARLY_BLOCKED_REFUSALS, quote, waitOutJob } from "./helpers.js";
+import { detectRunBoundary, endAtBoundary } from "./boundary.js";
 import { deferEnding } from "./min-effort.js";
 import type { Flow, Step } from "./step.js";
 
@@ -176,6 +177,13 @@ export async function handleBlocked(ctx: RunContext, step: Step): Promise<Flow> 
     ctx.lastActedOp = "wait";
     ctx.statusAfter = "waiting";
     return "continue";
+  }
+  // 0.30.0 (#807): a give-up at a wall or a lost session is a boundary, not a defect.
+  const boundary = detectRunBoundary(ctx, step.snap);
+  if (boundary !== null) {
+    record(false, boundary.reason, { origin: "engine" });
+    endAtBoundary(ctx, boundary);
+    return "stop";
   }
   // #237: giving up before trying anything proves nothing about the app. Refused (and the model
   // told to explore) while the page offers controls; a model that insists ends `inconclusive`.

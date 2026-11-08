@@ -11,6 +11,7 @@ import type { PageTiming } from "../timing.js";
 import type { HostProbe } from "../host-pressure.js";
 import type { HostJudgment } from "../host-health.js";
 import type { HangConfig, SettleConfig, TimingConfig } from "../settle-config.js";
+import type { BoundaryEvidence } from "./boundary.js";
 import type { AuthProgress } from "../auth-completion.js";
 import type { SaveProgress } from "../save-completion.js";
 import type { FieldValueLog, FillHelper } from "../fill.js";
@@ -56,6 +57,8 @@ import type { MutableRunContext, ActionableControlOutcome } from "./context/type
 
 /** The goal loop's run state (#232): every closure variable of `explore()`, one field each, names unchanged. */
 export interface RunContext {
+  /** 0.30.0 (#807): the boundary this run stopped at (`goal-loop/boundary.ts`); `finish.ts` ends it `goalOutcome: "boundary"`. */
+  boundary?: BoundaryEvidence;
   readonly cfg: ExploreConfig;
   readonly startOrigin: string;
   readonly fixture: string | null;

@@ -341,6 +341,11 @@ export const GOAL_REASONS = [
   "preflight-failed",
   "no-actions",
   "defects",
+  // 0.30.0 (#807): the signal of a `boundary` ending.
+  "http-401",
+  "http-403",
+  "paid-control",
+  "login-url",
 ] as const;
 export type GoalReason = (typeof GOAL_REASONS)[number];
 
