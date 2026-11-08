@@ -115,7 +115,10 @@ export function evaluateJobDoneCheck(before: DoneReading | undefined, after: Don
  */
 export function doneCheckExitInput(job: JobVerdict | undefined, policy: DoneCheckPolicy = DEFAULT_DONE_CHECK_POLICY): JourneyJobInput | undefined {
   if (job === undefined) return undefined;
-  return { attainment: job.attainment, doneCheckPolicy: policy, ...(job.attainment === "not-achieved" ? { failureKind: "done-check-failed" } : {}) };
+  // Owner decision (2026-11-08): a pass on a harness target (#802, a UI over a mock backend) exits 0. It still
+  // reads unverified/harness in the result, so nobody takes it for proof; the real-stack run keeps the policy.
+  const effective: DoneCheckPolicy = job.basis === "harness" ? "advisory" : policy;
+  return { attainment: job.attainment, doneCheckPolicy: effective, ...(job.attainment === "not-achieved" ? { failureKind: "done-check-failed" } : {}) };
 }
 
 /** Code-templated: what a `done-check-failed` failure says. Never a value. */

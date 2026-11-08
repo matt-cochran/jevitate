@@ -10,6 +10,7 @@ import { linkedJobDone } from "./catalog-refs.js";
 import { parseSuccessSpec } from "./explore-specs.js";
 import { createHttpProbe } from "./http-probe.js";
 import { readDoneCheck, type BrowserPort, type DoneCheckSession } from "./journey-done-check.js";
+import { trustOfRunContext } from "./journey-run-mode-gate.js";
 import { registerRunHooks } from "./journey-run-hooks.js";
 
 /**
@@ -168,7 +169,8 @@ export function registerDoneCheckHooks(): () => void {
       }).catch(() => unreadable("post"));
       const evidence: DoneCheckEvidence = { spec: pending.spec, before: pending.before, after };
       ctx.evidence?.noteDoneCheck(evidence);
-      run.decide(judgeDoneCheck(evidence));
+      // #802: a harness target (a UI over a mock backend) shows feasibility only; the reading stays in the evidence.
+      run.decide(trustOfRunContext(ctx) === "harness" ? { attainment: "unverified", basis: "harness" } : judgeDoneCheck(evidence));
     },
   });
 }
