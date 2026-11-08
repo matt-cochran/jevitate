@@ -4,6 +4,7 @@ import type { DialogPolicy, HangConfig, SafetyConfig, SettleConfig, TimingConfig
 import { validateAllowControlPatterns } from "@jevitate/explore";
 import { resolveDataDir } from "./data-dir.js";
 import { sessionFileInProjectRefusal } from "./project-dir.js";
+import { isDeclarableTrust, trustRefusal, type TargetTrust } from "./run-mode.js";
 
 /**
  * Per-target (per-origin) configuration — `~/.jevitate/targets.json`:
@@ -31,6 +32,9 @@ import { sessionFileInProjectRefusal } from "./project-dir.js";
  * `storageState` / `secretFields` (#175) — the operator's auth for missions drained from the queue
  * (`jevitate mission run`) and `verify_fix` over MCP: a storageState path (relative to this file)
  * and env-sourced `--secret-field` specs. Never an MCP argument.
+ *
+ * `trust` (0.30.0 §5) — `"test"`, `"harness"` or `"production"`: the operator's declaration of this
+ * origin's trust; with the repo's `environments.json`, the stricter wins (`run-mode.ts`).
  */
 
 export interface TargetConfig {
@@ -100,6 +104,11 @@ export interface TargetConfig {
    * (`site_policy` and `mission_targets` are agent-writable, so neither can be the switch).
    */
   readonly mcpRun?: McpRunAllowances;
+  /**
+   * 0.30.0 §5: the operator's declared trust for this origin. With the repo's environments.json the
+   * stricter wins (`resolveTargetTrust`); no MCP tool writes this file.
+   */
+  readonly trust?: Exclude<TargetTrust, "unknown">;
 }
 
 /** #789: the `mcpRun` section of a target (see `TargetConfig.mcpRun`). */
@@ -183,8 +192,13 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
     logIdPatterns?: string[];
     personas?: Record<string, TargetPersona>;
     mcpRun?: McpRunAllowances;
+    trust?: Exclude<TargetTrust, "unknown">;
   } = {};
   if (o.mcpRun !== undefined) out.mcpRun = parseMcpRun(o.mcpRun, `${where}.mcpRun`);
+  if (o.trust !== undefined) {
+    if (!isDeclarableTrust(o.trust)) throw new TargetConfigError(trustRefusal(where, o.trust));
+    out.trust = o.trust;
+  }
   if (o.storageState !== undefined) {
     if (typeof o.storageState !== "string" || o.storageState === "") throw new TargetConfigError(`${where}.storageState must be a file path`);
     out.storageState = resolvePath(baseDir, o.storageState);
@@ -463,5 +477,6 @@ export function resolveTargetConfig(
     ...(base.logCorrelationHeaders === undefined ? {} : { logCorrelationHeaders: base.logCorrelationHeaders }),
     ...(base.logIdPatterns === undefined ? {} : { logIdPatterns: base.logIdPatterns }),
     ...(base.personas === undefined ? {} : { personas: base.personas }),
+    ...(base.trust === undefined ? {} : { trust: base.trust }),
   };
 }

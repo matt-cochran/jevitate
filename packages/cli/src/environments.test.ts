@@ -127,6 +127,35 @@ describe(".jevitate/environments.json", () => {
     expect(() => loadEnvironmentsFile(envFile({ x: { baseUrl: "https://x.test", synthetic: "yes" } }))).toThrow(/\[x\]\.synthetic must be true or false/);
   });
 
+  it("0.30.0 §5: `trust` parses as test, harness or production; absent, the entry is as before", () => {
+    const envs = loadEnvironmentsFile(
+      envFile({
+        t: { baseUrl: "https://t.test", trust: "test" },
+        h: { baseUrl: "https://h.test", trust: "harness" },
+        p: { baseUrl: "https://p.test", trust: "production", production: true },
+        plain: { baseUrl: "https://plain.test" },
+      }),
+    );
+    expect(envs.t).toEqual({ baseUrl: "https://t.test", allow: [], trust: "test" });
+    expect(envs.h?.trust).toBe("harness");
+    expect(envs.p).toEqual({ baseUrl: "https://p.test", allow: [], production: true, trust: "production" });
+    expect(envs.plain).toEqual({ baseUrl: "https://plain.test", allow: [] });
+  });
+
+  it("0.30.0 §5: an unknown `trust` value is refused, listing the allowed ones", () => {
+    for (const bad of ["staging", "unknown", "TEST", true, null]) {
+      expect(() => loadEnvironmentsFile(envFile({ x: { baseUrl: "https://x.test", trust: bad } }))).toThrow(
+        /\[x\]\.trust must be one of "test", "harness", "production"/,
+      );
+    }
+  });
+
+  it("0.30.0 §5: `production: true` with a looser `trust` is refused", () => {
+    expect(() => loadEnvironmentsFile(envFile({ x: { baseUrl: "https://x.test", production: true, trust: "test" } }))).toThrow(
+      /cannot be both production: true and trust: "test"/,
+    );
+  });
+
   it("NEVER holds secrets or sessions: such keys are refused, pointing at ~/.jevitate", () => {
     for (const key of ["storageState", "secretFields", "password", "apiKey", "token", "cookies", "credentials"]) {
       expect(() => parseEnvironments({ staging: { baseUrl: "https://s.test", [key]: "x" } }, "environments.json", root)).toThrow(EnvironmentConfigError);
