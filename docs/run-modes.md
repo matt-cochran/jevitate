@@ -40,8 +40,9 @@ mode, unless they were already `production: true`.
 | --- | --- | --- |
 | A human step (a handback step in a Journey) | Never waits. The run is refused before any browser opens with `E_HUMAN_STEP_IN_TEST_MODE` | Holds the run until a person answers at a terminal |
 | An MCP run of a Journey | Any approval channel authorises it | Needs an approval a person made (`tty` or `pr-review`), else `E_APPROVAL_CHANNEL_FOR_MODE` |
-| Authored `allowedOrigins` (MCP) | Join the run's write allowlist | Need `mcpRun.allowOffAllowlistWrites` |
-| Destructive control, off-allowlist write, production origin (MCP) | Refused as in [safety](./safety.md); test mode does not loosen them | Refused as in [safety](./safety.md) |
+| Destructive control (MCP) | Allowed, and noted in the run's evidence by rule and step. Session-ending and paid controls, and a target's own `safety.deny`, are still refused | Refused (`E_RUN_REFUSED_DESTRUCTIVE`) unless `mcpRun.allowDestructive` lifts it, as in 0.29.0 |
+| A write off the run's allowlist (MCP) | Allowed to an origin the test environment declares (its `baseUrl` and named `origins`, or the origin a `targets.json` `trust: "test"` names), and noted in the evidence. Any other origin is refused, an authored `allowedOrigins` entry included | Refused (`E_RUN_REFUSED_OFF_ALLOWLIST_WRITE`) unless `mcpRun.allowOffAllowlistWrites` lifts it. An authored `allowedOrigins` entry also needs it |
+| A production origin (MCP) | Refused (`E_RUN_REFUSED_PRODUCTION`): a `production` declaration makes the target automation mode anyway | Refused unless `mcpRun.allowProduction` lifts it |
 | Mutation proof | Runs and `countsForGate` is true | Runs and `countsForGate` is false: a proof's strength depends on a target you can reset |
 | Job attainment | From the done check | From the done check |
 | Write sentinel | Not run | Shadow mode: records its judgment as advisory evidence and holds nothing |
@@ -145,8 +146,9 @@ Over MCP:
   interval, budget, quiet hours). A looser one is refused with `E_POLICY_LOOSEN_OVER_MCP`.
 - `mission_targets` cannot promote a target (`E_TARGET_PROMOTE_OVER_MCP`). Promotion is a CLI act.
 - `promote_journey` still works, and its approval authorises test-mode runs only.
-- An authored `allowedOrigins` joins a run's write allowlist in test mode only. In automation mode a write
-  there needs `mcpRun.allowOffAllowlistWrites`.
+- An authored `allowedOrigins` never widens what a run may write to on its own: an agent can author it. In
+  automation mode a write there needs `mcpRun.allowOffAllowlistWrites`; in test mode it is allowed only when
+  the test environment declares that origin too.
 
 ## What forged provenance still means
 

@@ -9,7 +9,7 @@ import { resolveJourneyEnvironment } from "./environments.js";
 import { HOLD_HOOK_OWNER } from "./journey-hold.js";
 import { runJourneyProgrammatically } from "./journey-api.js";
 import { hasRunHookOwner, hasRunHooks, resetRunHooksForTests } from "./journey-run-hooks.js";
-import { E_APPROVAL_CHANNEL_FOR_MODE, E_HUMAN_STEP_IN_TEST_MODE, RUN_MODE_HOOK_OWNER, RunModeRefusedError, draftOnAutomationTargetWarning, registerRunModeHooks, resolveRunTarget, runModeRefusalBody } from "./journey-run-mode-gate.js";
+import { E_APPROVAL_CHANNEL_FOR_MODE, E_HUMAN_STEP_IN_TEST_MODE, RUN_MODE_HOOK_OWNER, RunModeRefusedError, draftOnAutomationTargetWarning, registerRunModeHooks, resolveRunTarget, runModeRefusalBody, testDeclaredOrigins } from "./journey-run-mode-gate.js";
 import { exitCodeForError } from "./exit-codes.js";
 import { modeWriteAllowlist } from "./mcp-run-guard.js";
 
@@ -195,6 +195,23 @@ describe("authored allowedOrigins and the write allowlist", () => {
 
   it("the site and the environment's own origins stay, even when also authored", () => {
     expect(modeWriteAllowlist({ ...base, authoredOrigins: [SITE, "https://pay.example.test"], mode: "automation" })).toEqual([SITE, "https://cdn.example.test"]);
+  });
+});
+
+describe("0.30.0 §5.1 testDeclaredOrigins: where test mode lets a write go", () => {
+  it("a test environment's baseUrl and named origins, not its allow list; nothing for an automation-mode run", async () => {
+    await writeFile(environmentsFile, JSON.stringify({ staging: { baseUrl: STAGING, allow: ["https://cdn.example.test"], origins: { api: "https://api.staging.example.test" }, trust: "test" }, plain: { baseUrl: SITE } }));
+    expect(testDeclaredOrigins({ origin: STAGING, environment: env("staging"), targetsFile }).sort()).toEqual(["https://api.staging.example.test", STAGING]);
+    expect(testDeclaredOrigins({ origin: SITE, environment: env("plain"), targetsFile })).toEqual([]);
+    // --base-url off the environment's own origins is not test mode, so it declares nothing.
+    expect(testDeclaredOrigins({ origin: SITE, environment: env("staging", SITE), targetsFile })).toEqual([]);
+  });
+
+  it("an operator's trust test declares its own origin only; production anywhere declares nothing", async () => {
+    await writeFile(targetsFile, JSON.stringify({ [SITE]: { trust: "test" } }));
+    expect(testDeclaredOrigins({ origin: SITE, environmentsFile, targetsFile })).toEqual([SITE]);
+    await writeFile(targetsFile, JSON.stringify({ [STAGING]: { trust: "production" } }));
+    expect(testDeclaredOrigins({ origin: STAGING, environment: env("staging"), targetsFile })).toEqual([]);
   });
 });
 

@@ -281,8 +281,14 @@ The destructive check reads a control's name, so it cannot judge what has none: 
 submit button, or a key the page's own script turns into a write. A press is judged however its key is spelt,
 including `"\n"`, `"\r"`, `NumpadEnter`, `" "` and a chord that holds one, and on what holds focus inside a frame.
 
-The table above is what applies when no run mode changes it. The run mode adds two refusals before any
-browser opens: a Journey approved over MCP, `ci` or `non-interactive` is refused on an automation-mode
+The table above is what applies when no run mode changes it. Test mode loosens two of its rows, inside
+the declared environment only: a destructive control (the built-in `builtin:destructive` rule) is clicked,
+and a write may reach an origin the test environment declares (its `baseUrl` and named `origins`, or the
+origin a `targets.json` `trust: "test"` names). Each such action is noted in the run's evidence by rule or
+origin and step, never a value or the control's name. Session-ending and paid controls, a target's own
+`safety.deny`, a write to any other origin (an authored `allowedOrigins` entry included, since an agent can
+author one) and a production origin are refused in test mode as in automation mode. The run mode adds two
+refusals before any browser opens: a Journey approved over MCP, `ci` or `non-interactive` is refused on an automation-mode
 target over MCP (`E_APPROVAL_CHANNEL_FOR_MODE`), and a Journey with a human step is refused on a test-mode
 target (`E_HUMAN_STEP_IN_TEST_MODE`). A step only a person can do on an automation-mode target holds the
 run instead (see [holds](./run-modes.md#holds-and-resume)).
@@ -296,11 +302,6 @@ What does not guard a run today:
   was allowed: it can't be moved onto another one.
 - `load run` (the API load test), `regression run`, `verify-fix` and `source run` do not go through the
   run hooks, so they get no run mode, no hold and no mode refusal.
-- Destructive controls are not loosened in test mode. The design allowed a test-mode run to click a
-  destructive control inside its declared environment; the code does not. `E_RUN_REFUSED_DESTRUCTIVE`,
-  `E_RUN_REFUSED_OFF_ALLOWLIST_WRITE` and `E_RUN_REFUSED_PRODUCTION` apply over MCP in both modes, lifted
-  only by `mcpRun` in `targets.json`. The one thing test mode loosens is an authored `allowedOrigins`,
-  which joins the write allowlist there and not in automation mode.
 - The `secretFields` route for a test-mode target over MCP is not built. In test mode a secret parameter the
   request leaves out is refused with `E_SECRET_PARAM_OVER_MCP`.
 - The `targets.json` secret route covers `run_journey` and holds. It is not read by every tool that can run
