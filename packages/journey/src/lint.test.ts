@@ -233,6 +233,22 @@ describe("#401 lintJourney", () => {
     expect(lintJourney(journey).some((f) => f.rule === "no-persistence-check")).toBe(true);
   });
 
+  it("retains explicit uncertainty for a relevant UI transition with only recorded reads", () => {
+    const journey = j([
+      {
+        step: { kind: "click", target: { testId: "use-template" }, expect: { kind: "textIncludes", target: { role: "heading" }, text: "Campaign Objective" } },
+        delta: {
+          verdict: "relevant-change",
+          why: "template context loaded into an unsaved draft",
+          changes: ["heading"],
+          requests: ["GET /api/v1/tool/organizations/agent-profiles → 200"],
+          overheadMs: 1,
+        },
+      },
+    ]);
+    expect(lintJourney(journey).find((f) => f.rule === "no-persistence-check")).toMatchObject({ level: "warning", message: "UI effect at step 1 has incomplete write coverage; persistence requirements are unresolved." });
+  });
+
   it("flags no-persistence-check for a step whose expectRequests names a write request", () => {
     const journey = j([
       {
@@ -361,6 +377,12 @@ describe("local visible UI outcomes remain separate from HTTP effects", () => {
     const journey = j([templates(["POST /api/templates/query → 200"])]);
     expect(lintJourney(journey).map((f) => f.rule)).toContain("write-without-effect");
     expect(lintJourney(journey, { readRequests: ["/api/templates/query"] })).toEqual([]);
+  });
+
+  it("does not clear uncertain UI writes merely because a read expectation exists", () => {
+    const open = templates();
+    open.expectRequests = [{ kind: "requestMade", method: "GET", pathGlob: "/templates" }];
+    expect(lintJourney(j([open])).find((f) => f.rule === "no-persistence-check")).toMatchObject({ level: "warning", message: "UI effect at step 1 has incomplete write coverage; persistence requirements are unresolved." });
   });
 
   it("does not manufacture a pair for an unrelated final GET/status obligation", () => {
