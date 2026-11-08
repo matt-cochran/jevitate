@@ -152,7 +152,10 @@ export const ReplayEvidenceSchema = z
     /** The mutation id, for every role but base/independence/closing. */
     mutation: site.optional(),
     relaxedSites: z.array(site).optional(),
-    outcome: z.enum(["passed", "failed", "error", "stalled"]),
+    /** The target assertion site of a `targeted` replay and of its `control`; absent on every other replay. */
+    site: site.optional(),
+    /** `not-applied`: the mutation had nothing to act on (`MutationRunResult.outcome` in @jevitate/journey). */
+    outcome: z.enum(["passed", "failed", "not-applied", "error", "stalled"]),
     failedSites: z.array(MutationFailedSiteSchema),
     writes: WritesEvidenceSchema,
     waitsCut: z.array(site).optional(),

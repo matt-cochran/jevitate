@@ -1,6 +1,6 @@
 === RUNTIME (dist/index.js) ===
 
-# @jevitate/adjudicator (20 exports)
+# @jevitate/adjudicator (34 exports)
   AdvisoryJudgmentSchema: object
   BoundaryEvidenceSchema: object
   DoneCheckEvidenceSchema: object
@@ -11,6 +11,7 @@
   KnownSchema: function
   MutationEvidenceSchema: object
   MutationKindSchema: object
+  RULES_VERSIONS: array
   RefusalCodeSchema: object
   ReplayEvidenceSchema: object
   RunContextSchema: object
@@ -21,6 +22,19 @@
   WriteMethodSchema: object
   WriteShapeSchema: object
   WritesEvidenceSchema: object
+  adjudicate: function
+  assertionSiteKey: function
+  classifyMutation: function
+  classifyMutationPlain: function
+  countsForGate: function
+  judgeAssertions: function
+  judgeDoneCheck: function
+  mutationErrored: function
+  mutationProofVerdict: function
+  mutationResults: function
+  parseSiteKey: function
+  provenSensitive: function
+  rejudge: function
 
 # @jevitate/ai-core (127 exports)
   AI_CORE: const (string)
@@ -156,11 +170,13 @@
 # @jevitate/daemon (1 exports)
   ProfileManager: class
 
-# @jevitate/domain (102 exports)
+# @jevitate/domain (111 exports)
+  DEFAULT_DONE_CHECK_POLICY: const (string)
   DEFAULT_HEAP_GROWTH_RULE: object
   DEFAULT_JEVITATE_REPO: const (string)
   DEFECT_OUTCOME_STATUSES: array
   DEGRADED_FINDINGS: array
+  DONE_CHECK_POLICIES: array
   DefectOutcomeSchema: object
   EXPLORE_MISSION_OUTCOMES: array
   EnvironmentDegradedSchema: object
@@ -170,6 +186,8 @@
   GOAL_OUTCOME_FOLD: object
   GOAL_REASONS: array
   HostHealthSummarySchema: object
+  JOB_ATTAINMENTS: array
+  JOB_BASES: array
   JOURNEY_MISSION_OUTCOME: object
   JOURNEY_RUN_OUTCOMES: array
   LogClassCauseSchema: object
@@ -179,6 +197,7 @@
   MISSION_EXIT_CODES: object
   MISSION_OUTCOMES: array
   MISSION_RESULT_SCHEMA_VERSION: const (number)
+  MUTATION_PROOF_VERDICTS: array
   MissionResultSchema: object
   Pacer: class
   PersistedMissionResultSchema: object
@@ -225,8 +244,10 @@
   hasOwnFrame: function
   installClock: function
   isBrokenRun: function
+  isDoneCheckPolicy: function
   isExternalSchemeUrl: function
   isGoalOutcome: function
+  isJobAttainment: function
   isNodeError: function
   isPlainObject: function
   isRecord: function
@@ -234,8 +255,10 @@
   isWithinQuietHours: function
   journeezeFingerprintMarker: function
   journeyExitCode: function
+  journeyMissionOutcome: function
   legacyCanonicalJson: function
   legacyContentHash: function
+  legacyProofVerdict: function
   looksLikeRendererOom: function
   makeRng: function
   matchesRunTags: function
@@ -813,7 +836,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (190 exports)
+# @jevitate/journey (205 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -843,9 +866,18 @@
   CatalogStatusSchema: object
   CatalogStatusValueSchema: object
   ChangeEvidenceRefSchema: object
+  DONE_CHECK_KINDS: array
   DURATION_STATS: array
   DesiredOutcomeSchema: object
+  DoneCheckSpecSchema: object
   EXTENSION_NAMESPACE_RE: object
+  E_DONE_CHECK_AT: const (string)
+  E_DONE_CHECK_KIND: const (string)
+  E_DONE_CHECK_PATH_BOUND: const (string)
+  E_DONE_CHECK_REF_UNBOUND: const (string)
+  E_DONE_CHECK_SECRET_REF: const (string)
+  E_DONE_CHECK_SHAPE: const (string)
+  E_DONE_CHECK_SYNTAX: const (string)
   ExtensionsSchema: object
   FindingSchema: object
   FsJourneyStore: class
@@ -924,12 +956,15 @@
   declaredTargetedProofFor: function
   deriveParamSchema: function
   describeStep: function
+  doneCheckPlaceholders: function
+  doneCheckScope: function
   flatJourneySteps: function
   formatAnnotationChanges: function
   handoffKey: function
   handoffSchemaIssues: function
   heldSites: function
   intentCoverage: function
+  isDoneCheckIssues: function
   isLoadRefusedName: function
   isNoClaimExpect: function
   isOwnTargetVisible: function
@@ -948,6 +983,7 @@
   journeyStepCount: function
   journeyWriteSteps: function
   judgeAssertions: function
+  lintDoneCheck: function
   lintJourney: function
   lintUploadFixtures: function
   listJourneyAnchors: function
@@ -970,6 +1006,7 @@
   paceTailMs: function
   pacedReplay: function
   parameterTypeIssues: function
+  parseDoneCheck: function
   planJourneyMutations: function
   prefixLandingPath: function
   readRecords: function
@@ -978,6 +1015,7 @@
   removeAnchor: function
   renderJobStory: function
   resolveAnchorStep: function
+  resolveDoneCheck: function
   resolveJourneyStep: function
   runDeclaredTargetedProof: function
   runTargetedProof: function
