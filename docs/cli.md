@@ -1754,10 +1754,12 @@ jevitate journey run [options] <id>
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
+| `--no-done-check` | #800: skip the linked job's done check (two fresh-session readings, before step 1 and after the end state); the job reads unverified (basis no-check), which exits 2 unless project.json doneCheckPolicy is advisory |  |  |  |  |
 | `--param <kv>` | param as key=value (repeatable); a secret one is on the command line: use --secret-field | `{}` |  |  |  |
 | `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--real` | use live Jev + OpenRouter gateways for self-heal (requires keys) | `false` |  |  |  |
 | `--record-video [dir]` | record a video of each browser context (works headless too); default: next to the run's result; listed as videoPaths |  |  |  |  |
+| `--require-done-check` | #800: an unverified job (no done check, or one already true) exits 2 even when project.json doneCheckPolicy is advisory |  |  |  |  |
 | `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
 | `--secret-field <binding>` | a secret parameter from the environment, off the command line: '<label\|testId\|id\|name>=<value>=env:<VAR>' (repeatable), matched on the recorded step that types it, e.g. 'label=Password=env:APP_PASSWORD'. The environment's secretFields in ~/.jevitate/targets.json apply the same way; --param wins | `[]` |  |  |  |
 | `--self-heal <mode>` | self-heal policy mode: fail-closed \| hybrid \| full (#453: hybrid/full need --changes and/or --change-note; a heal is proposed for review, exit 5 — never a pass) | `fail-closed` |  |  |  |

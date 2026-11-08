@@ -1,4 +1,4 @@
-import { clock } from "@jevitate/domain";
+import { clock, DEFAULT_DONE_CHECK_POLICY, type DoneCheckPolicy, type JourneyJobInput } from "@jevitate/domain";
 import { resolveDoneCheck, type DoneCheckSpec } from "@jevitate/journey";
 import {
   judgeDoneCheck,
@@ -10,7 +10,7 @@ import {
 
 /**
  * #800 (design 0.30.0 §3.1): reading a job's done check in a FRESH browser context and deciding the
- * job verdict from the before/after readings. Not yet wired into `journey run`.
+ * job verdict from the before/after readings. `journey run` wires it through journey-done-check-hook.ts.
  *
  * No param or extract value ever reaches an error or a reason: the only text this module produces
  * is an `UnknownReason` token, and a failure's own message is dropped (it may quote a URL).
@@ -108,3 +108,15 @@ export function evaluateJobDoneCheck(before: DoneReading | undefined, after: Don
   const spec: DoneCheckEvidence["spec"] = { version: 1, at: "/", check: "" };
   return judgeDoneCheck({ spec, before, after });
 }
+
+/**
+ * The `journeyExitCode` job input of a verdict: `not-achieved` carries `failure.kind:
+ * "done-check-failed"`; an unverified pass exits per `policy` (default `require`: 2).
+ */
+export function doneCheckExitInput(job: JobVerdict | undefined, policy: DoneCheckPolicy = DEFAULT_DONE_CHECK_POLICY): JourneyJobInput | undefined {
+  if (job === undefined) return undefined;
+  return { attainment: job.attainment, doneCheckPolicy: policy, ...(job.attainment === "not-achieved" ? { failureKind: "done-check-failed" } : {}) };
+}
+
+/** Code-templated: what a `done-check-failed` failure says. Never a value. */
+export const DONE_CHECK_FAILED_MESSAGE = "the job's done check read false before the run and still false after it, in a fresh session: the steps passed, but the job did not happen";

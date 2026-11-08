@@ -1,7 +1,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { RunEvidenceSchema, type Known, type RunEvidence, type StepEvidence, type UnknownReason, type WriteShape } from "@jevitate/adjudicator";
+import { RunEvidenceSchema, type DoneCheckEvidence, type Known, type RunEvidence, type StepEvidence, type UnknownReason, type WriteShape } from "@jevitate/adjudicator";
 import { clock } from "@jevitate/domain";
 import type { Journey } from "@jevitate/journey";
 import type { BrowserSession } from "@jevitate/playwright";
@@ -109,6 +109,7 @@ export class JourneyRunEvidenceWriter {
   #watched = false;
   #unknown: UnknownReason | undefined;
   #mode: RunEvidence["run"]["mode"] = "automation";
+  #doneCheck: DoneCheckEvidence | undefined;
   #detach: (() => void) | undefined;
 
   constructor(req: JourneyRunEvidenceRequest) {
@@ -162,6 +163,11 @@ export class JourneyRunEvidenceWriter {
   /** The run's mode, as a `resolveMode` run hook decided it (journey-run-hooks.ts). Default `automation`. */
   noteMode(mode: RunEvidence["run"]["mode"]): void {
     this.#mode = mode;
+  }
+
+  /** #800: the job done check's fresh-session readings (journey-done-check-hook.ts). Placeholders only, never a resolved value. */
+  noteDoneCheck(doneCheck: DoneCheckEvidence): void {
+    this.#doneCheck = doneCheck;
   }
 
   /**
@@ -278,6 +284,7 @@ export class JourneyRunEvidenceWriter {
       },
       steps,
       writes: { sent: this.#known(sent.length), answered: this.#known(answered), aborted: this.#known(aborted), openAtClose: this.#known(open), shapes },
+      ...(this.#doneCheck === undefined ? {} : { doneCheck: this.#doneCheck }),
       judgments: [],
       notes,
     } satisfies RunEvidence);
