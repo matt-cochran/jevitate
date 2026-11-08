@@ -290,7 +290,7 @@ function ownerUid(): number | undefined {
 }
 
 /** The key, or why it cannot be trusted. A key anyone else can read or write binds nothing. */
-function readCheckpointKey(keyFile: string): { readonly key: Buffer } | { readonly missing: true } | { readonly problem: string } {
+export function readCheckpointKey(keyFile: string): { readonly key: Buffer } | { readonly missing: true } | { readonly problem: string } {
   let fd: number | undefined;
   try {
     if (!lstatSync(keyFile).isFile()) return { problem: "it is not a regular file" };
@@ -313,7 +313,7 @@ function readCheckpointKey(keyFile: string): { readonly key: Buffer } | { readon
 }
 
 /** Publishes a new key whole, by a hard link that fails if another process got there first. */
-function createCheckpointKey(keyFile: string): void {
+export function createCheckpointKey(keyFile: string): void {
   mkdirSync(dirname(keyFile), { recursive: true, mode: 0o700 });
   const tmp = `${keyFile}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   const fd = openSync(tmp, WRITE_FLAGS, 0o600);
