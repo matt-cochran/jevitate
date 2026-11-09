@@ -195,7 +195,6 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "journey-prefix.ts runJourneyProgrammatically": {
     ...HOLD_RESUME, secretMode: SECRET_MODE_AUTO, secretEnv: SECRET_ENV_PROCESS,
     onRawOutput: "only `journey chain` hands a run's output on to a page",
-    boundSecretParams: "only `journey run` resolves a secret from an operator binding; this path takes values through params",
     assertRunnable: MCP_RUN_GATE,
     runGuardTargetsFile: GUARD_TARGETS_SEAM,
     runRecorder: RUN_RECORD_ELSEWHERE,
@@ -248,6 +247,24 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     session: WHOLE_JOURNEY,
     stopAfterStep: WHOLE_JOURNEY,
   },
+  // #801: every shortest-path candidate is a full replay of the Journey as recorded, less the removed steps.
+  "journey-shorten.ts runJourneyProgrammatically": {
+    resumeAtStep: "#801: every candidate is a full replay from step 1; a hold's resume is `jevitate inbox resume`",
+    heldSecretParams: "#801: a candidate is a proof replay (asProof) and never holds for a person, so nothing resumes typing a secret",
+    stopAfterStep: "#801: every candidate is a full replay; a prefix is an anchored mission's (journey-prefix.ts)",
+    session: "#801: every candidate opens a fresh browser of its own; an already-open session would carry the last candidate's state into the next",
+    heal: "#801: a candidate must replay as recorded; a healed step would hide a dropped one, so it has no change context",
+    selfHealer: "#801: a candidate must replay as recorded; a healed step would hide a dropped one (policy is safeRunPolicy())",
+    assertRunnable: MCP_RUN_GATE,
+    runRecorder: "#801: a candidate is a search probe, not a run; the report (and the draft) is the record",
+    onRawOutput: "only `journey chain` hands a run's output on to a page",
+    screenshots: "#801: a candidate only needs its done-check verdict; capture is `journey run --screenshots` on the draft",
+    observer: OBSERVER_INTERNAL,
+    interpreter: ANNOTATE_OBSERVER,
+    mask: MASK_INTERNAL,
+    actionDeltas: NO_DELTAS_HERE,
+    fixtureBaseDir: FIXTURE_BASE_DIR,
+  },
   "load-cli.ts runJourneyLoadTest": { policy: "a load run replays with the fail-closed safeRunPolicy()" },
   "mcp-api.ts runJourneyProgrammatically": {
     ...HOLD_RESUME, secretMode: SECRET_MODE_AUTO,
@@ -284,7 +301,6 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "check-execute.ts runJourneyProgrammatically": {
     ...HOLD_RESUME, secretMode: SECRET_MODE_AUTO, secretEnv: SECRET_ENV_PROCESS,
     onRawOutput: "only `journey chain` hands a run's output on to a page",
-    boundSecretParams: "only `journey run` resolves a secret from an operator binding; this path takes values through params",
     assertRunnable: MCP_RUN_GATE,
     runGuardTargetsFile: GUARD_TARGETS_SEAM,
     runRecorder: RUN_RECORD_ELSEWHERE,

@@ -163,6 +163,13 @@ beside the job verdict, never the job verdict.
   [mutation-proof policy](./journeys.md)). Choose `require-sensitive` only for targets you can reset:
   under it a `sensitive` proof counts only when `countsForGate` is `true` and its receipt names the
   engine that recorded it (a receipt from before 0.30.0 names none), and no waiver lifts it.
+- `journey readiness` leads with the `job` check: the latest run's `job.attainment`. `not-achieved` exits 1;
+  `unverified` exits 2 under `doneCheckPolicy: "require"` and does not gate under `advisory`.
+- Under `advisory`, a missing, stale or insensitive proof neither blocks `journey readiness` nor fails
+  `journey review --strict`: it is a ○ checks-strength line. An unwaived `inconclusive` attempt stays
+  inconclusive on the line but does not gate either. Under `require-attempt` and `require-sensitive` the
+  proof gates as before. The exit codes that changed are in the
+  [readiness contract](./contracts/readiness-and-bundle.md#3-receipt).
 
 Why. On the accuracy lab (#800, 16 cells, 3 replicates each, real Chromium), the done check caught 27 of
 27 seeded defects with no false alarm on 12 clean cells. Mutation proof caught 24 of 27 and raised 6 false
@@ -556,6 +563,11 @@ achieved, decided by code from the run's state, never parsed from `reason`:
 The human summary prints both: `GOAL blocked (not-found, stop: blocked)` and `DEFECTS server-log 2`
 (or `none`). `jevitate report` shows them per run, and `check`'s `--fake-ai` rule (a goal-only miss is
 inconclusive under the fake judge) no longer hides a defect the run found.
+
+A goal run whose decision budget runs out on the turn straight after a refused `blocked` ends
+`stop: "exhausted"` with `goalReason: "budget"`, and its `reason` says so: `decision budget ran out straight
+after a refused blocked (N decisions, M actions) — the decision the refusal asked for was never taken: "<the
+refusal>"`.
 
 **Goal / explore loop — `stop: StopReason`**, why the loop itself stopped acting (folds into
 the `goalOutcome` above; not separately exit-coded):

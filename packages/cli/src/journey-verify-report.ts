@@ -33,12 +33,3 @@ export function verifyExitCode(verdict: MutationProofVerdict): number {
   return verdict === "sensitive" ? 0 : verdict === "insensitive" ? 1 : 2;
 }
 
-/**
- * The checks-strength line (owner decision "Proof role", 2026-11-09): the job's done check is the
- * strict gate, and a mutation proof says how strong the Journey's checks are. A proof on a target that
- * cannot be reset is reported, never counted by a strict gate (design §5.1).
- */
-export function checksStrengthLine(verdict: string, countsForGate: boolean | undefined): string {
-  const gate = countsForGate === true ? "counts for a strict gate" : "does not count for a strict gate: a proof's strength depends on a target you can reset";
-  return `checks strength: ${readProofVerdict(verdict)} (${gate})`;
-}

@@ -411,16 +411,24 @@ built-in verb (`Preview*`, `Recalculate*`, …).
   `targets.json` `secretFields` type it on that origin, or the run holds for a person at a terminal. In
   test mode the same case is refused with `E_SECRET_PARAM_OVER_MCP`. See
   [run modes](./run-modes.md#how-a-secret-comes-back-over-mcp). On the CLI the value comes from an
-  environment variable through `journey run --secret-field` or `secretFields` in `targets.json`; `--param`
+  environment variable through `--secret-field` (on `journey run`, `verify`, `demo`, `chain`, `load run`,
+  `source run` and the other replay commands) or `secretFields` in `targets.json`; `--param`
   still works and warns on stderr. Or the Journey uses a stored session and needs no secret
   ([Secret parameters on a replay](./journeys.md#secret-parameters-on-a-replay)).
 - A credential-like name is refused however it is spelt, broadly on purpose. `secret: false` lifts that
   only when a person approved that Journey and the approval still matches it; per Journey. Provenance is
   detection, not proof: an agent that can edit the Journey file can also write the channel, and git
   review of `.jevitate/` is what catches that.
-- A value from a binding goes in only at a field, on the binding's origin, read with the field in hand,
-  or the run fails with `E_SECRET_ORIGIN_REFUSED`; a `navigate` URL or `http` check holding one refuses
-  before anything runs. `editText` types real keys and checks before each one that the element's
+- The bindings a replay takes are `label|testId|id|name=<value>=env:<VAR>` for a field, and
+  `param=<name>=env:<VAR>` for any secret parameter by its name. Use `param=` for a token in a `navigate` URL.
+  The same specs work in `targets.json` `secretFields`, and a goal run never matches `param=` to a live field.
+- A bound value goes only to its binding's origin. A `targets.json` binding is for the origin it is keyed by,
+  and a `--secret-field` binding is for the run's allowlist. A field's binding is checked as the field is
+  typed, and a navigate URL's as it is navigated, as resolved: a relative URL goes to the page's own origin.
+  Anywhere else the run fails with `E_SECRET_ORIGIN_REFUSED`. A `navigate` URL whose literal origin is not the
+  binding's is refused before anything runs, and so is an `http` check holding a bound parameter. Over MCP, a
+  URL secret with no `param=` binding for the origin is refused with `E_SECRET_MODE_UNAVAILABLE`: it never
+  holds, because a person can't type a URL in the browser. `editText` types real keys and checks before each one that the element's
   document is there, holds the focus and is on that origin. Limit: a page that navigates in the instant
   after that check can receive the key in flight, about one character, and nothing after it.
 - Nothing secret-bound goes to a model. A Journey with a secret parameter, a fixture secret or a

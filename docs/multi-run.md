@@ -323,8 +323,8 @@ jevitate journey queue notes --param note=hello --env staging   # MCP: queue_jou
 jevitate mission run                                             # drains queued missions, then queued Journey calls
 ```
 
-A queued call holds four things: the Journey's id, the content hash it was queued against, its
-non-secret `--param` values, and `--env` or `--base-url`. Each call is a file in
+A queued call holds the Journey's id, the content hash it was queued against, its
+non-secret `--param` values, `--env` or `--base-url`, and any done-check flag (below). Each call is a file in
 `~/.jevitate/missions/queue/journeys/`. It has the same lifecycle as a queued mission (`queued`,
 `running`, then `done` or `failed`), and a drain claims each call exclusively, so a call never
 runs twice.
@@ -371,8 +371,11 @@ queued call's stored record: `queued` or `running` while pending, `failed` with 
 the run's `outcome` with its `exitCode` and `runId`, which names the run's
 `journey-evidence-<runId>` directory.
 
-A queued call carries no emulation, fixtures, self-heal or done-check flags. If a run needs one of
-those, run it directly with `journey run` or `run_journey`.
+A queued call takes the done-check flags `journey queue --no-done-check` / `--require-done-check`
+(MCP `queue_journey` `noDoneCheck` / `requireDoneCheck`), as `journey run` and `run_journey` do, and not
+both (`E_QUEUE_JOURNEY_ARGS` over MCP). The call stores them and `mission run` drains it with them. It
+carries no emulation, fixtures, self-heal or retry flags. If a run needs one of those, run it directly
+with `journey run` or `run_journey`.
 
 **Queued goal missions and jobs.** `mission queue --strategy goal-based --goal … --job <id>` (MCP
 `queue_exploration {job}`) takes a catalog job, as `explore --job` does. When the mission runs, the

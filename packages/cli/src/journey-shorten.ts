@@ -1,4 +1,4 @@
-import { clock } from "@jevitate/domain";
+import { clock, safeRunPolicy } from "@jevitate/domain";
 import { FsJourneyStore, JourneyRegistry, isDoneCheckIssues, parseDoneCheck, doneCheckScope, type Journey } from "@jevitate/journey";
 import { DEFAULT_SHORTEN_BUDGET, shortenRecording, type ShortenReport, type ShortenVerdict } from "@jevitate/regression";
 import type { BrowserPort } from "@jevitate/playwright";
@@ -6,6 +6,8 @@ import { inMcpInvocation, noteMcpRefusal } from "./approval-provenance.js";
 import { loadCatalog } from "./catalog-api.js";
 import { findJob } from "./catalog.js";
 import { DoneCheckRun } from "./journey-done-check-hook.js";
+import { asProof } from "./journey-run-hooks.js";
+import { applyJourneyEnvironment } from "./environments.js";
 import { effectiveAllowedOrigins, runJourneyProgrammatically, UnknownJourneyError, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import { resolveRunTarget, runModeRefusal } from "./journey-run-mode-gate.js";
 import { prepareMcpRunGuard } from "./mcp-run-guard.js";
@@ -37,7 +39,30 @@ export class JourneyShortenError extends Error {
   }
 }
 
-export interface ShortenJourneyOptions {
+/**
+ * What every candidate replay passes through, as `journey verify` passes them to each of its replays
+ * (`VerifyJourneyOptions`): where it runs (environment, allow), auth (storageState), the browser and its
+ * emulation, the site-policy gate and account, the per-run response bound, and the secrets a binding
+ * supplied (`--secret-field`, the environment's targets.json secretFields). A candidate never self-heals,
+ * holds, resumes or stops early: it is a full replay of the Journey as recorded, less the removed steps.
+ */
+export type ShortenReplayOptions = Pick<
+  RunJourneyProgrammaticallyOptions,
+  | "storageState"
+  | "browserPortFactory"
+  | "browser"
+  | "emulation"
+  | "environment"
+  | "allow"
+  | "siteGate"
+  | "account"
+  | "boundSecretParams"
+  | "secretMode"
+  | "secretEnv"
+  | "stepResponseTimeoutMs"
+>;
+
+export interface ShortenJourneyOptions extends ShortenReplayOptions {
   readonly dir: string;
   readonly id: string;
   readonly jobId: string;
@@ -48,10 +73,8 @@ export interface ShortenJourneyOptions {
   /** The draft's id (default `<id>-shortest`); refused when a Journey with it exists. */
   readonly outId?: string;
   readonly params?: Readonly<Record<string, string>>;
-  readonly storageState?: string;
   /** Fixtures set up before and restored after EVERY candidate replay (the reset between candidates). */
   readonly fixtures?: RunJourneyProgrammaticallyOptions["fixtures"];
-  readonly browserPortFactory?: () => BrowserPort;
   /** `~/.jevitate/targets.json` (default): the target's trust, mode and `mcpRun` rules. */
   readonly targetsFile?: string;
   /** Told as each candidate replay starts (1-based), for progress lines. */
@@ -122,16 +145,17 @@ export async function shortenJourney(opts: ShortenJourneyOptions): Promise<Short
   if (inMcpInvocation()) {
     // The same gate as `run_journey`, before any fixture or browser: the run mode (an unapproved draft on an
     // automation-mode target is refused) and the #789 guard (production, `mcpRun`). Every replay arms both again.
-    const target = resolveRunTarget({ origin: source.recording.site, targetsFile: opts.targetsFile });
+    const target = resolveRunTarget({ origin: opts.environment?.baseUrl ?? source.recording.site, environment: opts.environment, targetsFile: opts.targetsFile });
     const refusal = runModeRefusal(source, target, { mcp: true });
     if (refusal !== undefined) {
       noteMcpRefusal(refusal);
       throw refusal;
     }
+    const placed = applyJourneyEnvironment(source, opts.environment, opts.allow);
     prepareMcpRunGuard({
-      site: source.recording.site,
-      allowedOrigins: effectiveAllowedOrigins(source, undefined),
-      environment: undefined,
+      site: placed.recording.site,
+      allowedOrigins: effectiveAllowedOrigins(placed, opts.environment, opts.allow),
+      environment: opts.environment,
       targetsFile: opts.targetsFile,
       mode: target.mode,
       authoredOrigins: source.metadata.allowedOrigins ?? [],
@@ -158,21 +182,39 @@ export async function shortenJourney(opts: ShortenJourneyOptions): Promise<Short
       catalogDir: opts.catalogDir,
       journeysDir: opts.dir,
       jobId: opts.jobId,
+      // Read where the candidate ran: the environment's origin (`--env`/`--base-url`), else the recorded site.
+      ...(opts.environment?.baseUrl === undefined ? {} : { origin: opts.environment.baseUrl }),
       ...(opts.storageState === undefined ? {} : { storageState: opts.storageState }),
       ...(opts.browserPortFactory === undefined ? {} : { sessionPortFactory: opts.browserPortFactory }),
     });
-    const result = await check.run(() =>
-      runJourneyProgrammatically(
-        {
-          dir: opts.dir,
-          id: opts.id,
-          params: { ...(opts.params ?? {}) },
-          ...(opts.storageState === undefined ? {} : { storageState: opts.storageState }),
-          ...(opts.fixtures === undefined ? {} : { fixtures: opts.fixtures }),
-          ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
-          ...(opts.targetsFile === undefined ? {} : { runGuardTargetsFile: opts.targetsFile }),
-        },
-        { skipStep: (i) => !keep.has(i) },
+    // A candidate is a proof replay: it never holds for a person (ProofHoldRefusedError), whatever the secret mode.
+    const result = await asProof(() =>
+      check.run(() =>
+        runJourneyProgrammatically(
+          {
+            dir: opts.dir,
+            id: opts.id,
+            params: { ...(opts.params ?? {}) },
+            // Fail closed, as every proof replay: paid/destructive steps refused, and never a heal (a healed
+            // step would hide a dropped one).
+            policy: safeRunPolicy(),
+            ...(opts.storageState === undefined ? {} : { storageState: opts.storageState }),
+            ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
+            ...(opts.browser === undefined ? {} : { browser: opts.browser }),
+            ...(opts.emulation === undefined ? {} : { emulation: opts.emulation }),
+            ...(opts.environment === undefined ? {} : { environment: opts.environment }),
+            ...(opts.allow === undefined || opts.allow.length === 0 ? {} : { allow: opts.allow }),
+            ...(opts.siteGate === undefined ? {} : { siteGate: opts.siteGate }),
+            ...(opts.account === undefined ? {} : { account: opts.account }),
+            ...(opts.boundSecretParams === undefined ? {} : { boundSecretParams: opts.boundSecretParams }),
+            ...(opts.secretMode === undefined ? {} : { secretMode: opts.secretMode }),
+            ...(opts.secretEnv === undefined ? {} : { secretEnv: opts.secretEnv }),
+            ...(opts.stepResponseTimeoutMs === undefined ? {} : { stepResponseTimeoutMs: opts.stepResponseTimeoutMs }),
+            ...(opts.fixtures === undefined ? {} : { fixtures: opts.fixtures }),
+            ...(opts.targetsFile === undefined ? {} : { runGuardTargetsFile: opts.targetsFile }),
+          },
+          { skipStep: (i) => !keep.has(i) },
+        ),
       ),
     );
     if (result.outcome !== "ok") return "replay-failed";

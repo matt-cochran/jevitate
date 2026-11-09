@@ -431,7 +431,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
     // 0.30.0 #801 (owner decision): the authoring-time shortest-path search, the tool twin of `journey shorten`.
     name: "shorten_journey",
     description:
-      "`jevitate journey shorten <id> --job <jobId> [--budget n] [--out-id <id>]` (#801): authoring time only, no model. Searches for a shorter path to the same job by removing steps; every candidate is a full replay of the DRAFT Journey (real writes) with its fixtures (or fixtures) set up before and restored after it, decided only by the job's done check (.jevitate/jobs.json jobs[].done) read in a fresh browser context. A candidate that drops a confirm/agree/accept click, or navigates past one it dropped, is refused and costs no replay. budget (default 30) counts every replay, the recorded path's included. " +
+      "`jevitate journey shorten <id> --job <jobId> [--budget n] [--out-id <id>]` (#801): authoring time only, no model. Searches for a shorter path to the same job by removing steps; every candidate is a full replay of the DRAFT Journey (real writes), on env/baseUrl like verify_journey (the environment's targets.json secretFields supply a secret parameter; never params), with its fixtures set up before and restored after it, decided only by the job's done check (.jevitate/jobs.json jobs[].done) read in a fresh browser context. A candidate that drops a confirm/agree/accept click, or navigates past one it dropped, is refused and costs no replay. budget (default 30) counts every replay, the recorded path's included. " +
       "A promoted Journey is refused ({code: E_JOURNEY_SHORTEN_PROMOTED}); the run-mode gate and the run guard decide as for run_journey before any replay (an unapproved draft runs on a test-mode target only). A secret parameter's value in params is refused by name ({code: E_SECRET_PARAM_OVER_MCP}). " +
       "Returns the CLI's report: wording (\"shortest found within budget\", never optimal), originalSteps, shortestSteps, replaysUsed, budget, stopped (searched | budget | recorded-path-fails), baseline, removed (step, kind), refused, and draftId: a NEW unpromoted draft a person reviews and promotes. The source Journey is not changed.",
     command: {
@@ -446,8 +446,12 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         storageState: session("--storage-state"),
         fixtures: path("--fixtures"),
         fixtureIdentity: FIXTURE_IDENTITY,
+        stepResponseTimeoutMs: n("--step-response-timeout"),
+        ...EXTENSION,
+        ...ENVIRONMENT,
+        ...EMULATION,
       },
-      omitted: { ...LOCATION_FLAGS, ...HOOK_FLAGS, ...JSON_FLAG },
+      omitted: { "--secret-field": OMIT.envSecret, "--allow": OMIT.mcpOrigins, ...LOCATION_FLAGS, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
   },
   {

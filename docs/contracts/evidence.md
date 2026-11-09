@@ -17,7 +17,9 @@ The file is written atomically, mode `0600`, and only after it passes `RunEviden
 record is never on disk. A failure to write it never changes a run's outcome or a proof's verdict; the
 run says why it was not written. `logs prune` removes an evidence folder with its run's record. The
 `goal-run` subject kind is reserved: no goal run writes a record in 0.30.0. The 0.29.0
-`journey-run-*.json` record is unchanged and deprecated.
+`journey-run-*.json` record is deprecated; it gains two optional fields in 0.30.0, `job: { attainment, basis }` (code
+tokens: the run's done-check verdict) and `journey.proofHash` (the Journey's executable identity). A record without `job`
+reads `unverified` (`not-recorded`) in `journey readiness` and `journey review`.
 
 ## 2. Value-free by construction
 

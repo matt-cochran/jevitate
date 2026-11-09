@@ -51,6 +51,10 @@ npm install -g @jevitate/cli
 jevitate install-browser                 # the pinned browser Jevitate drives (shared, never removes other revisions)
 ```
 
+Jevitate pins the exact Playwright its release was tested with. When an upgrade changes that version,
+browser commands refuse with "run: jevitate install-browser" until you run it once. It never removes
+browser revisions other projects use.
+
 **2. Set up the repo**. Run this from your app's repository:
 
 ```bash

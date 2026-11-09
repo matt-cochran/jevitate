@@ -270,6 +270,14 @@ a target, a page is returned to at most twice and a run at most three times, and
 a target outside the allowlist is refused. A real dead end (a disabled control
 with no other route) still ends `blocked` once the returns are spent.
 
+**A refused `blocked`.** When the model reports `blocked` while an obvious forward control is still untried on
+the page, the run refuses it with a hint naming that control, and takes another decision. The hint ranks a
+control the goal names by its whole name first (`Show the demo` for "press Show the demo"), then one the goal
+names in part, then one only the page's instruction suggests. A name counts as stated in part when two or more
+of its words are in the goal (`Publish report` for "Publish the Q3 sales report"), or its only word is a
+variant of a goal word (`Reports`); one shared word among several does not count. If the decision budget ends
+straight after such a refusal, the run says so ([outcomes](./outcomes.md)).
+
 ### Known limits of the hang heuristics
 
 - A request that runs longer than `longPollMs` on an interactive page is treated
