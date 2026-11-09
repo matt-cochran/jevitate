@@ -10,7 +10,7 @@ import { journeyReviewHash } from "./journey-review.js";
 
 /**
  * 0.30.0 MCP surface (d-queue-journeys-mcp): the served tools are exactly `ALLOWED_TOOLS`, and the only
- * addition since 0.29.0 is `queue_journey` (#797, owner decision 8). `queue_journey` refuses a secret
+ * additions since 0.29.0 are `queue_journey` (#797, owner decision 8) and `shorten_journey` (#801). `queue_journey` refuses a secret
  * param by name before anything is written, and queues a promoted Journey only, bound to its hash.
  */
 
@@ -69,17 +69,18 @@ describe("0.30.0: the served MCP tools", () => {
     expect(buildMcpTools({ journeysDir: "/unused" }).map((t) => t.name)).toEqual([...ALLOWED_TOOLS]);
   });
 
-  it("the only difference from the 0.29.0 list is ['queue_journey']: nothing added besides it, nothing removed", () => {
+  it("the only differences from the 0.29.0 list are ['queue_journey', 'shorten_journey']: nothing else added, nothing removed", () => {
     const now = new Set<string>(ALLOWED_TOOLS);
     const then = new Set<string>(ALLOWED_TOOLS_0_29_0);
-    expect([...now].filter((t) => !then.has(t))).toEqual(["queue_journey"]);
+    // #797 queue_journey; #801 shorten_journey (owner decision, after the experiment).
+    expect([...now].filter((t) => !then.has(t))).toEqual(["queue_journey", "shorten_journey"]);
     expect([...then].filter((t) => !now.has(t))).toEqual([]);
     expect((FORBIDDEN_TOOLS as readonly string[]).includes("queue_journey")).toBe(false);
   });
 
-  it("queue_journey is wired (not the not_implemented placeholder) and takes only id, params, env, baseUrl", () => {
+  it("queue_journey is wired (not the not_implemented placeholder) and takes only id, params, env, baseUrl and the done-check flags", () => {
     const tool = buildMcpTools({ journeysDir: "/unused" }).find((t) => t.name === "queue_journey")!;
-    expect(Object.keys(tool.inputSchema.properties).sort()).toEqual(["baseUrl", "env", "id", "params"]);
+    expect(Object.keys(tool.inputSchema.properties).sort()).toEqual(["baseUrl", "env", "id", "noDoneCheck", "params", "requireDoneCheck"]);
     expect(tool.description).not.toMatch(/not yet wired/);
   });
 });

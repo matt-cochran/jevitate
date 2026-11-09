@@ -264,15 +264,19 @@ export function registerJourneyQueueCommand(journey: Command, program: Command, 
       .description("queue a call of a PROMOTED Journey for `jevitate mission run` to run (MCP queue_journey) — id, its content hash, non-secret params, env; never a secret value"),
   )
     .option("--param <kv>", "a non-secret param as key=value (repeatable); a secret-named one is refused (E_SECRET_PARAM_IN_QUEUE): the run meets a secret with its secret mode", collectParam, {} as ParamFlags)
+    .option("--no-done-check", "#800: the queued run skips the linked job's done check (as journey run --no-done-check); stored on the call")
+    .option("--require-done-check", "#800: the queued run exits 2 on an unverified job even under the advisory policy (as journey run --require-done-check); stored on the call")
     .option("--dir <path>", QUEUE_DIR_HELP)
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
-      const o = this.opts<{ param: ParamFlags; dir?: string; json?: boolean } & EnvironmentFlags>();
+      const o = this.opts<{ param: ParamFlags; dir?: string; json?: boolean; doneCheck: boolean; requireDoneCheck?: boolean } & EnvironmentFlags>();
       const args: Record<string, unknown> = {
         id,
         ...(Object.keys(o.param).length === 0 ? {} : { params: o.param }),
         ...(o.env === undefined ? {} : { env: o.env }),
         ...(o.baseUrl === undefined ? {} : { baseUrl: o.baseUrl }),
+        ...(o.doneCheck === false ? { noDoneCheck: true } : {}),
+        ...(o.requireDoneCheck === true ? { requireDoneCheck: true } : {}),
       };
       let envelope: JsonEnvelope<unknown>;
       try {

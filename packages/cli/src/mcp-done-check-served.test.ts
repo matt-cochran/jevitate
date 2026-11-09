@@ -146,4 +146,48 @@ describe("GAPS 21: MCP and the queue read the job's done check (real Chromium)",
     } as never);
     expect(run).toMatchObject({ outcome: "ok", exitCode: 1, job: { attainment: "not-achieved", basis: "done-check" } });
   }, 120_000);
+
+  // #800 parity: `journey run --no-done-check` / `--require-done-check` over MCP and on a queued call.
+  it("run_journey noDoneCheck reads nothing: unverified, basis no-check, exit 2 under the default policy", async () => {
+    const runJourney = tools().find((t) => t.name === "run_journey")!;
+    app.broken = true;
+    const r = JSON.parse((await runJourney.handler({ id: "save-item", params: { item: "item-five" }, noDoneCheck: true })).content[0]!.text) as Record<string, unknown>;
+    expect(r, JSON.stringify(r)).toMatchObject({ outcome: "ok", job: { attainment: "unverified", basis: "no-check" }, exitCode: 2 });
+    expect(r).not.toHaveProperty("failure");
+  }, 120_000);
+
+  it("run_journey requireDoneCheck exits 2 on an unverified job even under project.json's advisory policy", async () => {
+    const runJourney = tools().find((t) => t.name === "run_journey")!;
+    writeFileSync(join(projectDir, "project.json"), JSON.stringify({ doneCheckPolicy: "advisory" }));
+    try {
+      app.broken = false;
+      app.items = ["item-six"]; // already true before the run: unverified, basis already-true
+      const advisory = JSON.parse((await runJourney.handler({ id: "save-item", params: { item: "item-six" } })).content[0]!.text) as Record<string, unknown>;
+      expect(advisory, JSON.stringify(advisory)).toMatchObject({ job: { attainment: "unverified" }, exitCode: 0 });
+      const required = JSON.parse((await runJourney.handler({ id: "save-item", params: { item: "item-six" }, requireDoneCheck: true })).content[0]!.text) as Record<string, unknown>;
+      expect(required, JSON.stringify(required)).toMatchObject({ job: { attainment: "unverified" }, exitCode: 2 });
+    } finally {
+      writeFileSync(join(projectDir, "project.json"), JSON.stringify({}));
+    }
+  }, 120_000);
+
+  it("run_journey refuses noDoneCheck with requireDoneCheck, before any browser", async () => {
+    const runJourney = tools().find((t) => t.name === "run_journey")!;
+    const r = await runJourney.handler({ id: "save-item", params: { item: "x" }, noDoneCheck: true, requireDoneCheck: true });
+    expect(r.isError).toBe(true);
+    expect(JSON.parse(r.content[0]!.text)).toMatchObject({ error: "invalid_args" });
+  });
+
+  it("a drained queued call with noDoneCheck reads nothing: unverified, basis no-check", async () => {
+    tools();
+    app.broken = true;
+    const run = await realQueuedJourneyExecutor({ journeysDir, targetsFile, catalogDir: projectDir, logsRoot: logs, browserPortFactory: () => new PlaywrightBrowserPort() })({
+      kind: "journey",
+      journey: { id: "save-item", hash: (journey().metadata as { approval: { contentHash: string } }).approval.contentHash },
+      params: { item: "item-seven" },
+      noDoneCheck: true,
+      requestedAt: "2026-11-09T00:00:00.000Z",
+    } as never);
+    expect(run).toMatchObject({ outcome: "ok", exitCode: 2, job: { attainment: "unverified", basis: "no-check" } });
+  }, 120_000);
 });

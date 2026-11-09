@@ -48,7 +48,7 @@ type Kind = "skip" | "block-write" | "stale-value" | "swap-param" | "targeted-au
  */
 type Relation = "dependent" | "independent" | "own-dependent" | "own-earlier";
 
-const S = "sensitive, proven";
+const S = "sensitive, sensitive";
 const I = "insensitive, insensitive";
 
 /**
@@ -478,7 +478,7 @@ const FINDINGS: readonly { readonly name: string; readonly jobMs: number; readon
         { ...click("#go", text("#done", "done"), { waitFor: { maxMs: 22_000, stallMs: 1_000, reload: true } }), delta: { verdict: "relevant-change", why: "w", changes: [], requests: ["POST /api/go → 200"], overheadMs: 1 } },
       ]),
     site: "step:2",
-    expected: "sensitive, proven",
+    expected: "sensitive, sensitive",
     fixtures: true,
   },
   {
@@ -921,7 +921,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
       html(res, `<button id="save">Save</button><script>document.getElementById('save').onclick=()=>{location.href='/next'}</script>`);
     },
     journey: unreadSaved,
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["step:2", "sensitive"],
   },
   heldRow("answered with no-store, then keeps working with nothing sent: the write stays open", { headers: { "cache-control": "no-store" } }),
@@ -944,7 +944,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
       html(res, `<button id="save">Save</button><script>document.getElementById('save').onclick=()=>{location.href='/next'}</script>`);
     },
     journey: unreadSaved,
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["step:2", "sensitive"],
   },
   {
@@ -954,7 +954,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
       html(res, `<button id="save">Save</button><p id="said"></p><script>document.getElementById('save').onclick=async()=>{await fetch('/api/save?k=a',{method:'POST'});await fetch('/api/save?k=b',{method:'POST'});document.getElementById('said').textContent='Saved'}</script>`);
     },
     journey: unreadSaved,
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["step:2", "sensitive"],
   },
   {
@@ -997,21 +997,21 @@ const ROWS_EXPERIMENT: readonly Row[] = [
       html(res, `<button id="a">A</button><button id="b">B</button><script>for(const id of ['a','b'])document.getElementById(id).onclick=()=>fetch('/api/'+id,{method:'POST'})</script>`);
     },
     journey: (site) => J(site, [NAV_TO("#a"), { step: { kind: "click", target: { css: "#a" }, expect: NOCLAIM }, ...WROTE("/api/a") }, { step: { kind: "click", target: { css: "#b" }, expect: NOCLAIM }, ...WROTE("/api/b") }], { networkChecks: POST("/api/a") }),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["end-state:0", "sensitive"],
   },
   {
     name: "a no-store 200 whose body the page never reads: the write was answered",
     serve: answeredUnread(200),
     journey: unreadJourney(200),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["step:2", "sensitive"],
   },
   {
     name: "a no-store 401 whose body the page never reads: the write was answered",
     serve: answeredUnread(401),
     journey: unreadJourney(401),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["step:2", "sensitive"],
   },
   {
@@ -1028,7 +1028,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     name: "a body that ends a moment after its headers is waited for, so the end state reads its effect",
     serve: streaming(1_000, false),
     journey: streamJourney(text("#saved", "YES")),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["end-state:0", "sensitive"],
   },
   {
@@ -1040,7 +1040,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     reason: STILL_OPEN,
   },
   {
-    name: "stated limit, today's reading: a body the page reads and the server holds open reports its first bytes, so past 2 s it reads as answered, proven",
+    name: "stated limit, today's reading: a body the page reads and the server holds open reports its first bytes, so past 2 s it reads as answered, sensitive",
     limit: true,
     serve: () => (req: IncomingMessage, res: ServerResponse): void => {
       if (pathOfUrl(req) === "/api/save") {
@@ -1052,7 +1052,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
       html(res, `<button id="save">Save</button><p id="said"></p><script>document.getElementById('save').onclick=async()=>{const r=await fetch('/api/save',{method:'POST'});document.getElementById('said').textContent='Saved';await r.text()}</script>`);
     },
     journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saved") }, ...WROTE("/api/save") }]),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["step:2", "sensitive"],
   },
   {
@@ -1062,7 +1062,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
       html(res, `<button id="save">Save</button><p id="said"></p><script>document.getElementById('save').onclick=()=>fetch('/api/save',{method:'POST'}).then(()=>{document.getElementById('said').textContent='Saved'})</script>`);
     },
     journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saved") }, ...WROTE("/api/save") }]),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["step:2", "sensitive"],
   },
   {
@@ -1108,14 +1108,14 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     name: "H4: a client's retry after the block window, with no claim on the step",
     serve: retrying(),
     journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: NOCLAIM }, ...WROTE("/api/save") }, { step: { kind: "click", target: { css: "#next" }, expect: NOCLAIM } }], { endState: [SAVED_YES] }),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["end-state:0", "sensitive"],
   },
   {
     name: "H4: a client's retry during a relaxed replay's kept wait",
     serve: retrying(),
     journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saved") }, ...WROTE("/api/save") }], { endState: [SAVED_YES] }),
-    verdict: "proven",
+    verdict: "sensitive",
     under: ["block-write:2", "end-state:0", "sensitive"],
     reading: ["end-state:0", "sensitive"],
   },
@@ -1126,21 +1126,21 @@ const ROWS_EXPERIMENT: readonly Row[] = [
       endState: [SAVED_YES],
       mutationPairs: [{ check: "step:3", mustFailWhen: "block-write:2" }],
     }),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["end-state:0", "sensitive"],
   },
   {
     name: "M1: a repeating POST the Journey never recorded, open as a longer replay closes",
     serve: saving({ saveMs: 0, keepalive: true }),
     journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saved") }, ...WROTE("/api/save") }], { endState: [{ kind: "page", assertion: text("#said", "Saved") }] }),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["end-state:0", "sensitive"],
   },
   {
     name: "M2: a claim on optimistic text with a short wait, on a step with a slow request check",
     serve: saving({ saveMs: 8_000, optimistic: true }),
     journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saving"), waitFor: { maxMs: 2_000 } }, expectRequests: POST("/api/save") }]),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["step:2", "sensitive"],
   },
   {
@@ -1193,7 +1193,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     limit: true,
     serve: heldSave({ headers: { "cache-control": "no-store" }, first: (res) => void res.write('{"a"'), click: "fetch('/api/save',{method:'POST'}).then((r)=>{window.kept=r.clone();said()})" }),
     journey: heldJourney,
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["end-state:0", "sensitive"],
   },
   // KNOWN LIMIT, NOT DESIRED BEHAVIOUR: this row pins a reading so a change to it is seen, and does not endorse it.
@@ -1203,7 +1203,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     limit: true,
     serve: heldSave({ headers: { "cache-control": "no-store" }, first: (res) => void res.write('{"a"'), click: "navigator.sendBeacon('/api/save','x');said()" }),
     journey: heldJourney,
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["end-state:0", "sensitive"],
   },
   {
@@ -1211,7 +1211,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     limit: true,
     serve: oneSlow("skip:3"),
     journey: (site) => J(site, oneSlowSteps({}), { mutationPairs: [{ check: "step:3", mustFailWhen: "skip:3" }] }),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["step:3", "sensitive"],
   },
   {
@@ -1222,7 +1222,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
       html(res, `<button id="save">Save</button><p id="row">row: ${ctx.label === "skip:2" ? "gone" : "present"}</p><script>document.getElementById('save').onclick=()=>{}</script>`);
     },
     journey: (site) => crossingJourney(site, { mutationPairs: [{ check: "end-state:0", mustFailWhen: "skip:2" }] }, {}),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["end-state:0", "sensitive"],
   },
   {

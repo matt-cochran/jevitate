@@ -103,15 +103,22 @@ describe("verifyPackedIdentity (#784)", () => {
     const dep = join(root, "packages/cli/node_modules/pinned-dep");
     put(join(dep, "package.json"), JSON.stringify({ name: "pinned-dep", version: "1.0.0", type: "module", exports: "./index.js" }));
     put(join(dep, "index.js"), `export const line = ${JSON.stringify(RELEASE_LINE)};\n`);
+    const playwright = join(root, "packages/cli/node_modules/playwright");
+    put(join(playwright, "package.json"), JSON.stringify({ name: "playwright", version: "1.63.0" }));
     return root;
   }
 
+  /** The bundled root export: the documented functions, reporting the same identity as the bin (#815). */
+  const rootExport = (line = RELEASE_LINE) => `export function buildProgram() {}\nexport function versionString() { return ${JSON.stringify(line)}; }\n`;
+
   /** An artifact whose cli tarball has the given bin source and package.json fields. */
-  function artifactOf(binSource, pkgFields = {}, artifactManifest = manifest) {
+  function artifactOf(binSource, pkgFields = {}, artifactManifest = manifest, indexSource = rootExport()) {
     const dir = scratch();
     const pkg = join(dir, "src", "package");
-    put(join(pkg, "package.json"), JSON.stringify({ name: "@jevitate/cli", version: "1.2.3", type: "module", bin: { jevitate: "dist/bin.js" }, ...pkgFields }));
+    const fields = { name: "@jevitate/cli", version: "1.2.3", type: "module", bin: { jevitate: "dist/bin.js" }, main: "dist/index.js", exports: { ".": "./dist/index.js" }, ...pkgFields };
+    put(join(pkg, "package.json"), JSON.stringify(fields));
     put(join(pkg, "dist", "bin.js"), binSource);
+    put(join(pkg, "dist", "index.js"), indexSource);
     const out = join(dir, "artifact");
     mkdirSync(out);
     execFileSync("tar", ["-czf", join(out, artifactManifest.files["@jevitate/cli"]), "-C", join(dir, "src"), "package"]);
@@ -161,12 +168,63 @@ describe("verifyPackedIdentity (#784)", () => {
     expect(() => verifyPackedIdentity(artifact, { root: frozenCheckout() })).toThrow(/tar/);
   });
 
+  it("a root export importing a package the tarball does not declare is refused (#815)", () => {
+    const index = `import "@jevitate/playwright";\n${rootExport()}`;
+    expect(() => verifyPackedIdentity(artifactOf(printing(RELEASE_LINE), {}, manifest, index), { root: frozenCheckout() })).toThrow(/root export[\s\S]*Cannot find package '@jevitate\/playwright'/);
+  });
+
+  it("a root export without a documented function is refused (#815)", () => {
+    const index = `export function versionString() { return ${JSON.stringify(RELEASE_LINE)}; }\n`;
+    expect(() => verifyPackedIdentity(artifactOf(printing(RELEASE_LINE), {}, manifest, index), { root: frozenCheckout() })).toThrow(/root export lacks buildProgram/);
+  });
+
+  it("a root export reporting another build than its bin is refused (#815, #784)", () => {
+    const index = rootExport(`1.2.3-source-abc1234 (commit abc1234, tree def5678, built ${BUILT})`);
+    expect(() => verifyPackedIdentity(artifactOf(printing(RELEASE_LINE), {}, manifest, index), { root: frozenCheckout() })).toThrow(/root export reports 1\.2\.3-source-abc1234/);
+  });
+
+  it("a package without a root export is refused (#815)", () => {
+    expect(() => verifyPackedIdentity(artifactOf(printing(RELEASE_LINE), { main: undefined, exports: undefined }, manifest, ""), { root: frozenCheckout() })).toThrow(/root export/);
+  });
+
+  it("a tarball pinning playwright to the version the frozen install tested passes (#825)", () => {
+    expect(verifyPackedIdentity(artifactOf(printing(RELEASE_LINE), { dependencies: { playwright: "1.63.0" } }), { root: frozenCheckout() }).tree).toBe("def5678");
+  });
+
+  it("a tarball declaring playwright as a range is refused (#825)", () => {
+    expect(() => verifyPackedIdentity(artifactOf(printing(RELEASE_LINE), { dependencies: { playwright: "^1.49.0" } }), { root: frozenCheckout() })).toThrow(/playwright "\^1\.49\.0", not the exact 1\.63\.0 the release gate tested/);
+  });
+
+  it("a tarball pinning another playwright than the frozen install is refused (#825)", () => {
+    expect(() => verifyPackedIdentity(artifactOf(printing(RELEASE_LINE), { dependencies: { playwright: "1.65.0" } }), { root: frozenCheckout() })).toThrow(/playwright "1\.65\.0", not the exact 1\.63\.0/);
+  });
+
   it("a bin pointing out of the tarball is refused", () => {
     const outside = scratch();
     writeFileSync(join(outside, "bin.js"), printing(RELEASE_LINE));
     // From <tmpdir>/<prefix>/node_modules/@jevitate/cli, up to the tmpdir both scratch dirs share.
     const bin = { jevitate: `../../../../${basename(outside)}/bin.js` };
     expect(() => verifyPackedIdentity(artifactOf(printing(RELEASE_LINE), { bin }), { root: frozenCheckout() })).toThrow(/outside the tarball/);
+  });
+});
+
+describe("the tested Playwright (#825)", () => {
+  const lock = readFileSync("pnpm-lock.yaml", "utf8");
+  const locked = [...new Set([...lock.matchAll(/^  playwright@(\d+\.\d+\.\d+):$/gm)].map((m) => m[1]))];
+  const specifiers = [...lock.matchAll(/^      playwright:\n        specifier: (\S+)\n        version: (\S+)$/gm)].map((m) => ({ specifier: m[1], version: m[2] }));
+
+  it("the lockfile resolves one Playwright", () => {
+    expect(locked).toHaveLength(1);
+  });
+
+  it("every workspace package pins exactly that version", () => {
+    expect(specifiers.length).toBeGreaterThan(0);
+    for (const s of specifiers) expect(s).toEqual({ specifier: locked[0], version: locked[0] });
+  });
+
+  it("the published cli declares that exact version", () => {
+    const cli = JSON.parse(readFileSync("packages/cli/package.json", "utf8"));
+    expect(cli.dependencies.playwright).toBe(locked[0]);
   });
 });
 

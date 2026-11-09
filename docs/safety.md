@@ -321,8 +321,22 @@ What does not guard a run today:
   default port and a trailing dot, so an alias of a flagged host is still that host.
 - A hold is only as strong as the person answering it. `inbox approve` shows what is held and asks for its
   id typed back, but it cannot tell a person from a script that types the id at a pseudo-terminal.
-- Jev's write sentinel runs in shadow mode: it records its judgment in the run's evidence as advisory and
-  holds nothing.
+- Jev's write sentinel guards nothing in 0.30.0. It is off unless `JEVITATE_WRITE_SENTINEL=shadow` is
+  set and a Jev key resolves; any other value, or no key, leaves it off and records nothing. In shadow mode
+  it runs before each write step of a Journey run on an automation-mode target (`journey run`,
+  `run_journey`, a drained queued call); a test-mode run is left alone. It asks Jev two questions: is this
+  write destructive (`write.destructive`), and is it outside what the job intends
+  (`write.outside-intent`). What Jev receives is structure only: the control's role and name from the
+  stored step, the method (`UNKNOWN`, since the request is not yet sent), the page's path with every
+  segment replaced by `:id` or `:param` (an API version such as `v1` stays, the query is dropped), and the
+  job's id and title. No page text and no value is sent, and redaction stays on as a second layer. Each
+  answer is recorded in the run's [evidence](./contracts/evidence.md) under `judgments`, as advisory, with
+  the threshold `0.5`; a judgment at or above it is one an enforcing sentinel would have held. The write
+  goes ahead either way, and no verdict reads a judgment. The Jev calls each write made, with their cost,
+  are noted in the evidence's `notes`. Measured on 50 seeded writes, at 0.5 it caught 58 to 75% of the
+  destructive ones with a precision of 0.93 to 1.00, and stopped none of 10 clean writes. That is not
+  enough to gate on, and a confirm button in a delete dialog ("Confirm", "OK") cannot be told apart from
+  structure alone.
 - A secret-bound Journey still cannot self-heal or be annotated: nothing secret-bound goes to a model.
 - A literal secret in a `run_check` params file, and a secret on the CLI argv (`regression`, `verify-fix`,
   `journey migrate --labels`), stay documented limits.

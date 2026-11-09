@@ -375,13 +375,16 @@ verifier masks that exact check only in the declared mutated and control replays
 original check array, indices, request capture, safety guards and response bounds. The same
 unmutated control must pass. Removing checks or relaxing a target is never a supported workaround.
 
-**Mutation-proof policy (#708).** Set `mutationProofPolicy` in `.jevitate/project.json`:
+**Mutation-proof policy (#708).** The job gates, the proof is advisory (0.30.0): a run passes on its job's
+done check (`job.attainment`), and a mutation proof grades how strong the Journey's own checks are, as a
+checks-strength line beside the job verdict ([the role of a mutation proof](./outcomes.md#the-role-of-a-mutation-proof)).
+Set `mutationProofPolicy` in `.jevitate/project.json` to make the proof gate strict review as well:
 
 | Mode | Strict review requirement |
 | --- | --- |
-| `advisory` (default) | Preserves existing exit behavior. Fresh inconclusive attempts appear as neutral attention, never as proven/CLEAR with a check mark. |
-| `require-attempt` | Requires a fresh proven receipt, or a fresh inconclusive attempt with an explicit current human waiver. Missing, stale, and insensitive receipts fail. |
-| `require-proven` | Requires a fresh `proven` receipt. A waiver cannot override this policy. |
+| `advisory` (default) | The proof changes no exit code. Fresh inconclusive attempts appear as neutral attention, never as sensitive/CLEAR with a check mark. |
+| `require-attempt` | Requires a fresh `sensitive` receipt, or a fresh inconclusive attempt with an explicit current human waiver. Missing, stale, and insensitive receipts fail. |
+| `require-sensitive` | An opt-in for targets you can reset. Requires a fresh `sensitive` receipt that counts for the gate (`countsForGate: true`). A waiver cannot override this policy. 0.29.0's `require-proven` is read as `require-sensitive`, with one warning per process, until 0.32.0. |
 
 `journey review --json` and MCP `review_journey` expose the same `proof.policy`: mode, verdict,
 freshness, reason, counts, classification, `passed`, `waiverRequired`, waiver status and next
@@ -936,24 +939,47 @@ the parameter, by `label`, `testId`, `id` or `name`. `type=` needs a live field,
 on a replay, and a `cmd:` source is for goal runs. A binding that supplies no secret parameter is a
 usage error (`E_JOURNEY_RUN_ARGS`).
 
+`param=<name>` binds a secret parameter by its name instead, wherever the Journey uses it. That is the
+binding for a secret no field types, such as an invite token in a `navigate` URL:
+
+```bash
+INVITE_TOKEN=… jevitate journey run accept-invite --secret-field 'param=inviteToken=env:INVITE_TOKEN'
+```
+
+The same spec works in `targets.json` `secretFields`. A goal run never matches a `param=` binding to a
+field.
+
 On the CLI, with `--env` or `--base-url`, the `secretFields` for that origin in
 `~/.jevitate/targets.json` apply the same way, so no flag is needed. `--param` wins over `--secret-field`, which wins over
 `targets.json`. A `targets.json` binding whose variable is not set supplies nothing, and the
 parameter is reported missing.
 
 `--param secret1=…` still works on the CLI, and warns on stderr: the value is in the process list and
-the shell history. `journey run` is the only command with `--secret-field` and `targets.json`
-resolution. `journey verify`, `journey readiness`, `journey chain`, `journey demo`,
-`journey annotate`, `load run`, `explore --from-journey`, `source run`, `verify-fix` and
-`regression capture`/`run` take a secret parameter through `--param` only, with the same warning.
-On `journey chain` that means the producer: a consumer's secret parameter can't be supplied at all,
-through `--param` or `targets.json`, and the chain fails closed.
+the shell history. The warning names the `param=<name>` binding for that command, which works for any
+secret parameter. `journey run`, `journey verify`, `journey demo`, `journey chain`, `load run` and
+`explore --from-journey` take `--secret-field`, and with `--env` or `--base-url` the environment's
+`targets.json` `secretFields`, the same way. `source run` takes `--secret-field` only (it has no
+`--env`), and its values are typed inside the source Journey's allowlist. On `journey chain` the
+binding is for the producer (`--from`): a consumer's secret parameter can't be supplied at all, and
+the chain fails closed. On `explore --from-journey`, a `--secret-field` that binds a secret parameter
+of the prefix supplies it to the prefix replay; a field binding still also binds the goal loop's field.
+`regression capture`/`run`, `verify-fix`, `journey migrate --labels` and `campaign run` take
+`--secret-field` too, and so does a sweep (`explore --at-step all|anchors`), at every stop. `journey
+readiness` and `journey annotate` take a secret parameter through `--param` only, with the same
+warning; annotate refuses a secret-bound Journey anyway.
 
-A bound value goes in only at a field, on the origin its binding applies to: the one the
-`targets.json` entry is keyed by, or for `--secret-field` the run's allowlist, checked with the field in
-hand on `fill`, `select` and `editText`. Anywhere else, such as after a redirect, nothing is typed and
-the step fails with `E_SECRET_ORIGIN_REFUSED`. A `navigate` URL or an `http` check that holds a bound
-parameter refuses the same way before anything runs. For a sign-in on another origin (SSO), run
+A secret value in a `check` suite's `params` or a campaign spec's `params` sits in a file at rest, so it
+is refused by name (`E_CHECK_SUITE`, `E_CAMPAIGN_SPEC`): a credential-like name, or one the Journey
+declares secret. Bind it in the target's `secretFields` (`"param=<name>=env:VAR"`, which holds only the
+variable's name) or in the operator's `targets.json`. Over MCP (`run_check`, `run_campaign`) only the
+operator's `targets.json` is read, never a binding in a file the call named.
+
+A bound value goes only to the origin its binding applies to: the one the `targets.json` entry is keyed
+by, or for `--secret-field` the run's allowlist. It is checked with the field in hand on `fill`, `select`
+and `editText`, and on `navigate` against the URL as resolved (a relative URL goes to the page's own
+origin). Anywhere else, such as after a redirect, nothing is typed or sent and the step fails with
+`E_SECRET_ORIGIN_REFUSED`. A `navigate` URL whose literal origin is not the binding's, and an `http`
+check that holds a bound parameter, refuse the same way before anything runs. For a sign-in on another origin (SSO), run
 `journey run --secret-field … --allow <origin>`. A value given with `--param` isn't held to an origin:
 it can go to an allowlisted origin in a `navigate` URL or an `http` check. The one exception is an `http`
 check naming a parameter the narrower rule below refuses, such as `password`: `E_HTTP_CHECK_SECRET_REF`.
@@ -981,12 +1007,19 @@ In automation mode, on a Journey a person approved, the run goes on to the step 
 types the value from a `~/.jevitate/targets.json` `secretFields` binding on that origin (`vault-autofill`)
 or holds for a person to finish the step in a headed browser (`jevitate inbox resume`, `visible-handback`).
 In test mode the test target's own `secretFields` supply it, or the run is refused with
-`E_HUMAN_STEP_IN_TEST_MODE`. The value never reaches the model, the result or the evidence. That route
-covers `run_journey` and its holds only: `verify_journey`, `chain_journeys` and the other tools above
-still refuse a Journey that needs a secret, and a secret in a `navigate` URL runs on the CLI only.
-`run_check` and `run_campaign` read `params` from the suite or spec file, not from the request, and a
-literal secret in that file stays a documented limit. On the CLI, `regression run`/`capture`,
-`verify-fix` and `journey migrate --labels` take `--param` only and print the argv warning by name.
+`E_HUMAN_STEP_IN_TEST_MODE`. The value never reaches the model, the result or the evidence.
+`verify_journey`, `demo_journey` and `chain_journeys` (its producer) meet a secret the request left out
+the same way. A proof never holds, so `verify_journey` needs the binding (`E_HUMAN_STEP_IN_PROOF`
+without one). `run_load_test` and `run_exploration` (`fromJourney`) take it from the binding only, and
+without one are refused with `E_SECRET_MODE_UNAVAILABLE` before any browser: a load test or a mission's
+prefix never holds. A secret in a `navigate` URL can't be typed by a person at a hold either, so with no
+`param=<name>` binding for the origin it is refused with `E_SECRET_MODE_UNAVAILABLE`, naming that
+binding. `sources` never reads `targets.json` for a source's Journey, which someone else wrote, so a
+source Journey that needs a secret stays refused over MCP. `annotate_journey` refuses any secret-bound
+Journey.
+A hold that a `journey chain` producer reaches records the chain: the consumer's id and the requests
+file's path, never a value. `jevitate inbox resume` resumes the producer, then runs the consumer for
+each matched request, so the whole chain runs.
 
 **Which names count.** A parameter is secret when it declares `secret: true`, or when its name reads
 as a credential. The name check is deliberately broad, since a credential that slips through has no

@@ -398,7 +398,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         ...EMULATION,
         ...DEMO_SHOW,
       },
-      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+      omitted: { "--secret-field": OMIT.envSecret, ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
   },
   {
@@ -422,10 +422,33 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         ...ENVIRONMENT,
         ...EMULATION,
       },
-      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--allow": OMIT.mcpOrigins, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+      omitted: { "--secret-field": OMIT.envSecret, ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--allow": OMIT.mcpOrigins, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
     // The command takes `status` first and runs no proof, whatever else is set.
     answersWhileBusy: (args) => args["status"] === true,
+  },
+  {
+    // 0.30.0 #801 (owner decision): the authoring-time shortest-path search, the tool twin of `journey shorten`.
+    name: "shorten_journey",
+    description:
+      "`jevitate journey shorten <id> --job <jobId> [--budget n] [--out-id <id>]` (#801): authoring time only, no model. Searches for a shorter path to the same job by removing steps; every candidate is a full replay of the DRAFT Journey (real writes) with its fixtures (or fixtures) set up before and restored after it, decided only by the job's done check (.jevitate/jobs.json jobs[].done) read in a fresh browser context. A candidate that drops a confirm/agree/accept click, or navigates past one it dropped, is refused and costs no replay. budget (default 30) counts every replay, the recorded path's included. " +
+      "A promoted Journey is refused ({code: E_JOURNEY_SHORTEN_PROMOTED}); the run-mode gate and the run guard decide as for run_journey before any replay (an unapproved draft runs on a test-mode target only). A secret parameter's value in params is refused by name ({code: E_SECRET_PARAM_OVER_MCP}). " +
+      "Returns the CLI's report: wording (\"shortest found within budget\", never optimal), originalSteps, shortestSteps, replaysUsed, budget, stopped (searched | budget | recorded-path-fails), baseline, removed (step, kind), refused, and draftId: a NEW unpromoted draft a person reviews and promotes. The source Journey is not changed.",
+    command: {
+      path: "journey shorten",
+      paramJourneys: (a) => [a["id"]],
+      params: {
+        id: pos(),
+        job: s("--job", { required: true }),
+        budget: n("--budget"),
+        outId: s("--out-id"),
+        params: { kind: "params", flag: "--param" },
+        storageState: session("--storage-state"),
+        fixtures: path("--fixtures"),
+        fixtureIdentity: FIXTURE_IDENTITY,
+      },
+      omitted: { ...LOCATION_FLAGS, ...HOOK_FLAGS, ...JSON_FLAG },
+    },
   },
   {
     name: "journey_readiness",
@@ -446,7 +469,8 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         ...EXTENSION,
         ...ENVIRONMENT,
       },
-      omitted: { ...LOCATION_FLAGS, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+      // #827: secret fields come from targets.json for the run's --env/--base-url, never from the request.
+      omitted: { "--secret-field": OMIT.envSecret, ...LOCATION_FLAGS, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
   },
   {
@@ -481,7 +505,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         ...EMULATION,
         ...ENVIRONMENT,
       },
-      omitted: { ...LOCATION_FLAGS, 
+      omitted: { "--secret-field": OMIT.envSecret, ...LOCATION_FLAGS, 
         "--allow-draft": "#580: over MCP a chain runs promoted Journeys only, as run_journey does; running drafts is the operator's CLI call",
         "--dir": OMIT.storeDir,
         "--allow": OMIT.mcpOrigins,
@@ -694,7 +718,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         ignoreHostLoad: b("--ignore-host-load"),
         ...JEV_AI,
       },
-      omitted: {
+      omitted: { "--secret-field": OMIT.envSecret,
         "--journeys-dir": OMIT.storeDir,
         "--allow-shell-hooks": OMIT.hooks,
         "--hook-timeout-ms": OMIT.hooks,
@@ -942,7 +966,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         ...ENVIRONMENT,
         ...EMULATION,
       },
-      omitted: { "--dir": OMIT.storeDir, ...BROWSER_FLAGS, ...JSON_FLAG },
+      omitted: { "--secret-field": OMIT.envSecret, "--dir": OMIT.storeDir, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
   },
   {
@@ -1057,12 +1081,12 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
           ...EMULATION,
           ...DEMO_SHOW,
         },
-        omitted: { "--dir": OMIT.storeDir, "--param": OMIT.branchParams, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+        omitted: { "--secret-field": OMIT.envSecret, "--dir": OMIT.storeDir, "--param": OMIT.branchParams, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
       },
       run: {
         path: "regression run",
         params: { tags: TAGS, ...EXTENSION, id: pos(), attempts: n("--attempts"), storageState: session("--storage-state"), ...ENVIRONMENT, ...EMULATION, ...DEMO_SHOW },
-        omitted: { "--dir": OMIT.storeDir, "--param": OMIT.branchParams, ...BROWSER_FLAGS, ...JSON_FLAG },
+        omitted: { "--secret-field": OMIT.envSecret, "--dir": OMIT.storeDir, "--param": OMIT.branchParams, ...BROWSER_FLAGS, ...JSON_FLAG },
       },
     },
   },
@@ -1091,7 +1115,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         // The Journey is resolved through the source's run gate: runSourceJourney refuses there.
         paramJourneys: () => [],
         params: { tags: TAGS, ...EXTENSION, name: pos(), journeyId: pos(), params: { kind: "params", flag: "--param" }, storageState: session("--storage-state"), ...EMULATION },
-        omitted: { ...BROWSER_FLAGS, ...JSON_FLAG },
+        omitted: { "--secret-field": OMIT.envSecret, ...BROWSER_FLAGS, ...JSON_FLAG },
       },
     },
   },

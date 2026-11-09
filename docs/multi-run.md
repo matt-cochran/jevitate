@@ -353,9 +353,23 @@ call. On the run's own origin, the target's `~/.jevitate/targets.json` `secretFi
 Without a binding, an automation-mode run stops at that step (`outcome: held`, exit 2) until a
 person runs `jevitate inbox resume <holdId>`.
 
+**The job's done check.** A drained call reads its linked job's done check as `journey run` does,
+before step 1 and after the end state, and follows `project.json` `doneCheckPolicy`. Under the default
+`require`, a call that passes with no done check reads `job: { attainment: "unverified", basis:
+"no-check" }` and exits 2; see [did the job get done?](./outcomes.md#did-the-job-get-done).
+
 **The drain report.** `mission run --json` lists drained calls under `journeys`, each with
-`callId`, `journey`, `status`, and `outcome`/`exitCode` or a refusal `code`. A failed call makes
-`mission run` exit 2.
+`callId`, `journey`, `status`, and `outcome`/`exitCode` (and `job`, when the run decided one) or a
+refusal `code`. `mission run` exits with the worst code of what it drained, missions and calls alike,
+in the missions' severity order: a call that could not run, or that is held, counts as 2; a call that
+ran counts its own exit code (0, 1 for defects or a job not achieved, 2 for an unverified pass under
+`require`, 5 for a pending review). A call left `running` by a drain that died is recovered by the next
+drain, as a mission is.
+
+**Its result later.** `jevitate mission result <callId>` (MCP `get_mission_result {id: callId}`) reads a
+queued call's stored record: `queued` or `running` while pending, `failed` with the refusal `code`, or
+the run's `outcome` with its `exitCode` and `runId`, which names the run's
+`journey-evidence-<runId>` directory.
 
 A queued call carries no emulation, fixtures, self-heal or done-check flags. If a run needs one of
 those, run it directly with `journey run` or `run_journey`.

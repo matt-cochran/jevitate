@@ -11,6 +11,7 @@ import { registerJourneyReview } from "./journey-cli/review.js";
 import { registerJourneyMigrate } from "./journey-cli/migrate.js";
 import { registerJourneyLint } from "./journey-cli/lint.js";
 import { registerJourneyVerify } from "./journey-cli/verify.js";
+import { registerJourneyShorten } from "./journey-cli/shorten.js";
 import { registerJourneyAnchors } from "./journey-cli/anchors.js";
 import { registerJourneyPublish } from "./journey-cli/publish.js";
 import { registerJourneyAnchorCommands } from "./journey-anchor-cli.js";
@@ -20,7 +21,7 @@ import { registerJourneyDemoCommand } from "./journey-demo-cli.js";
 import { registerJourneyProofWaiver } from "./journey-proof-waiver-cli.js";
 import { registerJourneyQueueCommand } from "./mission-queue-cli.js";
 
-/** Registers `jevitate journey`: `list|find|run|queue|chain|promote|lint|verify|anchors|anchor|link|annotate|demo|publish`. */
+/** Registers `jevitate journey`: `list|find|run|queue|chain|promote|lint|verify|shorten|anchors|anchor|link|annotate|demo|publish`. */
 export function registerJourneyCommands(program: Command, deps: CliDeps): void {
   const journey = program.command("journey").description("manage and run promoted Journeys (regression-test replays)");
 
@@ -42,6 +43,8 @@ export function registerJourneyCommands(program: Command, deps: CliDeps): void {
   registerJourneyMigrate(journey, program, deps);
   registerJourneyLint(journey, program, deps);
   registerJourneyVerify(journey, program, deps);
+  // #801 — authoring time: the shortest path found within a replay budget, decided by a job's done check.
+  registerJourneyShorten(journey, program, deps);
   registerJourneyAnchors(journey, program, deps);
 
   // #487 — add/remove a draft Journey's anchors with the step id written at once.

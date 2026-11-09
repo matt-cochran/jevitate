@@ -13,6 +13,9 @@ import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type Assertion, type InvariantSpec, type Recording } from "@jevitate/recording";
 import type { ActionDeltaStats, ActionableControlOutcome, HostHealthSampler, InvariantDefect, InvariantReport, MinEffortRequest, PartialReport, RunDepth, SafetyOverride, SideEffect } from "@jevitate/explore";
 import type { DefectOutcome, DoneCheckPolicy, EnvironmentDegraded, GoalReason, JobBasis, JobVerdict, HostHealthSummary, StartupAttempt } from "@jevitate/domain";
+import { goalJobDecision } from "./explore-job-done-check.js";
+import { currentRunMetadata } from "./run-metadata.js";
+import type { TargetTrust } from "./run-mode.js";
 import { runGoalBasedMission, assertAuthorizedExploreTarget, type BoundaryEvidence, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type SecretCommandRunner, type TypeFixture, type UploadFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
 import { GOAL_ONLY_OUTCOMES, defectOutcomeOf, goalMissionOutcome, goalReasonOf, startedOutcome, type FilingConfig, type IssueDraft, type IssueFilerPort, type MissionFailure, type MissionOutcome, clock } from "@jevitate/domain";
@@ -204,6 +207,8 @@ export interface RunExplorationOptions {
   readonly doneCheckPolicy?: DoneCheckPolicy;
   /** `--require-done-check`: a pass an independent `--success` check alone verified is unverified too. */
   readonly requireDoneCheck?: boolean;
+  /** #802: the target's trust; default the run mode the surface decided (`run.target.trust`). A harness pass reads unverified/harness, exit 0. */
+  readonly targetTrust?: TargetTrust;
 }
 
 /** The fresh-context done-check reader (`cfg.doneCheck`): true = holds, false = does not, null = unreadable. */
@@ -679,23 +684,21 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
     const goalOutcome = (opts.allowVacuousChecks === true && endedAs === "succeeded" ? endedAs : startedOutcome(endedAs, mission.run.actions, failureNow?.kind)) as GoalBasedOutcome;
     // #423: THE table (domain `goalMissionOutcome`) — the exit code is unchanged for every combination.
     const foldedOutcome = goalMissionOutcome(goalOutcome, defectOutcome.status);
-    // 0.30.0 (#800): the job verdict. A done check's reading decides it; otherwise nothing fresh was read.
+    // 0.30.0 (#800): the job verdict and decision 3's fold (goalJobDecision: harness #802, find-out exempt).
     const verifiedBy = mission.run.outcome.status === "completed" ? mission.run.outcome.verifiedBy : undefined;
-    const job: JobVerdict | undefined =
-      mission.run.outcome.status === "completed" && mission.run.outcome.job !== undefined
-        ? mission.run.outcome.job
-        : opts.doneCheck !== undefined && lastReading === false
-          ? { attainment: "not-achieved", basis: "done-check" }
-          : goalOutcome === "succeeded" || opts.doneCheck !== undefined || opts.doneCheckBasis !== undefined
-            ? { attainment: "unverified", basis: opts.doneCheckBasis ?? (opts.doneCheck === undefined ? "no-check" : "reading-unknown") }
-            : undefined;
-    // Owner decision 3: an unverified pass exits 2 under `require`. An independent `--success` check is the run's
-    // own verification, so it stands unless `--require-done-check` asks for a done check.
-    const unverifiedPass =
-      opts.doneCheckPolicy === "require" ||
-      opts.requireDoneCheck === true
-        ? foldedOutcome === "clean" && job?.attainment === "unverified" && (opts.requireDoneCheck === true || verifiedBy !== "success-condition")
-        : false;
+    const { job, unverifiedPass } = goalJobDecision({
+      completed: mission.run.outcome.status === "completed",
+      loopJob: mission.run.outcome.status === "completed" ? mission.run.outcome.job : undefined,
+      verifiedBy,
+      hasReader: opts.doneCheck !== undefined,
+      lastReading,
+      basis: opts.doneCheckBasis,
+      goalOutcome,
+      foldedOutcome,
+      policy: opts.doneCheckPolicy,
+      requireDoneCheck: opts.requireDoneCheck,
+      trust: opts.targetTrust ?? currentRunMetadata()?.runMode?.().target.trust,
+    });
     const missionOutcome: MissionOutcome = unverifiedPass ? "inconclusive" : foldedOutcome;
     const goalReason = goalReasonOf({
       goalOutcome,

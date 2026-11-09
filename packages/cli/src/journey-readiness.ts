@@ -18,6 +18,8 @@ import { reviewJourneyById } from "./journey-review-api.js";
 import { verifyRecordPath } from "./journey-review-store.js";
 import { journeyReadRequests } from "./target-config.js";
 import { verifyJourneyMutations } from "./journey-verify.js";
+import { DEFAULT_DONE_CHECK_POLICY } from "@jevitate/domain";
+import { JOB_NOT_ACHIEVED_ATTENTION } from "./journey-review.js";
 import { runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 
 /**
@@ -41,6 +43,11 @@ export interface ReadinessCheck {
   readonly state: ReadinessCheckState;
   readonly detail: string;
   readonly evidence?: string;
+  /**
+   * 0.30.0 (owner decision "Proof role"): the check is shown but does not gate the verdict — the mutation
+   * proof under `mutationProofPolicy: advisory` (the default), the job under `doneCheckPolicy: advisory`.
+   */
+  readonly advisory?: true;
 }
 
 export interface ReadinessBlocker {
@@ -144,7 +151,8 @@ interface ReplayOutcome {
   readonly detail: string;
 }
 
-const REQUIRED_PROOF_CHECK = "proof";
+/** The checks whose `stale` / `not-run` makes the verdict `incomplete` (unless they are advisory). */
+const REQUIRED_CHECKS: ReadonlySet<string> = new Set(["proof", "job"]);
 
 /** #581 §1: the target shared by `replay` and `prove`, refused in this order before any runner call. */
 function resolveTarget(opts: JourneyReadinessOptions, deps: JourneyReadinessDeps, required: readonly string[], declared: readonly string[]): ResolvedJourneyEnvironment {
@@ -225,19 +233,83 @@ function boundaryCheck(ctx: JourneyContext): ReadinessCheck {
     : { check: "boundary", journey: ctx.id, state: "pass", detail: "a prepare-only boundary is declared" };
 }
 
-/** `journey review --strict`: every `warn` attention item is a blocker (an `info` item is advice, not a gate). */
-function reviewStrictCheck(ctx: JourneyContext): { check: ReadinessCheck; blocker?: ReadinessBlocker } {
+type Attention = NonNullable<JourneyReview["attention"]>[number];
+
+/** #808: the command a person runs for one owner action the sheet names (hash-bound for the Journey's own promotion). */
+function ownerActionCommand(ctx: JourneyContext, action: NonNullable<Attention["ownerActions"]>[number]): string {
+  if (action.kind === "journey-promote") return `jevitate journey promote ${action.id} --reviewed-hash ${ctx.review.contentHash}`;
+  return action.kind === "job-approve" ? `jevitate job review ${action.id}` : `jevitate persona review ${action.id}`;
+}
+
+/**
+ * `journey review --strict`: every `warn` attention item is a blocker (an `info` item is advice, not a gate).
+ * #808: an item only a person's approval settles (it names its owner actions: a stale Journey approval, a
+ * catalog link that needs re-review) is approval currency, not a technical defect: it is listed under
+ * `awaitingHuman` with the owner's commands, never sent back to strict review. `journey review --strict`
+ * itself still fails on it, so CI keeps refusing a stale approval; nothing here approves anything.
+ */
+function reviewStrictCheck(ctx: JourneyContext): { check: ReadinessCheck; blocker?: ReadinessBlocker; awaiting: ReadinessAwaitingHuman[] } {
   // #608: an item a person's catalog approval settles is the catalog check's awaiting-human entry;
   // counted here too, a draft workflow could never be technically ready. Promotion still refuses it.
-  const warns = (ctx.review.attention ?? []).filter((a) => a.severity === "warn" && !(a.settledBy === "catalog-approval" && ctx.review.catalog !== undefined));
+  const all = (ctx.review.attention ?? []).filter((a) => a.severity === "warn" && !(a.settledBy === "catalog-approval" && ctx.review.catalog !== undefined));
+  // The job verdict has its own check (`job`); counted here too, one run would block twice.
+  const strict = all.filter((a) => !a.text.startsWith(JOB_NOT_ACHIEVED_ATTENTION));
+  const human = strict.filter((a) => a.ownerActions !== undefined && a.ownerActions.length > 0);
+  const warns = strict.filter((a) => !human.includes(a));
+  const awaiting = human.flatMap((a) => a.ownerActions!.map((action) => ({ check: "review-strict", journey: ctx.id, item: a.text, next: ownerActionCommand(ctx, action) })));
   if (warns.length > 0) {
     return {
       check: { check: "review-strict", journey: ctx.id, state: "fail", detail: warns.map((a) => a.text).join("; ") },
       blocker: { check: "review-strict", journey: ctx.id, why: warns.map((a) => a.text).join("; "), next: `jevitate journey review ${ctx.id} --strict` },
+      awaiting,
     };
   }
-  return { check: { check: "review-strict", journey: ctx.id, state: "pass", detail: "no strict attention items" } };
+  if (human.length > 0) {
+    return { check: { check: "review-strict", journey: ctx.id, state: "awaiting-human", detail: `only a person's approval settles: ${human.map((a) => a.text).join("; ")}` }, awaiting };
+  }
+  return { check: { check: "review-strict", journey: ctx.id, state: "pass", detail: "no strict attention items" }, awaiting };
 }
+
+/**
+ * Owner decision "Proof role" (2026-11-09): the job gates. The latest run's `job.attainment` (the review
+ * sheet's `job`): `achieved` passes, `not-achieved` blocks (as `journey run` exits 1). `unverified` follows
+ * doneCheckPolicy: `require` (the default) gates with the reason and the fix (exit 2, as `journey run`);
+ * `advisory` shows it and does not gate. A harness target's `unverified` does not gate (as its run exits 0).
+ */
+function jobCheck(ctx: JourneyContext): { check: ReadinessCheck; blocker?: ReadinessBlocker } {
+  const job = ctx.review.job ?? { attainment: "unverified" as const, basis: "no-run", doneCheckPolicy: DEFAULT_DONE_CHECK_POLICY };
+  const run = `jevitate journey run ${ctx.id} --env <non-production>`;
+  const when = job.at === undefined ? "" : ` (latest run ${job.at})`;
+  if (job.attainment === "achieved") {
+    return { check: { check: "job", journey: ctx.id, state: "pass", detail: `achieved: the done check read false before the latest run and true after it, in a fresh session${when}` } };
+  }
+  if (job.attainment === "not-achieved") {
+    const why = `the job was not achieved: the done check read false before the latest run and still false after it, in a fresh session${when}`;
+    return { check: { check: "job", journey: ctx.id, state: "fail", detail: why }, blocker: { check: "job", journey: ctx.id, why, next: run } };
+  }
+  const reason = JOB_UNVERIFIED_REASON[job.basis] ?? `job attainment is unverified (${job.basis})`;
+  const detail = `unverified (${job.basis}): ${reason}${when}`;
+  if (job.doneCheckPolicy === "advisory" || job.basis === "harness") {
+    return { check: { check: "job", journey: ctx.id, state: "not-run", detail: `${detail}; ${job.basis === "harness" ? "a harness target's pass" : "doneCheckPolicy advisory"}: it does not gate`, advisory: true } };
+  }
+  const fix =
+    job.basis === "no-check" ? `add a "done" check to the linked job in .jevitate/jobs.json, then ${run} (or set doneCheckPolicy "advisory" in .jevitate/project.json)`
+    : job.basis === "already-true" ? `reset the app so the done check reads false, then ${run}`
+    : run;
+  const state: ReadinessCheckState = job.basis === "no-run" || job.basis === "earlier-version" ? "not-run" : "inconclusive";
+  return { check: { check: "job", journey: ctx.id, state, detail: `${detail}; doneCheckPolicy require: a pass that cannot say the job happened does not count` }, blocker: { check: "job", journey: ctx.id, why: `job attainment unverified: ${reason}`, next: fix } };
+}
+
+/** Why a job reads `unverified`, by its basis (code tokens to words; never a value). */
+const JOB_UNVERIFIED_REASON: Readonly<Record<string, string>> = {
+  "no-run": "no run of this Journey is recorded",
+  "earlier-version": "the latest run was of an earlier version of this Journey",
+  "not-recorded": "the latest run's record predates job verdicts",
+  "no-check": "the latest run had no done check (its linked job declares none, or it ran with --no-done-check)",
+  "already-true": "the done check already read true before the latest run, so it proves nothing",
+  "reading-unknown": "a done-check reading could not be taken on the latest run",
+  harness: "the latest run was on a harness target, which forces unverified",
+};
 
 /** Every step objective written; a missing one is a person's annotation to draft. */
 function annotationsCheck(ctx: JourneyContext): { check: ReadinessCheck; awaiting: ReadinessAwaitingHuman[] } {
@@ -285,8 +357,23 @@ function catalogCheck(ctx: JourneyContext): { check: ReadinessCheck; blocker?: R
   return { check: { check: "catalog", journey: ctx.id, state: "pass", detail: "links resolve and are approved" }, awaiting: [] };
 }
 
-/** The `.verify/<id>.json` proof record, and the freshness rule shared with the review sheet. */
+/**
+ * The `.verify/<id>.json` proof record, and the freshness rule shared with the review sheet. Owner decision
+ * "Proof role": under `mutationProofPolicy: advisory` (the default) a missing, stale or insensitive proof is
+ * the checks-strength line, and so is an unwaived `inconclusive` attempt (owner clarification, 2026-11-09):
+ * shown with its state, never a blocker. `require-attempt` / `require-sensitive` gate on it as before.
+ */
 function proofCheck(ctx: JourneyContext, journeysDir: string, cwd: string): { check: ReadinessCheck; blocker?: ReadinessBlocker } {
+  const gated = proofCheckOf(ctx, journeysDir, cwd);
+  if ((ctx.review.proof.policy?.mode ?? "advisory") !== "advisory") return gated;
+  // Owner clarification (2026-11-09): an unwaived `inconclusive` attempt does not gate either; its authoring
+  // guidance stays on the line, so the warning still says how to make the proof conclusive.
+  const guidance = gated.check.state === "inconclusive" && gated.blocker !== undefined ? `; to make it conclusive: ${gated.blocker.why}` : "";
+  const detail = gated.check.state === "pass" ? gated.check.detail : `${gated.check.detail}${guidance} (mutationProofPolicy advisory: checks strength only, it does not gate)`;
+  return { check: { ...gated.check, detail, advisory: true } };
+}
+
+function proofCheckOf(ctx: JourneyContext, journeysDir: string, cwd: string): { check: ReadinessCheck; blocker?: ReadinessBlocker } {
   const verify = ctx.review.proof.verify;
   const evidence = relativeEvidence(cwd, verifyRecordPath(journeysDir, ctx.id));
   const policy = ctx.review.proof.policy;
@@ -302,17 +389,31 @@ function proofCheck(ctx: JourneyContext, journeysDir: string, cwd: string): { ch
     };
   }
   if (verify.stale) {
+    // #816: only a changed Journey is blamed on the Journey.
+    const engine = verify.staleCause === "engine";
+    const by = verify.recordedBy === undefined ? "" : ` (${verify.recordedBy.version}, ${verify.recordedBy.commit})`;
+    const detail = engine
+      ? `the ${verify.verdict} proof at ${verify.at} was recorded by another jevitate engine${by}: the Journey is unchanged, but this engine computes its proof identity differently`
+      : verify.staleCause === "engine-unknown" ? `the ${verify.verdict} proof at ${verify.at} does not match this engine, and its receipt does not say which engine recorded it; the Journey is unchanged`
+      : verify.staleCause === "read-policy" ? `the ${verify.verdict} proof at ${verify.at} ran under other safety.readRequests` : `the ${verify.verdict} proof at ${verify.at} is bound to older content`;
     return {
-      check: { check: "proof", journey: ctx.id, state: "stale", detail: `the ${verify.verdict} proof at ${verify.at} is bound to older content`, evidence },
-      blocker: { check: "proof", journey: ctx.id, why: "the recorded proof is stale", next: `jevitate journey verify ${ctx.id} --mutate` },
+      check: { check: "proof", journey: ctx.id, state: "stale", detail, evidence },
+      blocker: {
+        check: "proof",
+        journey: ctx.id,
+        why: engine ? "the recorded proof comes from another engine version (the Journey did not change)" : "the recorded proof is stale",
+        next: engine ? `review with the jevitate version that recorded the proof, or jevitate journey verify ${ctx.id} --mutate` : `jevitate journey verify ${ctx.id} --mutate`,
+      },
     };
   }
-  if (verify.verdict === "proven") {
+  if (verify.verdict === "sensitive") {
     // #609: `targeted` is a subset of `sensitive`, not a seventh outcome — summing every count
-    // would double-count it. It is named separately, never added to the proven total.
+    // would double-count it. It is named separately, never added to the sensitive total.
     const targeted = verify.summary.targeted ?? 0;
     const passed = Object.entries(verify.summary).filter(([k]) => k !== "targeted").reduce((a, [, b]) => a + b, 0);
-    const detail = targeted === 0 ? `proven ${passed}/${passed}` : `proven ${passed}/${passed}, ${targeted} through a targeted proof (earlier defenses relaxed one at a time; see the verify report)`;
+    // §5.1: a proof whose target cannot be reset (or a receipt from before 0.30.0) is reported with countsForGate false.
+    const gate = verify.countsForGate === true ? "countsForGate true" : "countsForGate false: a proof's strength depends on a target you can reset";
+    const detail = `checks strength: ${targeted === 0 ? `sensitive ${passed}/${passed}` : `sensitive ${passed}/${passed}, ${targeted} through a targeted proof (earlier defenses relaxed one at a time; see the verify report)`}; ${gate}`;
     return { check: { check: "proof", journey: ctx.id, state: "pass", detail, evidence } };
   }
   if (verify.verdict === "insensitive") {
@@ -427,11 +528,13 @@ function pairReplay(result: JourneyChainResult): ReplayOutcome {
   return { state: "fail", detail: first === undefined ? counts : `${counts}; first rejection ${first}` };
 }
 
-function verdictOf(checks: readonly ReadinessCheck[], mode: ReadinessMode): ReadinessVerdict {
+function verdictOf(all: readonly ReadinessCheck[], mode: ReadinessMode): ReadinessVerdict {
+  // Owner decision "Proof role": an advisory check is shown, never counted.
+  const checks = all.filter((c) => c.advisory !== true);
   if (checks.some((c) => c.state === "fail")) return "blocked";
   if (checks.some((c) => c.state === "inconclusive")) return "inconclusive";
   const requiredReplay = mode !== "report";
-  const required = checks.filter((c) => c.check === REQUIRED_PROOF_CHECK || (requiredReplay && c.check === "replay"));
+  const required = checks.filter((c) => REQUIRED_CHECKS.has(c.check) || (requiredReplay && c.check === "replay"));
   if (required.some((c) => c.state === "stale" || c.state === "not-run")) return "incomplete";
   return "technically-ready";
 }
@@ -443,6 +546,8 @@ function commandsFor(verdict: ReadinessVerdict, mode: ReadinessMode, id: string,
     for (const b of blockers) add(b.next);
     return next;
   }
+  // The job's fix comes first: until a run says the job happened, promotion is not what is next.
+  for (const b of blockers) if (b.check === "job") add(b.next);
   if (mode !== "prove") add(`jevitate journey readiness ${id} --mode prove`);
   if (verdict === "technically-ready") add(`jevitate journey promote ${id}`);
   for (const a of awaiting) add(a.next);
@@ -584,6 +689,8 @@ export async function runJourneyReadiness(opts: JourneyReadinessOptions, deps: J
   };
 
   for (const ctx of contexts) {
+    // Owner decision "Proof role": the receipt leads with the job verdict.
+    push(jobCheck(ctx));
     push({ check: schemaCheck(ctx) });
     push(lintCheck(ctx, opts.projectDir));
     if (pair && ctx.id === opts.id) push(handoffCheck(contexts[0]!, contexts[1]!));

@@ -127,7 +127,7 @@ export interface TargetPersona {
   readonly secretFields?: readonly string[];
 }
 
-const SECRET_FIELD_SPEC = /^(label|testId|type|id|name)=[^=].*=env:[A-Za-z_][A-Za-z0-9_]*$/;
+const SECRET_FIELD_SPEC = /^(label|testId|type|id|name|param)=[^=].*=env:[A-Za-z_][A-Za-z0-9_]*$/;
 
 export class TargetConfigError extends Error {
   readonly code = "E_TARGET_CONFIG" as const;
@@ -224,7 +224,7 @@ function parseTarget(v: unknown, where: string, baseDir: string): TargetConfig {
     // The spec is never echoed: a value pasted in place of `env:<VAR>` must not reach a log.
     specs.forEach((s, i) => {
       if (!SECRET_FIELD_SPEC.test(s)) {
-        throw new TargetConfigError(`${where}.secretFields[${i}] must be '<label|testId|type|id|name>=<value>=env:<VAR>' — the secret itself comes from the environment`);
+        throw new TargetConfigError(`${where}.secretFields[${i}] must be '<label|testId|type|id|name|param>=<value>=env:<VAR>' — the secret itself comes from the environment`);
       }
     });
     out.secretFields = specs;

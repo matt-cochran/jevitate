@@ -459,10 +459,11 @@ function absoluteUrl(s: string): URL | null {
  * absolute URL on the recorded site's origin (page urls, `navigate` urls, `urlIncludes` texts)
  * keeps its path/query/fragment on the new origin; app-relative paths are left as they are (they
  * resolve against the environment). A page or `navigate` step on any OTHER origin must be in the
- * environment's `allow` — otherwise `EnvironmentOriginRefusedError`, before anything opens.
- * Never guesses, never mutates the input.
+ * environment's `allow` or (#803) in this run's explicit `--allow` (normalized origins) — otherwise
+ * `EnvironmentOriginRefusedError`, before anything opens. Never guesses, never mutates the input.
  */
-export function rebaseRecording(recording: Recording, env: ResolvedJourneyEnvironment): Recording {
+export function rebaseRecording(recording: Recording, env: ResolvedJourneyEnvironment, allow: readonly string[] = []): Recording {
+  const permitted = [...env.allowedOrigins, ...normalizeAllowlist(allow).filter((o) => !env.allowedOrigins.includes(o))];
   const recordedOrigin = absoluteUrl(recording.site)?.origin;
   const named = namedOriginMap(env, recording.site);
   const refusals: string[] = [];
@@ -478,7 +479,7 @@ export function rebaseRecording(recording: Recording, env: ResolvedJourneyEnviro
     // #561: a named secondary origin moves to the target environment's same-named origin.
     const moved = moveNamedOrigin(raw, named);
     if (moved !== raw) return moved;
-    if (mustBeAllowed && !env.allowedOrigins.includes(u.origin)) refusals.push(`${where} is on ${u.origin}`);
+    if (mustBeAllowed && !permitted.includes(u.origin)) refusals.push(`${where} is on ${u.origin}`);
     return raw;
   };
   const walk = (v: unknown, where: string): unknown => {
@@ -498,7 +499,7 @@ export function rebaseRecording(recording: Recording, env: ResolvedJourneyEnviro
   if (refusals.length > 0) {
     throw new EnvironmentOriginRefusedError(
       `${refusals.join("; ")} — not allowed by the ${env.name === undefined ? `--base-url ${env.baseUrl}` : `environment '${env.name}'`} ` +
-        `(allowed: ${env.allowedOrigins.join(", ")}). Add the origin to its "allow" in .jevitate/environments.json to permit it; nothing was opened`,
+        `(allowed: ${permitted.join(", ")}). Add the origin to its "allow" in .jevitate/environments.json, or pass --allow <origin>, to permit it; nothing was opened`,
     );
   }
   return { ...recording, site: env.baseUrl, pages };
@@ -507,11 +508,11 @@ export function rebaseRecording(recording: Recording, env: ResolvedJourneyEnviro
 /**
  * `rebaseRecording` for a whole Journey; #561 also rewrites the end-state `http` check URLs through
  * the same named-origin map (every other metadata field, incl. origin-bound secretRefs, is untouched:
- * fail closed).
+ * fail closed). `allow` (#803) is the run's explicit `--allow`, which also permits a step's origin.
  */
-export function applyJourneyEnvironment(journey: Journey, env: ResolvedJourneyEnvironment | undefined): Journey {
+export function applyJourneyEnvironment(journey: Journey, env: ResolvedJourneyEnvironment | undefined, allow: readonly string[] = []): Journey {
   if (env === undefined) return journey;
-  const recording = rebaseRecording(journey.recording, env);
+  const recording = rebaseRecording(journey.recording, env, allow);
   const named = namedOriginMap(env, journey.recording.site);
   if (Object.keys(named).length === 0 || journey.metadata.endState === undefined) return { ...journey, recording };
   const endState = journey.metadata.endState.map((check) =>

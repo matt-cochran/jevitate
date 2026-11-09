@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,7 @@ import { FsJourneyStore, journeyProofHash, type Finding, type Journey } from "@j
 import { buildProgram } from "./program.js";
 import { writeVerifyRecord } from "./journey-review-store.js";
 import { journeyReviewHash } from "./journey-review.js";
+import { journeyRunLogsRoot, withJourneyRunRecord } from "./journey-run-record.js";
 import type { CliDeps } from "./cli-shared.js";
 
 /** #434 — the Readiness section: deterministic checks + GtWR rules, and the advisory Jev questions. No browser, no live model. */
@@ -179,14 +180,81 @@ describe("#434 deterministic readiness — Journeys", () => {
   });
 
   it("warns when the mutation proof is for an older version", async () => {
-    await writeVerifyRecord(journeysDir, { journeyId: "publish", contentHash: "0".repeat(64), verdict: "proven", summary: {}, at: "2026-10-01T00:00:00Z" });
+    await writeVerifyRecord(journeysDir, { journeyId: "publish", contentHash: "0".repeat(64), verdict: "sensitive", summary: {}, at: "2026-10-01T00:00:00Z" });
     expect(byCode(await findings(["journey", "review", "publish", "--readiness"]), "readiness.verify")?.message).toMatch(/older version/);
   });
 
-  it("passes when the mutation proof is current and proven", async () => {
+  it("passes when the mutation proof is current and sensitive", async () => {
     const j = await new FsJourneyStore(journeysDir).get("publish");
-    await writeVerifyRecord(journeysDir, { journeyId: "publish", contentHash: journeyReviewHash(j!), proofHash: journeyProofHash(j!), verdict: "proven", summary: {}, at: "2026-10-01T00:00:00Z" });
-    expect(byCode(await findings(["journey", "review", "publish", "--readiness"]), "readiness.verify")?.severity).toBe("info");
+    await writeVerifyRecord(journeysDir, { journeyId: "publish", contentHash: journeyReviewHash(j!), proofHash: journeyProofHash(j!), verdict: "sensitive", countsForGate: true, summary: {}, at: "2026-10-01T00:00:00Z" });
+    const f = byCode(await findings(["journey", "review", "publish", "--readiness"]), "readiness.verify");
+    expect(f?.severity).toBe("info");
+    expect(f?.message).toBe("pass — checks strength: its mutation proof is current and sensitive (2026-10-01T00:00:00Z); countsForGate true");
+  });
+});
+
+describe("d-vocab-migration: readiness leads with the job verdict; the proof is checks strength", () => {
+  async function recordSensitive(countsForGate: boolean | undefined): Promise<void> {
+    const j = await new FsJourneyStore(journeysDir).get("publish");
+    await writeVerifyRecord(journeysDir, { journeyId: "publish", contentHash: journeyReviewHash(j!), proofHash: journeyProofHash(j!), verdict: "sensitive", ...(countsForGate === undefined ? {} : { countsForGate, engine: { version: "0.30.0", commit: "abc1234" } }), summary: { sensitive: 1 }, at: "2026-10-01T00:00:00Z" });
+  }
+
+  it("a sensitive proof on a trust 'unknown' target shows countsForGate false and does not satisfy require-sensitive", async () => {
+    await writeFile(join(catalogDir, "project.json"), JSON.stringify({ mutationProofPolicy: "require-sensitive" }));
+    await recordSensitive(false);
+    const { json } = await cli(["journey", "review", "publish", "--readiness", "--json"]);
+    const verify = byCode(json.data.findings as Finding[], "readiness.verify");
+    expect(verify?.severity).toBe("warn");
+    expect(verify?.message).toContain("countsForGate false");
+    expect(verify?.message).toContain("does not satisfy require-sensitive");
+    expect(json.data.proof.verify).toMatchObject({ status: "recorded", verdict: "sensitive", countsForGate: false });
+    expect(json.data.proof.policy).toMatchObject({ mode: "require-sensitive", verdict: "sensitive", passed: false });
+  });
+
+  it("the same sensitive proof on a resettable target satisfies require-sensitive", async () => {
+    await writeFile(join(catalogDir, "project.json"), JSON.stringify({ mutationProofPolicy: "require-sensitive" }));
+    await recordSensitive(true);
+    const { json } = await cli(["journey", "review", "publish", "--readiness", "--json"]);
+    expect(byCode(json.data.findings as Finding[], "readiness.verify")?.severity).toBe("info");
+    expect(json.data.proof.policy).toMatchObject({ mode: "require-sensitive", passed: true, reason: "fresh sensitive mutation evidence" });
+  });
+
+  it("under the default advisory policy an uncounted sensitive proof is reported, not warned", async () => {
+    await recordSensitive(undefined);
+    const { json } = await cli(["journey", "review", "publish", "--readiness", "--json"]);
+    const verify = byCode(json.data.findings as Finding[], "readiness.verify");
+    expect(verify?.severity).toBe("info");
+    expect(verify?.message).toContain("countsForGate false");
+    expect(json.data.proof.policy).toMatchObject({ mode: "advisory", passed: true });
+  });
+
+  it("a job with no done check leads with job attainment unverified, before the proof", async () => {
+    const fs = await findings(["journey", "review", "publish", "--readiness"]);
+    const job = byCode(fs, "readiness.job");
+    expect(job?.severity).toBe("warn");
+    expect(job?.message).toContain("job attainment: unverified");
+    expect(fs.findIndex((f) => f.code === "readiness.job")).toBeLessThan(fs.findIndex((f) => f.code === "readiness.verify"));
+  });
+
+  it("a job with a done check leads with the latest run's verdict: unverified with no run, achieved after one", async () => {
+    await writeJobs([{ ...JOB, done: { version: 1, at: "/posts", check: "textIncludes:#list|published" } }]);
+    let job = byCode(await findings(["journey", "review", "publish", "--readiness"]), "readiness.job");
+    expect(job?.severity).toBe("warn");
+    expect(job?.message).toContain("attainment is unverified (no-run; doneCheckPolicy require)");
+    expect(job?.fix).toBe("jevitate journey run publish");
+    vi.stubEnv("JEVITATE_RUN_RECORD", "");
+    try {
+      const stored = (await new FsJourneyStore(journeysDir).get("publish"))!;
+      await withJourneyRunRecord({ channel: "cli", id: "publish", params: {}, logsRoot: journeyRunLogsRoot(journeysDir) }, async (recorder) => {
+        recorder.noteJourney(stored);
+        return { outcome: "ok", job: { attainment: "achieved", basis: "done-check" } };
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    job = byCode(await findings(["journey", "review", "publish", "--readiness"]), "readiness.job");
+    expect(job?.severity).toBe("info");
+    expect(job?.message).toContain("was achieved on the latest run");
   });
 });
 

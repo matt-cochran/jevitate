@@ -117,7 +117,7 @@ describe("[realtime] #785 a targeted control keeps the waiting of the sites it r
     }, 180_000);
 
     it("reaches a proven verdict", () => {
-      expect(report.verdict).toBe("proven");
+      expect(report.verdict).toBe("sensitive");
     });
     it("passes the unmutated control", () => {
       expect(endStateProof(report, "skip:2")?.control).toBe("passed");
@@ -147,7 +147,7 @@ describe("[realtime] #785 a targeted control keeps the waiting of the sites it r
     }, 180_000);
 
     it("reaches a proven verdict", () => {
-      expect(report.verdict).toBe("proven");
+      expect(report.verdict).toBe("sensitive");
     });
   });
 });
@@ -297,7 +297,7 @@ describe("[realtime] an end state the mutation does change", () => {
     }, 180_000);
 
     it("reaches a proven verdict", () => {
-      expect(report.verdict).toBe("proven");
+      expect(report.verdict).toBe("sensitive");
     });
   });
 });
@@ -339,7 +339,7 @@ describe("[realtime] a write the mutation blocks, under a very long claim", () =
   }, 120_000);
 
   it("reaches a proven verdict through its skipped step, without waiting the claim out", () => {
-    expect(report.verdict).toBe("proven");
+    expect(report.verdict).toBe("sensitive");
   });
   it("reads the end state through the blocked replay, which waited as long as the base did", () => {
     expect(report.mutations.find((m) => m.id === "block-write:2")?.relaxed?.failedSites).toContainEqual({ where: "end-state", index: 0 });
@@ -366,7 +366,7 @@ describe("[realtime] a skipped step whose claim only waited on an earlier step's
     expect(report.assertions.find((a) => a.site === "end-state:0")?.verdict).not.toBe("sensitive");
   });
   it("does not read proven", () => {
-    expect(report.verdict).not.toBe("proven");
+    expect(report.verdict).not.toBe("sensitive");
   });
 });
 
@@ -394,7 +394,7 @@ describe("[realtime] a step's own claim against a slow job", () => {
     }, 180_000);
 
     it("does not read proven", () => {
-      expect(report.verdict).not.toBe("proven");
+      expect(report.verdict).not.toBe("sensitive");
     });
     it("does not call the claim sensitive", () => {
       expect(ownSite(report, "step:3")?.verdict).not.toBe("sensitive");
@@ -420,7 +420,7 @@ describe("[realtime] a step's own claim against a slow job", () => {
       expect(ownSite(report, "step:2")).toMatchObject({ verdict: "sensitive", provedBy: "skip:2" });
     });
     it("reaches a proven verdict", () => {
-      expect(report.verdict).toBe("proven");
+      expect(report.verdict).toBe("sensitive");
     });
     it("needs no control of its own, since the base replay is that control", () => {
       expect(report.mutations.find((m) => m.id === "skip:2")?.targeted).toBeUndefined();

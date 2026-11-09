@@ -42,11 +42,11 @@ afterAll(async () => {
 
 describe("#580 Bizops mutation proof (served)", () => {
   it("proves prepare-reply on a post-314 record", () => {
-    expect(reports.get("c-2041")!.verdict).toBe("proven");
+    expect(reports.get("c-2041")!.verdict).toBe("sensitive");
   });
 
   it("proves prepare-reply on a post-207 record", () => {
-    expect(reports.get("c-4520")!.verdict).toBe("proven");
+    expect(reports.get("c-4520")!.verdict).toBe("sensitive");
   });
 
   it("proves every prepare-reply check sensitive, with no cascade, error or unpaired check", () => {

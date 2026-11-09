@@ -285,11 +285,12 @@ export function resolveDoneCheck(
 
 export type DoneCheckLintRule = "missing-done-check" | "done-check-cannot-be-false" | "done-check-invalid";
 
-/** One done-check finding on a job (and the linked Journey it is about, when it is about one). */
+/** One done-check finding on a job (and the linked Journey it is about, when it is about one), or on a Journey's own `metadata.done`. */
 export interface DoneCheckLintFinding {
   readonly rule: DoneCheckLintRule;
   readonly level: "error" | "warning";
-  readonly job: string;
+  /** The job whose check it is about; absent for a Journey's own `metadata.done` (unless that Journey also links one). */
+  readonly job?: string;
   readonly journey?: string;
   readonly code?: DoneCheckIssueCode;
   readonly message: string;
@@ -322,12 +323,43 @@ export function lintDoneCheck(job: Pick<Job, "id"> & { readonly done?: unknown }
     }
     return out;
   }
+  return lintSpec({ kind: "job", id: job.id }, job.done, linked, opts);
+}
 
+/**
+ * 0.30.0 design §3.1: the lint of a Journey's own done check (`metadata.done`), by the same rules as a
+ * job's (`done-check-invalid`, `done-check-cannot-be-false`). A Journey that links a job reads the job's
+ * check, so its own `done` beside a `job` is `done-check-invalid` (an error): it would never be read.
+ */
+export function lintJourneyDoneCheck(journey: Journey, opts: JourneyLintOptions = {}): DoneCheckLintFinding[] {
+  const done = journey.metadata.done;
+  if (done === undefined) return [];
+  const id = journey.metadata.id;
+  if (journey.metadata.job !== undefined) {
+    return [
+      {
+        rule: "done-check-invalid",
+        level: "error",
+        job: journey.metadata.job,
+        journey: id,
+        message: `journey ${id} links job ${journey.metadata.job}, so a run reads that job's done check and never this Journey's metadata.done`,
+        fix: `move the check to job ${journey.metadata.job}'s "done" in .jevitate/jobs.json, or remove metadata.done (or unlink the job)`,
+      },
+    ];
+  }
+  return lintSpec({ kind: "journey", id }, done, [journey], opts);
+}
+
+/** The shared rules over one done check (`done`) and the Journeys that read it (`linked`). */
+function lintSpec(owner: { readonly kind: "job" | "journey"; readonly id: string }, done: unknown, linked: readonly Journey[], opts: JourneyLintOptions): DoneCheckLintFinding[] {
+  const out: DoneCheckLintFinding[] = [];
+  const own = owner.kind === "job" ? { job: owner.id } : { journey: owner.id };
+  const label = owner.kind === "job" ? `job ${owner.id} done check` : `journey ${owner.id} done check (metadata.done)`;
   const scopes = linked.length === 0 ? [{ journey: undefined, scope: {} as DoneCheckScope }] : linked.map((j) => ({ journey: j.metadata.id, scope: doneCheckScope(j) as DoneCheckScope }));
   const reported = new Set<string>();
   let spec: DoneCheckSpec | undefined;
   for (const { journey, scope } of scopes) {
-    const parsed = parseDoneCheck(job.done, scope);
+    const parsed = parseDoneCheck(done, scope);
     if (!isDoneCheckIssues(parsed)) {
       spec = parsed;
       continue;
@@ -339,16 +371,16 @@ export function lintDoneCheck(job: Pick<Job, "id"> & { readonly done?: unknown }
       out.push({
         rule: "done-check-invalid",
         level: "error",
-        job: job.id,
-        ...(issue.code === E_DONE_CHECK_REF_UNBOUND && journey !== undefined ? { journey } : {}),
+        ...own,
+        ...(owner.kind === "job" && issue.code === E_DONE_CHECK_REF_UNBOUND && journey !== undefined ? { journey } : {}),
         code: issue.code,
-        message: `job ${job.id} done check: ${issue.message}`,
+        message: `${label}: ${issue.message}`,
       });
     }
   }
   if (spec === undefined && out.length > 0) {
     // Still read the shape for the cannot-be-false rule when only the scope refused it.
-    const shape = DoneCheckSpecSchema.safeParse(job.done);
+    const shape = DoneCheckSpecSchema.safeParse(done);
     if (shape.success) spec = shape.data;
   }
   if (spec === undefined) return out;
@@ -357,12 +389,13 @@ export function lintDoneCheck(job: Pick<Job, "id"> & { readonly done?: unknown }
     for (const j of linked) {
       const writes = journeyWriteSteps(j, opts);
       if (writes.length === 0) continue;
+      const whose = owner.kind === "job" ? `job ${owner.id}'s done check` : "its own done check (metadata.done)";
       out.push({
         rule: "done-check-cannot-be-false",
         level: "warning",
-        job: job.id,
+        ...own,
         journey: j.metadata.id,
-        message: `journey ${j.metadata.id} writes (step ${writes[0]!.step}) and job ${job.id}'s done check names no distinguishedBy: after one run the check is already true, so a later run reads already-true and proves nothing`,
+        message: `journey ${j.metadata.id} writes (step ${writes[0]!.step}) and ${whose} names no distinguishedBy: after one run the check is already true, so a later run reads already-true and proves nothing`,
         fix: `name the parameter whose value the Journey creates fresh each run in done.distinguishedBy, and use it as a \${placeholder} in done.at or done.check`,
       });
     }

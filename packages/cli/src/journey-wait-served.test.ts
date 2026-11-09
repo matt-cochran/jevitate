@@ -189,7 +189,7 @@ describe("#409 waitFor — a per-step outcome wait for a long-running job (serve
       expect(Number(wait![1])).toBeLessThan(BASE_READS_AT_MOST_MS * 1.25 + 1_000);
     }
     expect(report.assertions.find((a) => a.site === "step:2")).toEqual(expect.objectContaining({ verdict: "sensitive", provedBy: "skip:2" }));
-    expect(report.verdict).toBe("proven");
+    expect(report.verdict).toBe("sensitive");
     expect(r.exitCode).toBe(0);
     // The base, independence, closing and any control replays wait out the 2-minute job, and each mutation a little past it: never the 20 min of `maxMs`, each.
     expect(elapsed).toBeLessThan(ALL_REPLAYS * BASE_READS_AT_MOST_MS * 1.25);

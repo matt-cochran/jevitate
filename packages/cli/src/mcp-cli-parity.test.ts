@@ -239,14 +239,14 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       actionDeltas: "--action-deltas",
       tags: "--tag",
       stepResponseTimeoutMs: "--step-response-timeout",
+      // #800: the job's done check, as `journey run` takes it.
+      noDoneCheck: "--no-done-check",
+      requireDoneCheck: "--require-done-check",
     },
     omitted: {
       "--secret-field": OMIT.envSecret,
       "--secret-mode": "an agent never picks how a secret is met: over MCP the run mode and the operator's targets.json decide (vault-autofill, a hold, or a refusal)",
       "--allow": OMIT.mcpOrigins,
-      // 0.30.0 (#800): temporary until the done-check hooks are registered for MCP run_journey (d-run-hooks-register).
-      "--no-done-check": "done checks are not yet read on MCP runs; the MCP argument lands with the hook registration",
-      "--require-done-check": "done checks are not yet read on MCP runs; the MCP argument lands with the hook registration",
       // 0.30.0 (#795): --retry IS a done-check reading (reconcile before the retry runs), so it waits on the same registration.
       "--retry": "a retry is reconciled by reading the job's done check first, and done checks are not yet read on MCP runs; the MCP argument lands with the hook registration",
       "--ignore-host-load": OMIT.hostLoad,
@@ -297,6 +297,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       "--allow-log-cmd": OMIT.logCmd,
       "--hang-replay-writes": OMIT.hangWrites,
       "--secret": OMIT.envSecret,
+      "--secret-field": OMIT.envSecret,
       "--json": OMIT.json,
       "--before": OMIT.hooks,
       "--after": OMIT.hooks,
@@ -334,7 +335,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
   // 0.30.0 #797
   queue_journey: {
     path: "journey queue",
-    args: { id: "<id>", params: "--param", env: "--env", baseUrl: "--base-url" },
+    args: { id: "<id>", params: "--param", env: "--env", baseUrl: "--base-url", noDoneCheck: "--no-done-check", requireDoneCheck: "--require-done-check" },
     omitted: { "--dir": OMIT.storeDir, "--json": OMIT.json },
   },
 };

@@ -141,7 +141,7 @@ describe("#523 journey link", () => {
 
   it("a link change does not stale the mutation proof", async () => {
     const before = await stored("loose");
-    await writeVerifyRecord(journeysDir, { journeyId: "loose", contentHash: journeyReviewHash(before), proofHash: journeyProofHash(before), verdict: "proven", summary: {}, at: "2026-10-15T12:00:00.000Z" });
+    await writeVerifyRecord(journeysDir, { journeyId: "loose", contentHash: journeyReviewHash(before), proofHash: journeyProofHash(before), verdict: "sensitive", summary: {}, at: "2026-10-15T12:00:00.000Z" });
     await cli(["journey", "link", "loose", "--job", "publish-post", "--persona", "editor", "--json"]);
     expect((await cli(["journey", "review", "loose", "--json"])).json.data.proof.verify).toMatchObject({ status: "recorded", stale: false });
   });

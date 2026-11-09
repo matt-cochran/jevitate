@@ -34,7 +34,7 @@ import { withEngine } from "../engine.js";
 import { BoundaryNoHealError, handbackExitCode, handbackLine } from "../journey-handback.js";
 import { type EmulationSpec } from "@jevitate/playwright";
 import { SecretFieldSpecError } from "@jevitate/explore";
-import { BoundSecretOutsideFieldError, SecretFieldAmbiguousError, withSecretParams, warnSecretParamsOnArgv, type BoundSecretParams } from "../secret-params.js";
+import { BoundSecretOutsideFieldError, REPLAY_SECRET_FIELD_HELP, SecretFieldAmbiguousError, withSecretParams, warnSecretParamsOnArgv, type BoundSecretParams } from "../secret-params.js";
 import { DoneCheckRun, PlaywrightDoneCheckPort } from "../journey-done-check-hook.js";
 import { reconcileLinkedJob } from "../journey-reconcile.js";
 import { DONE_CHECK_FAILED_MESSAGE, doneCheckExitInput } from "../journey-done-check.js";
@@ -46,7 +46,7 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
   withScreenshotsFlag(withReplayAllowFlag(withEnvironmentFlags(withDemoFlags(withBrowserLaunchFlags(withEmulationFlags(withFixtureFlags(withProjectFlags(journey.command("run <id>"))))), { recordVideo: true }))))
     .option("--dir <path>", DEPRECATED_DIR_HELP)
     .option("--param <kv>", "param as key=value (repeatable); a secret one is on the command line: use --secret-field", collectParam, {} as Record<string, string>)
-    .option("--secret-field <binding>", "a secret parameter from the environment, off the command line: '<label|testId|id|name>=<value>=env:<VAR>' (repeatable), matched on the recorded step that types it, e.g. 'label=Password=env:APP_PASSWORD'. The environment's secretFields in ~/.jevitate/targets.json apply the same way; --param wins", (v: string, prev: string[]) => [...prev, v], [] as string[])
+    .option("--secret-field <binding>", REPLAY_SECRET_FIELD_HELP, (v: string, prev: string[]) => [...prev, v], [] as string[])
     .option(
       "--storage-state <file>",
       "Playwright storageState JSON to start the session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist",
@@ -309,7 +309,7 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         if (draftOnAutomation !== undefined) program.configureOutput().writeErr?.(draftOnAutomation);
         let fixtureDrift: FixtureDrift | undefined;
         // #790: every run leaves one value-free record, whatever it comes to.
-        const result = await doneCheckRun.run(() => withJourneyRunRecord({ channel: "cli", id, params: param, logsRoot: deps.logs?.logsRoot }, (runRecorder) => withSiteGate(resolveDbPath(deps), (siteGate) => runJourneyProgrammatically({
+        const result = await doneCheckRun.run(() => withJourneyRunRecord({ channel: "cli", id, params: param, logsRoot: deps.logs?.logsRoot, job: () => doneCheckRun.job }, (runRecorder) => withSiteGate(resolveDbPath(deps), (siteGate) => runJourneyProgrammatically({
           runRecorder,
           ...(siteGate === undefined ? {} : { siteGate }),
           dir: runJourneysDir,

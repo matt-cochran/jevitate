@@ -856,6 +856,8 @@ export function realQueuedJourneyExecutor(opts: RealJourneyExecutorOptions): Que
                   ...(environment?.baseUrl === undefined ? {} : { origin: environment.baseUrl }),
                   ...(environment?.storageState === undefined ? {} : { storageState: environment.storageState }),
                   ...(opts.browserPortFactory === undefined ? {} : { sessionPortFactory: opts.browserPortFactory }),
+                  // #800: the call's own done-check flags, as `journey run` takes them.
+                  ...(call.noDoneCheck === true ? { skip: true } : {}),
                 }, () => runJourneyProgrammatically({
                   dir: opts.journeysDir,
                   id,
@@ -871,7 +873,7 @@ export function realQueuedJourneyExecutor(opts: RealJourneyExecutorOptions): Que
                   ...("bound" in bound && bound.bound !== undefined ? { boundSecretParams: bound.bound } : {}),
                   ...(opts.secretEnv === undefined ? {} : { secretEnv: opts.secretEnv }),
                   ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
-                }));
+                }), call.requireDoneCheck === true ? "require" : undefined);
               },
             }),
           );

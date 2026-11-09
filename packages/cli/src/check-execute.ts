@@ -250,10 +250,13 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
     const resolvedParams = resolveJourneyParams(sj.params, uniqueRunToken(runId(ctx), item.t.target.name, entryIndex < 0 ? 0 : entryIndex));
     const recordedParams = redactSecretValues(resolvedParams, secretParamValues(j, resolvedParams));
     const journeySession = session ?? (sj.storageState === null ? undefined : environment?.storageState);
+    // #827: what a binding supplied at preflight (never a value from the suite file, never written to the record).
+    const supplied = item.t.journeySecrets?.get(sj);
     const runOptions = {
       dir: t.journeysDir ?? opts.journeysDir,
       id: sj.id,
-      params: { ...resolvedParams },
+      params: { ...supplied?.params, ...resolvedParams },
+      ...(supplied?.bound === undefined ? {} : { boundSecretParams: supplied.bound }),
       ...emulationFor(sj.emulation),
       ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
       ...(opts.browser === undefined ? {} : { browser: opts.browser }),

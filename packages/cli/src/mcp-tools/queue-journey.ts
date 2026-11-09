@@ -42,7 +42,7 @@ export function queueJourneyTools(ctx: McpToolCtx): McpToolGroup {
     queue_journey: {
       description:
         "Enqueue a call of a PROMOTED Journey by id (the same promotion and run-mode rules as run_journey) — `jevitate journey queue`. Never runs anything: `jevitate mission run` (run_queued_missions) drains it through the same gate as run_journey, and the run's evidence says channel `queue`. " +
-        "The call holds only the Journey's id, the content hash it was queued against (a Journey changed before the drain is refused E_JOURNEY_APPROVAL_STALE then), non-secret string 'params', and 'env' (a named environment in .jevitate/environments.json) or 'baseUrl'. " +
+        "The call holds only the Journey's id, the content hash it was queued against (a Journey changed before the drain is refused E_JOURNEY_APPROVAL_STALE then), non-secret string 'params', and 'env' (a named environment in .jevitate/environments.json) or 'baseUrl', and the done-check flags the drain runs with: 'noDoneCheck' (`--no-done-check`) or 'requireDoneCheck' (`--require-done-check`), as run_journey takes them, not both. " +
         "A secret parameter's value is never queued: a credential-like name, or one the Journey declares secret, is refused by name before anything is written ({error: invalid_args, code: E_SECRET_PARAM_OVER_MCP, params}); the run meets a secret the Journey needs with its secret mode (the target's targets.json secretFields, or a hold a person completes). " +
         "Refusals are run_journey's, before anything is queued: E_JOURNEY_NOT_PROMOTED | E_JOURNEY_APPROVAL_STALE | E_JOURNEY_APPROVAL_UNKNOWN, E_APPROVAL_CHANNEL_FOR_MODE, E_HUMAN_STEP_IN_TEST_MODE, E_RUN_REFUSED_PRODUCTION. Returns {ok, callId, status: queued, journey: {id, hash}}.",
       inputSchema: {
@@ -52,6 +52,8 @@ export function queueJourneyTools(ctx: McpToolCtx): McpToolGroup {
           params: { type: "object", additionalProperties: { type: "string" } },
           env: { type: "string" },
           baseUrl: { type: "string" },
+          noDoneCheck: { type: "boolean" },
+          requireDoneCheck: { type: "boolean" },
         },
         required: ["id"],
       },

@@ -16,7 +16,7 @@ import { parseScreenshotsArg, type ScreenshotsSpec } from "../run-screenshots.js
 import { GitHubIssueFiler } from "../github-issue-filer.js";
 import { TargetConfigError, loadTargetsFile, resolveTargetConfig, type TargetConfig } from "../target-config.js";
 import { setupRefFreeUrl } from "../fixture-cli.js";
-import { warnSecretParamsOnArgv } from "../secret-params.js";
+import { secretFieldErrorOf, warnSecretParamsOnArgv, withCommandSecretParams } from "../secret-params.js";
 import type { FilingConfig, IssueFilerPort } from "@jevitate/domain";
 import { LITERAL_SECRET_WARNING, SecretArgError, resolveSecretArgs } from "../secret-args.js";
 import { withEngine } from "../engine.js";
@@ -126,6 +126,8 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
       let journeyPrefix: JourneyPrefix | undefined;
       /** #399: how the prefix was resolved — re-resolved once `${setup.x}` in a --param is bound (goal + --fixtures). */
       let prefixRequest: Parameters<typeof resolveJourneyPrefix>[0] | undefined;
+      /** #827: the --secret-field specs the Journey prefix took: a goal loop keeps a field one, never a param= one. */
+      let prefixSecretSpecs = new Set<string>();
       const anchoredFlags = [o.fromJourney, o.atStep, o.journeysDir, o.env, o.baseUrl].some((v) => v !== undefined);
       if (anchoredFlags || Object.keys(o.param).length > 0) {
         const refuse = (message: string): void => emitExplore(fail("E_EXPLORE_ARGS", message));
@@ -133,7 +135,7 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
           refuse("--from-journey and --at-step go together (and --param, --env, --base-url and --journeys-dir need them)");
           return;
         }
-        await warnSecretParamsOnArgv(program.configureOutput().writeErr, resolveJourneysDir(deps, o.journeysDir), [o.fromJourney], o.param);
+        await warnSecretParamsOnArgv(program.configureOutput().writeErr, resolveJourneysDir(deps, o.journeysDir), [o.fromJourney], o.param, "explore --from-journey");
         if (o.url !== undefined) {
           refuse("--url cannot be combined with --from-journey: the mission starts where the Journey's prefix leaves the page");
           return;
@@ -193,6 +195,10 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
           try {
             const plan = await validateCampaignSpec(spec, resolvePath("explore-sweep.json"), {
               journeysDir,
+              // #827: the sweep's params are this command line's (warned above), and its --secret-field bindings go to every stop.
+              paramsFromArgv: true,
+              secretFields: o.secretField,
+              env: deps.explore?.env ?? process.env,
               allowShellHooks: o.allowShellHooks === true,
               ...(o.hookTimeoutMs === undefined ? {} : { hookTimeoutMs: Number(o.hookTimeoutMs) }),
               environmentSeams: environmentSeams(deps),
@@ -220,11 +226,16 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
           );
           // The environment's own session applies when --storage-state names none (as `journey run`).
           if (o.storageState === undefined && environment?.storageState !== undefined) o.storageState = environment.storageState;
+          // #827: the prefix's secret parameters from the environment: a --secret-field that binds one (a recorded
+          // field, or param=<name>), and with --env/--base-url the environment's targets.json secretFields.
+          const prefixSecrets = await withCommandSecretParams({ dir: resolveJourneysDir(deps, o.journeysDir), ids: [o.fromJourney], params: o.param, flags: o.secretField, environment, env: deps.explore?.env ?? process.env, strict: false });
+          prefixSecretSpecs = new Set(prefixSecrets.used);
           prefixRequest = {
             dir: resolveJourneysDir(deps, o.journeysDir),
             id: o.fromJourney,
             atStep: o.atStep,
-            params: o.param,
+            params: prefixSecrets.params,
+            ...(prefixSecrets.bound === undefined ? {} : { boundSecretParams: prefixSecrets.bound }),
             ...(environment === undefined ? {} : { environment }),
             ...(o.storageState === undefined ? {} : { storageState: o.storageState }),
             dbPath: resolveDbPath(deps),
@@ -232,7 +243,9 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
           };
           journeyPrefix = await resolveJourneyPrefix(prefixRequest);
         } catch (err) {
-          if (isEnvironmentError(err) || err instanceof JourneyPrefixArgsError) emitExplore(fail(err.code, err.message));
+          const secretError = secretFieldErrorOf(err, "E_EXPLORE_ARGS");
+          if (secretError !== undefined) emitExplore(fail(secretError.code, secretError.message));
+          else if (isEnvironmentError(err) || err instanceof JourneyPrefixArgsError) emitExplore(fail(err.code, err.message));
           else if (err instanceof UnknownJourneyError) emitExplore(fail("E_UNKNOWN_JOURNEY", err.message));
           else if (err instanceof ParamValidationError) emitExplore(fail("E_INVALID_PARAMS", err.message));
           else if (err instanceof JourneyRequiresAuthError) emitExplore(fail("E_JOURNEY_REQUIRES_AUTH", err.message));
@@ -589,6 +602,8 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
       const withServerLog = serverLog === undefined ? {} : { serverLog };
       // Secret field bindings (#72): resolved from the environment here, typed by code in the goal loop.
       let secretFields: SecretField[] = [];
+      // #827: a binding the prefix took is not the goal loop's to refuse; a param= one never binds a live field.
+      o.secretField = o.secretField.filter((spec) => !(prefixSecretSpecs.has(spec) && (spec.startsWith("param=") || (strategy !== "goal" && strategy !== "usability"))) && !(o.fromJourney !== undefined && spec.startsWith("param=")));
       if (o.secretField.length > 0 || o.totp.length > 0) {
         if (o.feature !== undefined || (strategy !== "goal" && strategy !== "usability")) {
           emitExplore(fail("E_EXPLORE_ARGS", "--secret-field and --totp are supported only with --strategy goal or usability"));

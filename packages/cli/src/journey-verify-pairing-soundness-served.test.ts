@@ -160,7 +160,7 @@ describe("[realtime] a final network check is not proven by a step that did not 
     expect(outcome(direct, "skip:2"), diagnostics(direct)).toBe("failed");
     expect(outcome(direct, "block-write:2"), diagnostics(direct)).toBe("failed");
     expect(reading(direct, "end-state:0"), diagnostics(direct)).toBe("sensitive");
-    expect(direct.verdict, diagnostics(direct)).toBe("proven");
+    expect(direct.verdict, diagnostics(direct)).toBe("sensitive");
   });
 
   it("a read RPC a check names by glob gets no write step and stays inconclusive", () => {
@@ -171,7 +171,7 @@ describe("[realtime] a final network check is not proven by a step that did not 
 
   it("a read RPC a step's own check names by glob is no write either", () => {
     expect(readGlob.mutations.filter((m) => m.kind === "block-write"), diagnostics(readGlob)).toEqual([]);
-    expect(readGlob.verdict, diagnostics(readGlob)).not.toBe("proven");
+    expect(readGlob.verdict, diagnostics(readGlob)).not.toBe("sensitive");
   });
 
   it("a page ignoring the parameter is not proven because skipping a read-only click also breaks the check", () => {

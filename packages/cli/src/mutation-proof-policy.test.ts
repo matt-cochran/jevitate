@@ -78,7 +78,7 @@ describe("a proof is bound to the target's read requests", () => {
 
 describe("#708 shared mutation proof policy", () => {
   for (const summary of [{ sensitive: 0, unpaired: 5, cascade: 0 }, { sensitive: 6, unpaired: 0, cascade: 1 }]) {
-    for (const mode of ["advisory", "require-attempt", "require-proven"] as const) {
+    for (const mode of ["advisory", "require-attempt", "require-sensitive"] as const) {
       it(`handles reported shape ${JSON.stringify(summary)} under ${mode} in JSON and text`, () => {
         const j = journey(); const r = record(j, summary);
         const review = buildJourneyReview(j, { lastVerify: r, proofPolicy: mode });
@@ -92,10 +92,10 @@ describe("#708 shared mutation proof policy", () => {
   it("classifies zero-sensitive unpaired read-only Journeys explicitly", () => {
     expect(evaluateMutationProofPolicy({ journey: journey(), contentHash: journeyReviewHash(journey()), record: record() }).classification).toBe("non-mutation-testable");
   });
-  it("a fresh inconclusive waiver satisfies require-attempt but cannot override require-proven", () => {
-    for (const mode of ["advisory", "require-attempt", "require-proven"] as const) {
+  it("a fresh inconclusive waiver satisfies require-attempt but cannot override require-sensitive", () => {
+    for (const mode of ["advisory", "require-attempt", "require-sensitive"] as const) {
       const p = evaluateMutationProofPolicy({ journey: journey(), contentHash: journeyReviewHash(journey()), record: record(), mode, waiver: waiver() });
-      expect(p.waiver.status).toBe("valid"); expect(p.passed).toBe(mode !== "require-proven");
+      expect(p.waiver.status).toBe("valid"); expect(p.passed).toBe(mode !== "require-sensitive");
     }
   });
   it.each(["contentHash", "proofHash", "receiptDigest"] as const)("rejects stale waiver %s", (key) => {
@@ -112,18 +112,19 @@ describe("#708 shared mutation proof policy", () => {
     const input = { journey: journey(), contentHash: journeyReviewHash(journey()), record: record() };
     const base = evaluateMutationProofPolicy(input);
     expect(evaluateMutationProofPolicy({ ...input, record: { ...record(), summary: { cascade: 0, unpaired: 5, sensitive: 0 } } }).digest).toBe(base.digest);
-    expect(evaluateMutationProofPolicy({ ...input, mode: "require-proven" }).digest).not.toBe(base.digest);
+    expect(evaluateMutationProofPolicy({ ...input, mode: "require-sensitive" }).digest).not.toBe(base.digest);
   });
-  it("only fresh proven receipts satisfy require-proven", () => {
+  it("only fresh sensitive receipts that count for the gate, and name their engine (#816), satisfy require-sensitive", () => {
     const j = journey(); const h = journeyReviewHash(j);
-    expect(evaluateMutationProofPolicy({ journey: j, contentHash: h, mode: "require-proven", record: { ...record(), verdict: "proven" } }).passed).toBe(true);
-    for (const r of [null, { ...record(), verdict: "insensitive" }, { ...record(), verdict: "proven", proofHash: "f".repeat(64) }]) expect(evaluateMutationProofPolicy({ journey: j, contentHash: h, mode: "require-proven", record: r, waiver: waiver() }).passed).toBe(false);
+    const engine = { version: "0.30.0", commit: "abc1234" };
+    expect(evaluateMutationProofPolicy({ journey: j, contentHash: h, mode: "require-sensitive", record: { ...record(), verdict: "sensitive", countsForGate: true, engine } }).passed).toBe(true);
+    for (const r of [null, { ...record(), verdict: "sensitive", countsForGate: true }, { ...record(), verdict: "insensitive" }, { ...record(), verdict: "sensitive", countsForGate: true, proofHash: "f".repeat(64) }, { ...record(), verdict: "sensitive", countsForGate: false }]) expect(evaluateMutationProofPolicy({ journey: j, contentHash: h, mode: "require-sensitive", record: r, waiver: waiver() }).passed).toBe(false);
   });
   it("review and policy both reject a receipt recorded for another Journey", () => {
-    const review = buildJourneyReview(journey(), { proofPolicy: "require-proven", lastVerify: { ...record(), journeyId: "other", verdict: "proven" } });
+    const review = buildJourneyReview(journey(), { proofPolicy: "require-sensitive", lastVerify: { ...record(), journeyId: "other", verdict: "sensitive" } });
     expect(review.proof.verify.status === "recorded" && review.proof.verify.stale).toBe(true);
     expect(review.proof.policy?.freshness).toBe("stale");
-    expect(renderReviewText(review)).not.toContain("mutation proof proven ✓");
+    expect(renderReviewText(review)).not.toContain("checks strength: sensitive ✓");
   });
   it("binds proof-plan changes even when the receipt and waiver are unchanged", () => {
     const j = journey(); j.metadata.endState = [{ kind: "page", assertion: { kind: "textIncludes", target: { testId: "status" }, text: "Other" } }];

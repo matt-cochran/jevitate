@@ -334,6 +334,10 @@ export interface QueuedJourneyCall {
   params?: Record<string, string>;
   env?: string;
   baseUrl?: string;
+  /** #800 `--no-done-check`: the run reads no done check (the job reads unverified, basis no-check). */
+  noDoneCheck?: boolean;
+  /** #800 `--require-done-check`: an unverified job exits 2 even under the advisory policy. */
+  requireDoneCheck?: boolean;
   requestedAt: string;
 }
 
@@ -344,10 +348,15 @@ export const QueuedJourneyCallSchema: z.ZodType<QueuedJourneyCall> = z
     params: z.record(z.string(), z.string()).optional(),
     env: z.string().min(1).optional(),
     baseUrl: z.string().min(1).optional(),
+    noDoneCheck: z.boolean().optional(),
+    requireDoneCheck: z.boolean().optional(),
     requestedAt: z.string().min(1),
   })
   .strict()
   .superRefine((call, ctx) => {
+    if (call.noDoneCheck === true && call.requireDoneCheck === true) {
+      ctx.addIssue({ code: "custom", path: ["requireDoneCheck"], message: "noDoneCheck and requireDoneCheck cannot be used together" });
+    }
     for (const name of Object.keys(call.params ?? {})) {
       if (isSecretName(name)) {
         ctx.addIssue({ code: "custom", path: ["params", name], message: `param '${name}' is secret-named: a queued call never stores a secret value; the run meets it with its secret mode (vault or hold)` });

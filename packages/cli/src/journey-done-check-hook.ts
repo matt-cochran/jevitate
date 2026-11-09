@@ -7,7 +7,7 @@ import { doneCheckScope, isDoneCheckIssues, parseDoneCheck, type DoneCheckSpec, 
 import { PlaywrightBrowserPort, type BrowserPort as SessionPort } from "@jevitate/playwright";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { loadCatalog } from "./catalog-api.js";
-import { linkedJobDone } from "./catalog-refs.js";
+import { journeyDoneCheck } from "./catalog-refs.js";
 import { parseSuccessSpec } from "./explore-specs.js";
 import { createHttpProbe } from "./http-probe.js";
 import { DONE_CHECK_FAILED_MESSAGE, doneCheckExitInput, readDoneCheck, type BrowserPort, type DoneCheckSession } from "./journey-done-check.js";
@@ -48,6 +48,8 @@ export interface DoneCheckRunRequest {
   readonly browserPort?: BrowserPort | undefined;
   /** The browser the default port opens sessions from (default `new PlaywrightBrowserPort()`). */
   readonly sessionPortFactory?: (() => SessionPort) | undefined;
+  /** #801 `journey shorten --job`: read this catalog job's done check instead of the one the Journey links. */
+  readonly jobId?: string | undefined;
 }
 
 interface PendingCheck {
@@ -107,8 +109,10 @@ function boundValues(bound: ReadonlySet<string>, ...sources: readonly unknown[])
 async function specFor(req: DoneCheckRunRequest, journey: Journey): Promise<DoneCheckSpec | "invalid" | undefined> {
   let done: unknown;
   try {
-    const catalog = await loadCatalog(req.catalogDir, req.journeysDir);
-    done = linkedJobDone(catalog, journey)?.done;
+    // #801: an explicit job (`journey shorten --job`) decides in place of the Journey's own link. Design §3.1: a
+    // Journey that links no job reads its own metadata.done (journeyDoneCheck), with no catalog read.
+    const linksJob = (req.jobId ?? journey.metadata.job) !== undefined;
+    done = journeyDoneCheck(linksJob ? await loadCatalog(req.catalogDir, req.journeysDir) : undefined, journey, req.jobId)?.done;
   } catch {
     // A catalog that cannot be read is no check, as `journey find` treats it: the run says `no-check`.
     return undefined;
@@ -209,11 +213,14 @@ export function withJobVerdict(result: unknown, job: JobVerdict | undefined, pol
   return { ...result, job, ...(failed ? { failure: { kind: "done-check-failed", message: DONE_CHECK_FAILED_MESSAGE } } : {}), ...exit };
 }
 
-/** GAPS 21: `fn` (one Journey run) inside a done-check scope, its result carrying the job verdict (`withJobVerdict`). */
-export async function runWithDoneCheck(request: DoneCheckRunRequest, fn: () => Promise<unknown>): Promise<unknown> {
+/**
+ * GAPS 21: `fn` (one Journey run) inside a done-check scope, its result carrying the job verdict (`withJobVerdict`).
+ * `policy` (`require` for `requireDoneCheck`, as `journey run --require-done-check`) overrides project.json's.
+ */
+export async function runWithDoneCheck(request: DoneCheckRunRequest, fn: () => Promise<unknown>, policy?: DoneCheckPolicy): Promise<unknown> {
   const run = new DoneCheckRun(request);
   const result = await run.run(fn);
-  return withJobVerdict(result, run.job, doneCheckPolicyOf(request.catalogDir));
+  return withJobVerdict(result, run.job, policy ?? doneCheckPolicyOf(request.catalogDir));
 }
 
 // --- The real browser: a new Playwright context per reading -------------------------------------------

@@ -1,5 +1,7 @@
 import { assertJourneyRunnable } from "@jevitate/mcp-facade";
 import { inMcpInvocation } from "./approval-provenance.js";
+import { planSecretRun } from "./journey-secret-mode.js";
+import { currentBoundSecretParams, type BoundSecretParams } from "./secret-params.js";
 import { assertMcpRunnable } from "./journey-stale-api.js";
 import { prepareMcpRunGuard, RunGuardRefusedError, type McpRunGuard } from "./mcp-run-guard.js";
 import { FsJourneyStore, JourneyRegistry, journeyParamSchema, secretParamNames, secretParamValues, validateParams } from "@jevitate/journey";
@@ -66,6 +68,10 @@ export interface RunJourneyLoadTestOptions {
   targetsFile?: string;
   /** 0.30.0 §5: `.jevitate/environments.json` (default: the named environment's file, else the project's). */
   environmentsFile?: string;
+  /** #827: where each bound secret parameter may go (`--secret-field`, targets.json); default: the command's scope. */
+  boundSecretParams?: BoundSecretParams;
+  /** Where a target's `secretFields` `env:` sources are read (default `process.env`). */
+  secretEnv?: Readonly<Record<string, string | undefined>>;
 }
 
 /** A load test's report, with the run mode it ran in (0.30.0 §5): `run.mode`, `run.target.trust`. */
@@ -109,14 +115,24 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
     );
   }
 
-  validateParams(journeyParamSchema(journey), opts.params);
-
   // 0.30.0 §5: the mode, from the person-written files only, before any browser. A load test runs the
   // Journey, so the mode's Journey refusals apply as on `journey run`: over MCP an automation-mode target
   // needs a Journey a person approved; a test-mode target never runs one with a human step.
   const seams = { ...(opts.targetsFile === undefined ? {} : { targetsFile: opts.targetsFile }), ...(opts.environmentsFile === undefined ? {} : { environmentsFile: opts.environmentsFile }) };
   const decided = resolveSurfaceRunMode({ surface: "load", journey: stored, origin: opts.environment?.baseUrl ?? stored.recording.site, environment: opts.environment, ...seams });
   const notes: string[] = [];
+  // #827: a secret parameter from the environment. On the CLI the command bound it (--secret-field,
+  // targets.json); over MCP only the operator's targets.json binding for this origin supplies one the call
+  // left out (vault-autofill, journey-secret-mode.ts): a load test never holds for a person.
+  let params: Record<string, string> = { ...opts.params };
+  let bound = opts.boundSecretParams ?? currentBoundSecretParams();
+  if (inMcpInvocation()) {
+    const plan = planSecretRun({ stored, journey, params, bound, origin: opts.environment?.baseUrl ?? stored.recording.site, environment: opts.environment, targetsFile: opts.targetsFile, mode: decided.mode, mcp: true, surface: true, flag: "vault-autofill", env: opts.secretEnv ?? process.env });
+    params = { ...plan.params, ...params };
+    if (plan.bound !== undefined) bound = { ...bound, ...plan.bound };
+  }
+  validateParams(journeyParamSchema(journey), params);
+  const boundSecretParams = bound === undefined ? undefined : new Map(Object.entries(bound).map(([n, o]) => [n, o === "allowlist" ? allowedOrigins : o] as const));
 
   // #789: under an MCP invocation, each actor's session is guarded; a refusal ends the whole test, below.
   // The mode decides whether the Journey's own `allowedOrigins` stay on the write allowlist (automation drops
@@ -153,17 +169,17 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
       // #400: a load iteration means the same as a `journey run` — the Journey's end state and
       // each step's `expectRequests` are judged, so a replay whose checks fail is not an ok run.
       const runGuard = guardFor();
-      await runGuard?.arm(session, opts.params);
-      const refs = httpCheckRefs({ params: opts.params, secretParams: secretParamNames(journey, opts.params) });
+      await runGuard?.arm(session, params);
+      const refs = httpCheckRefs({ params, secretParams: secretParamNames(journey, params) });
       const outcomeChecks = new JourneyOutcomeChecks(session.page, journey, {
-        secrets: secretParamValues(journey, opts.params),
+        secrets: secretParamValues(journey, params),
         // #543: http end-state checks request only origins in this run's allowlist.
         httpProbe: createHttpProbe({ allowlist: allowedOrigins }),
         resolveRef: refs,
       });
       const observer = outcomeChecks.observer();
       // #565: a step expectation's references resolve from the same names (a secret one refused).
-      const guardOption = runGuard === undefined ? {} : { actionGuard: runGuard };
+      const guardOption = { ...(runGuard === undefined ? {} : { actionGuard: runGuard }), ...(boundSecretParams === undefined ? {} : { boundSecretParams }) };
       const interpreter = observer === undefined ? new RecordingInterpreter({ fixtureBaseDir, refLookup: refs, ...guardOption }) : new RecordingInterpreter({ observer, fixtureBaseDir, refLookup: refs, ...guardOption });
       const runner = new JourneyRunner(actor, interpreter);
 
@@ -183,7 +199,7 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
           try {
             // #789: once refused, no iteration repeats the Journey's earlier writes on the way to the same refusal.
             if (refusal !== undefined) throw refusal;
-            return await outcomeChecks.run(actor, () => runner.run({ journey, params: opts.params, policy }));
+            return await outcomeChecks.run(actor, () => runner.run({ journey, params, policy }));
           } catch (err) {
             if (err instanceof RunGuardRefusedError) refusal = err;
             throw err;

@@ -1,4 +1,4 @@
-import { isDoneCheckIssues, lintDoneCheck, parseDoneCheck, type CatalogRefIssue, type DoneCheckLintFinding, type DoneCheckSpec, type Finding, type GtwrSetCharacteristic, type Journey, type Metric, type OutcomeTarget } from "@jevitate/journey";
+import { isDoneCheckIssues, lintDoneCheck, lintJourneyDoneCheck, parseDoneCheck, type JourneyLintOptions, type CatalogRefIssue, type DoneCheckLintFinding, type DoneCheckSpec, type Finding, type GtwrSetCharacteristic, type Journey, type Metric, type OutcomeTarget } from "@jevitate/journey";
 import { BrokenJobRefsError, findJob, journeysForJob, type Catalog, type CatalogJob, type CatalogJourney } from "./catalog.js";
 
 /**
@@ -248,9 +248,21 @@ export function linkedJobDone(catalog: Catalog, journey: Journey): JobDoneView |
   return { id: cj.id, status: cj.status, ...(cj.job.done === undefined ? {} : { done: cj.job.done }) };
 }
 
-/** #800: the done-check lint findings (`missing-done-check`, `done-check-invalid`, `done-check-cannot-be-false`) of the job a Journey links, about that Journey. */
-export function journeyDoneCheckFindings(catalog: Catalog, journey: Journey): DoneCheckLintFinding[] {
+/**
+ * 0.30.0 design §3.1: the done check a run of this Journey reads, and whose it is. A Journey that links a job
+ * (`metadata.job`, or `jobId`: `journey shorten --job`) reads that job's (`jobs.json` → `done`); one that links
+ * no job reads its own `metadata.done`, and needs no catalog for it. Undefined: no check (`no-check`).
+ */
+export function journeyDoneCheck(catalog: Catalog | undefined, journey: Journey, jobId?: string): { readonly source: "job" | "journey"; readonly done: DoneCheckSpec } | undefined {
+  const job = jobId ?? journey.metadata.job;
+  if (job === undefined) return journey.metadata.done === undefined ? undefined : { source: "journey", done: journey.metadata.done };
+  const view = catalog === undefined ? undefined : linkedJobDone(catalog, { ...journey, metadata: { ...journey.metadata, job } });
+  return view?.done === undefined ? undefined : { source: "job", done: view.done };
+}
+
+/** #800: the done-check lint findings (`missing-done-check`, `done-check-invalid`, `done-check-cannot-be-false`) of the job a Journey links, and of its own `metadata.done`, about that Journey. */
+export function journeyDoneCheckFindings(catalog: Catalog, journey: Journey, opts: JourneyLintOptions = {}): DoneCheckLintFinding[] {
   const id = journey.metadata.job;
   const cj = id === undefined ? undefined : findJob(catalog, id);
-  return cj === undefined ? [] : lintDoneCheck(cj.job, [journey]);
+  return [...(cj === undefined ? [] : lintDoneCheck(cj.job, [journey], opts)), ...lintJourneyDoneCheck(journey, opts)];
 }

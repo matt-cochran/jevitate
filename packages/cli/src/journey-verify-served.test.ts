@@ -233,11 +233,11 @@ describe("journey verify --mutate (#402, served)", () => {
     // block-write alone proves the request and the persisted text too.
     const blocked = report.mutations.find((m) => m.id === "block-write:3")!;
     expect(blocked.failedSites).toEqual(expect.arrayContaining([{ where: "step-request", step: 3, checkIndex: 0, evaluated: true }, { where: "end-state", index: 0 }]));
-    expect(report.verdict).toBe("proven");
+    expect(report.verdict).toBe("sensitive");
     expect(exitCode).toBe(0);
     // #432: the verdict is recorded beside the Journey, and its review sheet shows it.
     const review = await cli(join(dir, "strong"), ["journey", "review", "strong", "--json"]);
-    expect((JSON.parse(review.out) as { data: { proof: { verify: unknown } } }).data.proof.verify).toMatchObject({ status: "recorded", verdict: "proven", stale: false });
+    expect((JSON.parse(review.out) as { data: { proof: { verify: unknown } } }).data.proof.verify).toMatchObject({ status: "recorded", verdict: "sensitive", stale: false });
   }, 240_000);
 
   it("a save step that asserts its own outcome is proven through the relaxed replay (#554)", async () => {
@@ -250,7 +250,7 @@ describe("journey verify --mutate (#402, served)", () => {
       endState: [{ kind: "reloadThen", assertion: { kind: "textIncludes", target: { testId: "status" }, text: "Saved: hello" } }],
     });
     const { exitCode, report } = await verify(selfAsserting, ["--json"]);
-    expect({ verdict: report.verdict, exitCode }).toEqual({ verdict: "proven", exitCode: 0 });
+    expect({ verdict: report.verdict, exitCode }).toEqual({ verdict: "sensitive", exitCode: 0 });
     const blocked = report.mutations.find((m) => m.id === "block-write:3")!;
     expect(blocked.blockedWrites).toEqual(["POST /api/save"]);
     expect(blocked.failedSites).toEqual(expect.arrayContaining([
@@ -277,7 +277,7 @@ describe("journey verify --mutate (#402, served)", () => {
     expect(report.mutations.find((m) => m.id === "skip:3")?.failedSites).toEqual(
       expect.arrayContaining([{ where: "step-request", step: 3, checkIndex: 0, evaluated: true }, { where: "step", step: 4, postcondition: false }]),
     );
-    expect(report.verdict).toBe("proven");
+    expect(report.verdict).toBe("sensitive");
     expect(exitCode).toBe(0);
   }, 240_000);
 

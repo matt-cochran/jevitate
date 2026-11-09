@@ -1,5 +1,6 @@
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { warnParamNamesOnArgv } from "./regression-cli.js";
+import { REPLAY_SECRET_FIELD_HELP, collectSecretField } from "./secret-params.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
 import { Command } from "commander";
 import { UnauthorizedExploreTargetError } from "@jevitate/explore";
@@ -99,10 +100,11 @@ export function registerVerifyFixCommands(
     .option(
       "--param <kv>",
       "#293: a Journey param as key=value (repeatable) for a finding found from a Journey branch point — its replays go through the same prefix; " +
-        "a secret param (never persisted with the result) must be given again; redacted like --secret",
+        "a secret param (never persisted with the result) must be given again (--secret-field keeps it off the command line); redacted like --secret",
       collectParam,
       {} as Record<string, string>,
     )
+    .option("--secret-field <binding>", REPLAY_SECRET_FIELD_HELP, collectSecretField, [] as string[])
     .option(
       "--allow <origin...>",
       "#484: replay with these origins instead of the allow list stored with the result (explicit only; recorded on the report)",
@@ -128,6 +130,7 @@ export function registerVerifyFixCommands(
           env?: string;
           secret: string[];
           param: Record<string, string>;
+          secretField: string[];
           json?: boolean;
         } & BrowserLaunchFlags &
           DemoFlags &
@@ -144,7 +147,7 @@ export function registerVerifyFixCommands(
           human: (data) => formatVerifyFixHuman(data, { result: o.result }),
           ...(exitCode === undefined ? {} : { exitCode }),
         });
-      warnParamNamesOnArgv(program.configureOutput().writeErr, o.param);
+      warnParamNamesOnArgv(program.configureOutput().writeErr, o.param, "verify-fix");
       // #195: `--secret env:VAR`, as on explore.
       try {
         const resolved = resolveSecretArgs(o.secret, process.env, "--secret");
@@ -225,7 +228,8 @@ export function registerVerifyFixCommands(
           ...(o.hangReplayWrites === true ? { hangReplayWrites: true } : {}),
           fixtureFlags: o,
           secrets,
-          journeyPrefix: { params: o.param, warn: (line) => program.configureOutput().writeErr?.(line), dbPath: resolveDbPath(deps), environmentSeams: environmentSeams(deps) },
+          // #827: --secret-field (and the environment's targets.json) supply the prefix's secret parameters; prefix secrets are redacted by the prefix.
+          journeyPrefix: { params: o.param, secretFields: o.secretField, command: "verify-fix", env: deps.explore?.env ?? process.env, warn: (line) => program.configureOutput().writeErr?.(line), dbPath: resolveDbPath(deps), environmentSeams: environmentSeams(deps) },
           browserPortFactory: deps.explore?.browserPortFactory,
           browser,
           ...(screenshots === undefined ? {} : { screenshots }),

@@ -43,6 +43,9 @@ export interface QueueJourneyArgs {
   readonly params?: Readonly<Record<string, string>>;
   readonly env?: string;
   readonly baseUrl?: string;
+  /** #800 `--no-done-check` / `--require-done-check`, stored on the call for the drain. Not both. */
+  readonly noDoneCheck?: boolean;
+  readonly requireDoneCheck?: boolean;
 }
 
 export interface QueueJourneyResult {
@@ -80,11 +83,17 @@ export function parseQueueJourneyArgs(args: unknown): QueueJourneyArgs {
     if (a[k] !== undefined && (typeof a[k] !== "string" || a[k] === "")) throw new QueueJourneyRefusedError("E_QUEUE_JOURNEY_ARGS", `queue_journey '${k}' must be a non-empty string`);
   }
   if (a.env !== undefined && a.baseUrl !== undefined) throw new QueueJourneyRefusedError("E_QUEUE_JOURNEY_ARGS", "queue_journey takes env or baseUrl, not both");
+  for (const k of ["noDoneCheck", "requireDoneCheck"] as const) {
+    if (a[k] !== undefined && typeof a[k] !== "boolean") throw new QueueJourneyRefusedError("E_QUEUE_JOURNEY_ARGS", `queue_journey '${k}' must be a boolean`);
+  }
+  if (a.noDoneCheck === true && a.requireDoneCheck === true) throw new QueueJourneyRefusedError("E_QUEUE_JOURNEY_ARGS", "queue_journey takes noDoneCheck or requireDoneCheck, not both");
   return {
     id: a.id,
     ...(Object.keys(params).length === 0 ? {} : { params: params as Record<string, string> }),
     ...(a.env === undefined ? {} : { env: a.env as string }),
     ...(a.baseUrl === undefined ? {} : { baseUrl: a.baseUrl as string }),
+    ...(a.noDoneCheck === true ? { noDoneCheck: true } : {}),
+    ...(a.requireDoneCheck === true ? { requireDoneCheck: true } : {}),
   };
 }
 
@@ -112,6 +121,8 @@ export async function queueJourney(
       ...(req.params === undefined ? {} : { params: { ...req.params } }),
       ...(req.env === undefined ? {} : { env: req.env }),
       ...(req.baseUrl === undefined ? {} : { baseUrl: req.baseUrl }),
+      ...(req.noDoneCheck === true ? { noDoneCheck: true } : {}),
+      ...(req.requireDoneCheck === true ? { requireDoneCheck: true } : {}),
       requestedAt: now,
     },
   });

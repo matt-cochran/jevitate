@@ -81,3 +81,13 @@ describe("0.30.0 #797: queue_journey and the named Journey tools", () => {
     expect(names.sort()).toEqual(["checkout", "queue_journey"]);
   });
 });
+
+describe("0.30.0 #801: shorten_journey and the named Journey tools", () => {
+  it("shorten_journey is an allowlisted domain tool; a promoted Journey with that id is only a named Journey tool, never the server's", async () => {
+    const reg = await buildRegistry();
+    await reg.put(makeJourney("shorten_journey", true, []));
+    expect(ALLOWED_TOOLS as readonly string[]).toContain("shorten_journey");
+    const names = (await listNamedJourneyTools(reg)).map((t) => t.name);
+    expect(names.sort()).toEqual(["checkout", "shorten_journey"]);
+  });
+});

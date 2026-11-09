@@ -241,7 +241,7 @@ describe("[realtime] a mutation proof that loses its observer or its verifier", 
     await run.closed;
     whole = reportOf(run.stdout());
     expect(whole.reusedPairs).toBe(0);
-    expect(whole.verdict).toBe("proven");
+    expect(whole.verdict).toBe("sensitive");
   }, 240_000);
 
   it("a verifier killed with SIGKILL is reported as gone, and a resume reuses its finished pairs and reaches the same verdict", async () => {

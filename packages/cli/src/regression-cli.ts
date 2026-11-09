@@ -1,5 +1,5 @@
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
-import { secretParamNamesArgvWarning, secretParamsCarriedBy } from "./secret-params.js";
+import { REPLAY_SECRET_FIELD_HELP, collectSecretField, secretParamNamesArgvWarning, secretParamsCarriedBy } from "./secret-params.js";
 import { BranchReplayInputError, JourneyPrefixStaleError, prefixFromBranch, recordedBranchOf, type JourneyPrefix, type RecordedBranch } from "./journey-prefix.js";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
@@ -40,9 +40,9 @@ import {
 
 /** Registers `jevitate regression`: `capture` and `run`. */
 /** #809: the existing argv warning for a `--param` that names a secret, by name only (never the value). */
-export function warnParamNamesOnArgv(write: ((line: string) => void) | undefined, param: Readonly<Record<string, string>>): void {
+export function warnParamNamesOnArgv(write: ((line: string) => void) | undefined, param: Readonly<Record<string, string>>, command?: string): void {
   const names = secretParamsCarriedBy(null, param);
-  if (names.length > 0) write?.(secretParamNamesArgvWarning(names));
+  if (names.length > 0) write?.(secretParamNamesArgvWarning(names, command));
 }
 
 export function registerRegressionCommands(program: Command, deps: CliDeps): void {
@@ -55,9 +55,10 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
   const regression = program.command("regression").description("capture, run and manage regression tests from discovered failures");
 
   /** #293: the prefix a branch-point failure replays through; `null` after refusing (exit 64). */
-  const branchPrefixOrRefuse = async (branch: RecordedBranch, params: Record<string, string>, storageState: string | undefined): Promise<JourneyPrefix | null> => {
+  const branchPrefixOrRefuse = async (branch: RecordedBranch, params: Record<string, string>, storageState: string | undefined, secretFields: readonly string[], command: string): Promise<JourneyPrefix | null> => {
     try {
-      return await prefixFromBranch(branch, { params, warn: (line) => program.configureOutput().writeErr?.(line), ...(storageState === undefined ? {} : { storageState }), dbPath: resolveDbPath(deps), environmentSeams: environmentSeams(deps) });
+      // #827: the prefix's secret parameters from --secret-field or the environment's targets.json, off the command line.
+      return await prefixFromBranch(branch, { params, secretFields, command, env: deps.explore?.env ?? process.env, ...(storageState === undefined ? {} : { storageState }), dbPath: resolveDbPath(deps), environmentSeams: environmentSeams(deps) });
     } catch (err) {
       if (!(err instanceof BranchReplayInputError)) throw err;
       emitJson(program, fail("E_REGRESSION_ARGS", err.message));
@@ -91,10 +92,11 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
     .option("--force", "overwrite an existing regression id's committed files (default: refused, #213)", false)
     .option(
       "--param <kv>",
-      "#293: a Journey param as key=value (repeatable) for a failure found from a Journey branch point — every replay goes through the same prefix; a secret param (never persisted) must be given again",
+      "#293: a Journey param as key=value (repeatable) for a failure found from a Journey branch point — every replay goes through the same prefix; a secret param (never persisted) must be given again: --secret-field keeps it off the command line",
       collectParam,
       {} as Record<string, string>,
     )
+    .option("--secret-field <binding>", REPLAY_SECRET_FIELD_HELP, collectSecretField, [] as string[])
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
       // #245: demo mode (--headed/--slow-mo), resolved before any browser opens.
@@ -116,10 +118,11 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
         storageState?: string;
         force?: boolean;
         param: Record<string, string>;
+        secretField: string[];
         json?: boolean;
       } & FixtureFlags & EmulationFlags>();
-      const { from, id, dir, attempts, summary, result: resultPath, fingerprint, storageState, force, json, param } = flags;
-      warnParamNamesOnArgv(program.configureOutput().writeErr, param);
+      const { from, id, dir, attempts, summary, result: resultPath, fingerprint, storageState, force, json, param, secretField } = flags;
+      warnParamNamesOnArgv(program.configureOutput().writeErr, param, "regression capture");
       if (refuseUnsafeName(program, id, "regression id")) return;
       // #218: unusable input is refused up front (64), never a capture that broke at runtime (2).
       for (const [flag, path] of [["--from", from], ["--result", resultPath]] as const) {
@@ -168,7 +171,7 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
         const replayFixture = fx;
         // #293: a failure found from a Journey branch point is reproduced THROUGH that prefix.
         const branch = resultPath === undefined ? undefined : recordedBranchOf((JSON.parse(await readFile(resultPath, "utf8")) as { result?: unknown }).result);
-        const prefix = branch === undefined ? undefined : await branchPrefixOrRefuse(branch, param, storageState);
+        const prefix = branch === undefined ? undefined : await branchPrefixOrRefuse(branch, param, storageState, secretField, "regression capture");
         if (prefix === null) return;
 
         const result = await runRegressionCapture({
@@ -240,10 +243,11 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
     .option("--storage-state <file>", "Playwright storageState JSON to open the replay session authenticated (#129); must exist")
     .option(
       "--param <kv>",
-      "#293: a Journey param as key=value (repeatable) for a failure found from a Journey branch point — every replay goes through the same prefix; a secret param (never persisted) must be given again",
+      "#293: a Journey param as key=value (repeatable) for a failure found from a Journey branch point — every replay goes through the same prefix; a secret param (never persisted) must be given again: --secret-field keeps it off the command line",
       collectParam,
       {} as Record<string, string>,
     )
+    .option("--secret-field <binding>", REPLAY_SECRET_FIELD_HELP, collectSecretField, [] as string[])
     .option("--json", "emit a JSON envelope")
     .option(TAG_FLAG, TAG_HELP, collectTag, [])
     .action(taggedAction(program, "regression run", async function (this: Command, id: string) {
@@ -255,10 +259,10 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
         emitJson(program, fail("E_REGRESSION_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
-      const { dir, attempts, storageState: storageStateFlag, json, env: envName, baseUrl, param, ...emulationFlags } = this.opts<
-        { dir?: string; attempts?: string; storageState?: string; json?: boolean; param: Record<string, string> } & EmulationFlags & EnvironmentFlags
+      const { dir, attempts, storageState: storageStateFlag, json, env: envName, baseUrl, param, secretField, ...emulationFlags } = this.opts<
+        { dir?: string; attempts?: string; storageState?: string; json?: boolean; param: Record<string, string>; secretField: string[] } & EmulationFlags & EnvironmentFlags
       >();
-      warnParamNamesOnArgv(program.configureOutput().writeErr, param);
+      warnParamNamesOnArgv(program.configureOutput().writeErr, param, "regression run");
       // #247: --env/--base-url choose where the regression replays (unknown env / bad file → 64).
       let environment: ResolvedJourneyEnvironment | undefined;
       try {
@@ -299,7 +303,7 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
         } catch {
           branch = undefined;
         }
-        const prefix = branch === undefined ? undefined : await branchPrefixOrRefuse(branch, param, storageState);
+        const prefix = branch === undefined ? undefined : await branchPrefixOrRefuse(branch, param, storageState, secretField, "regression run");
         if (prefix === null) return;
         // #149: --viewport/--device, else the committed Recording's OWN emulation.
         const runEmulation: EmulationSpec | undefined =

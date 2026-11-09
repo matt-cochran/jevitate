@@ -42,6 +42,15 @@ const OFF_INSTRUCTION_HTML = `<!doctype html><html><body>
 <button type="button">Share</button>
 <button type="button">Business info</button>
 </body></html>`;
+// #826: the goal names `Show demo` only in part (no whole-name phrase); the instruction names `Check in`.
+const PARTIAL_HTML = `<!doctype html><html><body>
+<h1>Prospect</h1>
+<p>Check in to continue.</p>
+<button type="button">Refresh</button>
+<button type="button">Check in</button>
+<a href="/shown">Show demo</a>
+<button type="button">Share</button>
+</body></html>`;
 const SHOWN_HTML = `<!doctype html><html><body>
 <h1>Demo shown</h1>
 </body></html>`;
@@ -50,7 +59,7 @@ let server: Server;
 let origin: string;
 beforeAll(async () => {
   server = createServer((req, res) => {
-    const pages: Readonly<Record<string, string>> = { "/step": STEP_HTML, "/off": OFF_INSTRUCTION_HTML, "/shown": SHOWN_HTML };
+    const pages: Readonly<Record<string, string>> = { "/step": STEP_HTML, "/off": OFF_INSTRUCTION_HTML, "/partial": PARTIAL_HTML,"/shown": SHOWN_HTML };
     const html = pages[req.url ?? ""] ?? START_HTML;
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(html);
   });
@@ -162,6 +171,21 @@ describe("#769 — a refused blocked always yields another model decision", () =
     async () => {
       const result = await run((n) => (n === 0 ? [{ op: "click", name: "Start" }] : []), { maxDecisions: 2 });
       expect(result.run.stop).toBe("exhausted");
+      // #826: the reason says the budget ran out on the refusal, not like any other stop.
+      expect(result.run.outcome).toMatchObject({
+        status: "incomplete",
+        reason: expect.stringMatching(/decision budget ran out straight after a refused blocked .*"Show the demo"/),
+      });
+    },
+    90_000,
+  );
+
+  it(
+    "#826 — refuses a blocked beside a control the goal names only in part when the page's instruction names another",
+    async () => {
+      const result = await run((n) => (n === 0 ? [{ op: "click", name: "Refresh" }] : []), { startPath: "/partial" });
+      const reasons = result.transcript.filter((e) => e.op === "blocked").map((e) => e.reason ?? "");
+      expect(reasons.some((r) => /blocked refused: "Show demo"/.test(r))).toBe(true);
     },
     90_000,
   );

@@ -167,7 +167,56 @@ export function renderHeader(r: JourneyReview, w: SheetWriter, opts: RenderOptio
     w.put("        ", `${r.id} · ${status}`);
   }
   for (const l of prLines(prov)) w.put(w.md ? "" : "        ", l);
+  // Owner decision "Proof role": the sheet leads with the job verdict; the proof is a checks-strength line below.
+  if (r.job !== undefined) {
+    const line = jobLine(r.job, r.id);
+    if (w.md) w.out.push("", `**Job:** ${line}`);
+    else w.put("Job     ", line);
+  }
   w.gap();
+}
+
+/** #816: what a stale proof's cause says; only `journey-changed` blames the Journey. */
+const STALE_CAUSE_TEXT: Readonly<Record<string, string>> = {
+  "journey-changed": "the Journey changed after this proof ran",
+  engine: "the Journey is unchanged, but another jevitate engine recorded this proof and computes its identity differently",
+  "engine-unknown": "the Journey is unchanged, but this proof does not match this engine and its receipt does not say which engine recorded it",
+  "read-policy": "the target's safety.readRequests changed after this proof ran",
+  "no-planner-identity": "this proof predates proof identity (before 0.14.0)",
+};
+
+const JOB_BASIS_TEXT: Readonly<Record<string, string>> = {
+  "done-check": "its done check, read in a fresh session before and after the latest run",
+  "already-true": "the done check already read true before the latest run, so it proves nothing",
+  "reading-unknown": "a done-check reading could not be taken on the latest run",
+  "no-check": "the latest run had no done check",
+  harness: "the latest run was on a harness target, which forces unverified",
+  "no-run": "no run of this Journey is recorded",
+  "not-recorded": "the latest run's record predates job verdicts",
+  "earlier-version": "the latest run was of an earlier version of this Journey",
+};
+
+/** The fix for an `unverified` job, by why it reads so. */
+export function jobUnverifiedFix(basis: string, id: string): string {
+  switch (basis) {
+    case "no-check":
+      return "add a \"done\" check to the linked job in .jevitate/jobs.json (a Journey with no job: its own metadata.done), then `jevitate journey run " + id + "`";
+    case "harness":
+      return "a harness target forces unverified: run it on a target with the real backend";
+    case "already-true":
+      return "reset the app so the done check reads false, then `jevitate journey run " + id + "`";
+    default:
+      return `jevitate journey run ${id}`;
+  }
+}
+
+/** The job verdict in words, with when it was read and, when it does not read `achieved`, the fix. */
+function jobLine(job: NonNullable<JourneyReview["job"]>, id: string): string {
+  const why = JOB_BASIS_TEXT[job.basis] ?? job.basis;
+  const when = job.at === undefined ? "" : ` (${humanTime(job.at)})`;
+  const fix = job.attainment === "achieved" ? "" : job.attainment === "not-achieved" ? ` → jevitate journey run ${id}` : ` → ${jobUnverifiedFix(job.basis, id)}`;
+  const gate = job.attainment === "unverified" ? ` · doneCheckPolicy ${job.doneCheckPolicy}` : "";
+  return `${job.attainment} — ${why}${when}${gate}${fix}`;
 }
 
 export function renderAttention(r: JourneyReview, w: SheetWriter, opts: RenderOptions): void {
@@ -268,6 +317,14 @@ export function renderProvesAtTheEnd(r: JourneyReview, w: SheetWriter, opts: Ren
     for (const p of plans) w.put(`${w.bullet}↺ `, `declared targeted proof: ${p.check} against ${p.mustFailWhen} may relax ${p.relax.join(", ")}`, w.bullet.length + 2);
     w.gap();
   }
+  // Design §3.1: a Journey's own done check, read in a fresh session before step 1 and after the end state.
+  const done = r.proof.doneCheck;
+  if (done !== undefined) {
+    w.head("DONE CHECK", "Done check");
+    const by = done.distinguishedBy === undefined || done.distinguishedBy.length === 0 ? "" : ` · distinguished by ${done.distinguishedBy.join(", ")}`;
+    w.put(w.bullet, `this Journey's own (metadata.done): ${done.check} at ${done.at}, in a fresh session${by}`, w.bullet.length);
+    w.gap();
+  }
 }
 
 export function renderWrites(r: JourneyReview, w: SheetWriter, opts: RenderOptions): void {
@@ -309,8 +366,9 @@ export function renderClear(r: JourneyReview, w: SheetWriter, opts: RenderOption
   const relatedCount = related.size > 0 ? related.size : (r.findings ?? []).filter((f) => f.analyzer === "catalog-analysis" && f.code.startsWith("pair:")).length;
   if (relatedCount > 0) clear.push(`${plural(relatedCount, "related Journey", "related Journeys")} share writes${full ? "" : " (--full for detail)"}`);
   const v = r.proof.verify;
-  if (v.status === "recorded" && !v.stale && v.verdict === "proven") clear.push("mutation proof proven ✓");
-  else if (r.proof.policy?.waiver.status === "valid" && r.proof.policy.mode !== "require-proven") clear.push(`mutation proof inconclusive — explicit waiver: ${r.proof.policy.waiver.reason}`);
+  // Owner decision "Proof role": the job's done check gates; the proof is a checks-strength line.
+  if (v.status === "recorded" && !v.stale && v.verdict === "sensitive") clear.push(`checks strength: sensitive ✓${v.countsForGate === true ? "" : " (does not count for a strict gate: the target cannot be reset)"}`);
+  else if (r.proof.policy?.waiver.status === "valid" && r.proof.policy.mode !== "require-sensitive") clear.push(`mutation proof inconclusive — explicit waiver: ${r.proof.policy.waiver.reason}`);
   if (clear.length > 0) {
     if (w.md) w.out.push("## Clear", "", clear.join(" · "));
     else w.put("CLEAR    ", clear.join(" · "), 9);
@@ -355,8 +413,9 @@ export function renderFullDetail(r: JourneyReview, w: SheetWriter, opts: RenderO
   for (const f of lint.findings) w.put(w.bullet, `${f.level} ${f.rule}${f.step === undefined ? "" : ` (step ${f.step})`}: ${f.message}`);
   if (r.proof.acceptedWeak !== undefined) w.put(w.bullet, `Accepted weak: "${r.proof.acceptedWeak.reason}" (waived: ${r.proof.acceptedWeak.rules.join(", ")})`);
   const v = r.proof.verify;
-  const verify = v.status === "not-verified" ? `not verified — ${v.hint}` : `${v.verdict} (${humanTime(v.at)})${v.stale ? " — STALE: the Journey changed after this proof ran" : ""}${v.reason === undefined ? "" : ` — ${v.reason}`}: ${Object.entries(v.summary).map(([k, n]) => `${n} ${k}`).join(", ")}`;
-  w.put("", `Mutation proof: ${verify}`);
+  const verify = v.status === "not-verified" ? `not verified — ${v.hint}` : `${v.verdict} (${humanTime(v.at)})${v.stale ? ` — STALE: ${STALE_CAUSE_TEXT[v.staleCause ?? "journey-changed"] ?? STALE_CAUSE_TEXT["journey-changed"]}` : ""}${v.reason === undefined ? "" : ` — ${v.reason}`}: ${Object.entries(v.summary).map(([k, n]) => `${n} ${k}`).join(", ")}`;
+  const gate = v.status === "recorded" && v.verdict === "sensitive" ? (v.countsForGate === true ? " — counts for a strict gate" : " — does not count for a strict gate: a proof's strength depends on a target you can reset") : "";
+  w.put("", `Mutation proof (checks strength): ${verify}${gate}`);
   w.gap();
 
   w.h3("Change since last approval");

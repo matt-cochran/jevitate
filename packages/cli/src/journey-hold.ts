@@ -74,6 +74,11 @@ export const HoldRecordSchema = z.strictObject({
   answer: z
     .strictObject({ decision: z.enum(["approved", "rejected"]), provenance: ApprovalProvenanceSchema, at: z.string().min(1).max(64) })
     .optional(),
+  /**
+   * #827 (§5.3): the run was a `journey chain` producer. A resume continues the whole chain: the consumer's
+   * id and the requests file's path, never its content or a value.
+   */
+  chain: z.strictObject({ to: z.string().min(1).max(256), requests: z.string().min(1).max(4096), allowDraft: z.boolean().optional() }).optional(),
 });
 export type HoldRecord = z.infer<typeof HoldRecordSchema>;
 
@@ -276,6 +281,7 @@ async function persistHold(opts: HoldHookOptions, ctx: RunHookContext & PendingA
     checkpoint: checkpointName(id),
     createdAt,
     expiresAt,
+    ...(currentHoldChainContext() === undefined ? {} : { chain: currentHoldChainContext()! }),
   });
   if (opts.inboxDir !== undefined) {
     // The inbox face of the hold, as `queue_action` queues one: the reason is code-templated, never page text or a value.
@@ -298,6 +304,33 @@ async function persistHold(opts: HoldHookOptions, ctx: RunHookContext & PendingA
     await new FsInboxStore(opts.inboxDir, opts.engine ?? currentEngineInfo()).enqueue(item);
   }
   holdIds.set(ctx.hold, id);
+}
+
+// --- Chain context --------------------------------------------------------------------------------------
+
+/** #827: what a chain's producer run carries into a hold it makes, so a resume continues the whole chain. */
+export type HoldChainContext = NonNullable<HoldRecord["chain"]>;
+const chainScope = new AsyncLocalStorage<HoldChainContext>();
+
+/** Runs a chain's producer replay with its chain context: a hold it reaches records it. */
+export function withHoldChainContext<T>(chain: HoldChainContext | undefined, fn: () => Promise<T>): Promise<T> {
+  return chain === undefined ? fn() : chainScope.run(chain, fn);
+}
+
+/** The chain context of the replay running now, if a chain's producer started it. */
+export function currentHoldChainContext(): HoldChainContext | undefined {
+  return chainScope.getStore();
+}
+
+/** The chain a hold belongs to, read without resuming it (inbox resume picks the chain resume by it). */
+export function holdChainOf(id: string, opts: { readonly holdsDir?: string; readonly keyFile?: string } = {}): (HoldChainContext & { readonly from: string }) | undefined {
+  if (!isHoldId(id)) return undefined;
+  try {
+    const record = readHoldRecord(opts.holdsDir ?? defaultHoldsDir(), id, keyOf(opts.keyFile ?? checkpointKeyPath()));
+    return record.chain === undefined ? undefined : { ...record.chain, from: record.journey.id };
+  } catch {
+    return undefined; // The resume itself reports why the hold can't be read.
+  }
 }
 
 // --- Resume scope -------------------------------------------------------------------------------------
@@ -573,7 +606,7 @@ export async function resumeHold(req: ResumeHoldRequest): Promise<ResumeHoldResu
     });
     if (!reconciled.proceed) throw new HoldError(reconciled.code, reconciled.message);
   }
-  const allowedOrigins = effectiveAllowedOrigins(applyJourneyEnvironment(stored, env), env, req.run?.allow ?? []);
+  const allowedOrigins = effectiveAllowedOrigins(applyJourneyEnvironment(stored, env, req.run?.allow ?? []), env, req.run?.allow ?? []);
   const port = (req.browserPortFactory ?? (() => new PlaywrightBrowserPort()))();
   // §5.3: a person completes a handback or secret step in a browser they can see.
   const handback = record.kind !== "approval";

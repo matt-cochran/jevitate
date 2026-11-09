@@ -97,7 +97,7 @@ importers:
         specifier: ^12.0.0
         version: 12.1.0
       playwright:
-        specifier: ^1.49.0
+        specifier: 1.63.0
         version: 1.63.0
     devDependencies:
       '@jevitate/adjudicator':
@@ -225,7 +225,7 @@ importers:
         specifier: workspace:*
         version: link:../screenplay
       playwright:
-        specifier: ^1.49.0
+        specifier: 1.63.0
         version: 1.63.0
     devDependencies:
       '@jevitate/example-site':
@@ -269,7 +269,7 @@ importers:
         specifier: workspace:*
         version: link:../playwright
       playwright:
-        specifier: ^1.49.0
+        specifier: 1.63.0
         version: 1.63.0
 
   packages/jevitate-cli-alias:
@@ -341,7 +341,7 @@ importers:
         specifier: workspace:*
         version: link:../domain
       playwright:
-        specifier: ^1.49.0
+        specifier: 1.63.0
         version: 1.63.0
 
   packages/recorder:
@@ -365,7 +365,7 @@ importers:
         specifier: workspace:*
         version: link:../screenplay
       playwright:
-        specifier: ^1.49.0
+        specifier: 1.63.0
         version: 1.63.0
     devDependencies:
       '@jevitate/example-site':
@@ -438,7 +438,7 @@ importers:
         version: link:../playwright
     devDependencies:
       playwright:
-        specifier: ^1.49.0
+        specifier: 1.63.0
         version: 1.63.0
 
   packages/secrets: {}

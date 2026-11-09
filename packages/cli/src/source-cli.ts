@@ -1,7 +1,7 @@
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { existsSync } from "node:fs";
 import { Command } from "commander";
-import { SecretParamOverMcpError } from "./secret-params.js";
+import { REPLAY_SECRET_FIELD_HELP, SecretParamOverMcpError, collectSecretField, secretFieldErrorOf } from "./secret-params.js";
 import { ParamValidationError } from "@jevitate/journey";
 import { journeyExitCode } from "@jevitate/domain";
 import { ok, fail } from "./envelope.js";
@@ -216,6 +216,7 @@ export function registerSourceCommands(program: Command, deps: CliDeps): void {
   withBrowserLaunchFlags(withEmulationFlags(source.command("run <name> <journeyId>")))
     .description("run a Journey from a trusted remote source through the run-gate")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
+    .option("--secret-field <binding>", REPLAY_SECRET_FIELD_HELP.replace(/ With --env.*$/, " --param wins"), collectSecretField, [] as string[])
     .option(
       "--storage-state <file>",
       "Playwright storageState JSON to start the session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist",
@@ -223,8 +224,9 @@ export function registerSourceCommands(program: Command, deps: CliDeps): void {
     .option("--json", "emit a JSON envelope")
     .option(TAG_FLAG, TAG_HELP, collectTag, [])
     .action(taggedAction(program, "source run", async function (this: Command, name: string, journeyId: string) {
-      const { param, storageState, json, ...emulationFlags } = this.opts<{
+      const { param, secretField, storageState, json, ...emulationFlags } = this.opts<{
         param: Record<string, string>;
+        secretField: string[];
         storageState?: string;
         json?: boolean;
       } & EmulationFlags>();
@@ -249,6 +251,8 @@ export function registerSourceCommands(program: Command, deps: CliDeps): void {
           sourceName: name,
           journeyId,
           params: param,
+          ...(secretField.length === 0 ? {} : { secretFields: secretField }),
+          ...(deps.explore?.env === undefined ? {} : { secretEnv: deps.explore.env }),
           ...(program.configureOutput().writeErr === undefined ? {} : { warn: program.configureOutput().writeErr }),
           ...(sourceRunEmulation === undefined ? {} : { emulation: sourceRunEmulation }),
           ...(storageState !== undefined ? { storageState } : {}),
@@ -266,8 +270,11 @@ export function registerSourceCommands(program: Command, deps: CliDeps): void {
       } catch (err) {
         // Each run-gate refusal maps to a distinct E_SOURCE_RUN* code so a
         // caller can tell WHY the run was refused without string-matching.
+        const secretError = secretFieldErrorOf(err, "E_SOURCE_RUN_ARGS");
         if (err instanceof SiteGateRefusedError || err instanceof SecretParamOverMcpError) {
           emitJson(program, fail(err.code, err.message));
+        } else if (secretError !== undefined) {
+          emitJson(program, fail(secretError.code, secretError.message));
         } else if (err instanceof UnknownSourceError) {
           emitJson(program, fail("E_SOURCE_RUN_UNKNOWN", err.message));
         } else if (err instanceof HashMismatchError) {

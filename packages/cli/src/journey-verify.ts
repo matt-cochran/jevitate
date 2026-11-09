@@ -9,6 +9,7 @@
  * environment as `journey run`. Mutations never send, fabricate or answer a request: they leave a
  * step's action out, ABORT the app's own writes in one step's window, or type `""`.
  */
+import { basename, join, relative } from "node:path";
 import {
   FsJourneyStore,
   JourneyRegistry,
@@ -35,6 +36,7 @@ import {
   paceTailMs,
   pacedReplay,
   planJourneyMutations,
+  endStateIsolationNotes,
   relaxedMutationReplay,
   runDeclaredTargetedProof,
   runTargetedProof,
@@ -52,13 +54,13 @@ import {
   type JourneyMutation,
   type JourneyTargetedProofPlan,
   type MutationFailedSite,
-  type MutationProofVerdict,
   type MutationReplay,
   type MutationRunResult,
   type ReplayPace,
   type SiteArrivals,
   type TargetedProof,
 } from "@jevitate/journey";
+import { proofVerdictFields, type LegacyMutationProofVerdict, type MutationProofVerdict } from "./journey-verify-report.js";
 import { adjudicate, classifyMutation, isolationNoteReason, mutationErrored, type Known, type RunEvidence } from "@jevitate/adjudicator";
 import { DEFAULT_STEP_RESPONSE_TIMEOUT_MS, describeCheck, evaluateNetworkCheckAwaiting, monitorFor, type BlockedWrite, type RequestCapture } from "@jevitate/explore";
 import { clock } from "@jevitate/domain";
@@ -79,7 +81,10 @@ import {
 import { journeyContentHash } from "./journey-annotate-api.js";
 import { evidenceParamsDigest } from "./journey-run-evidence.js";
 import { proofEvidenceOf, type LedgerReplay, type ProofGathering } from "./journey-verify-evidence.js";
-import { journeyReviewHash } from "./journey-review.js";
+import { journeyReviewHash, type JourneyVerifyRecord } from "./journey-review.js";
+import { writeVerifyNativeReport } from "./journey-verify-evidence-file.js";
+import { currentBuildTree, currentEngineInfo } from "./engine.js";
+import { artifactStamp } from "./mission-journal.js";
 import { preflightVerifyRecord, writePreflightedVerifyRecord } from "./journey-review-store.js";
 import { UnknownJourneyError, effectiveAllowedOrigins, redactSecretParams, runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import type { OutcomeCheckFailure } from "./journey-network-checks.js";
@@ -905,7 +910,10 @@ export interface JourneyVerifyReport {
   readonly journeyHash: string;
   readonly executionIdentity: JourneyExecutionIdentity;
   readonly base: { readonly outcome: string; readonly reason?: string };
+  /** 0.30.0 §6.1: `sensitive` (0.29.0's `proven`), `insensitive` or `inconclusive`. */
   readonly verdict: MutationProofVerdict;
+  /** The 0.29.0 word for `verdict` (`proven` for `sensitive`, otherwise equal), carried through 0.31.0 and removed in 0.32.0. */
+  readonly verdictLegacy: LegacyMutationProofVerdict;
   readonly reason?: string;
   /** GAPS 21 (design 5.1, rules-v1 `countsForGate`): whether this proof's target trust lets it count for a strict gate. */
   readonly countsForGate: boolean;
@@ -916,6 +924,13 @@ export interface JourneyVerifyReport {
   readonly suggestedTargetedProofs?: readonly JourneyTargetedProofPlan[];
   /** #787: how many of `mutations` were reused from a checkpoint rather than run by this process. 0 on a run that did not resume. */
   readonly reusedPairs: number;
+  /**
+   * #818: where this report (all of it but this field and `nativeReportError`) was persisted before it
+   * was returned, and the SHA-256 of that file's exact bytes. The canonical receipt names the same file.
+   */
+  readonly nativeReport?: { readonly path: string; readonly sha256: string };
+  /** #818: why the report could not be persisted; then no file is claimed, here or in the receipt. */
+  readonly nativeReportError?: string;
 }
 
 export interface JourneyVerifyPlanReport {
@@ -927,6 +942,8 @@ export interface JourneyVerifyPlanReport {
   readonly pairs: readonly { readonly site: string; readonly check: string; readonly mutation: string; readonly declared?: true }[];
   readonly assertions: readonly { readonly site: string; readonly check: string; readonly mutations: readonly string[] }[];
   readonly summary: Readonly<Record<"mutations" | "pairs" | "assertions" | "unpaired" | "minimumReplays" | "writeReplays", number>>;
+  /** #817: end-state shapes a targeted proof cannot isolate, named before any browser opens. Absent when there are none. */
+  readonly isolationNotes?: readonly { readonly site: string; readonly note: string }[];
 }
 
 /**
@@ -975,6 +992,7 @@ export async function planJourneyVerification(
     const key = assertionSiteKey(site);
     return { site: key, check: describeCheck(site.check), mutations: pairs.filter((pair) => pair.site === key).map((pair) => pair.mutation) };
   });
+  const isolationNotes = endStateIsolationNotes(journey, plan);
   return {
     journeyId: journey.metadata.id,
     journeyHash: journeyContentHash(journey),
@@ -990,13 +1008,11 @@ export async function planJourneyVerification(
       minimumReplays: minimumReplaysOf(plan),
       writeReplays: writeReplaysOf(plan, journeyWriteSteps(journey, opts.readRequests === undefined ? {} : { readRequests: opts.readRequests })),
     },
+    ...(isolationNotes.length === 0 ? {} : { isolationNotes }),
   };
 }
 
-/** The exit code for a proof's verdict (docs/ci.md): 0 proven · 1 insensitive · 2 inconclusive. */
-export function verifyExitCode(verdict: MutationProofVerdict): number {
-  return verdict === "proven" ? 0 : verdict === "insensitive" ? 1 : 2;
-}
+export { verifyExitCode } from "./journey-verify-report.js";
 
 type Run = typeof runJourneyProgrammatically;
 
@@ -1623,15 +1639,6 @@ function withWhatToAdd(reason: string, journey: Journey): string {
   ].join("; ");
 }
 
-/**
- * #812: the report's verdict word for the adjudicator's. Owner decision 4 renames `proven` to `sensitive`
- * (0.30.0 §6.1), but that rename, and `verdictLegacy`, belong to d-vocab-migration: until it lands the
- * report, its exit code and its receipt keep today's word.
- */
-function reportedVerdict(verdict: "sensitive" | "insensitive" | "inconclusive"): MutationProofVerdict {
-  return verdict === "sensitive" ? "proven" : verdict;
-}
-
 /** The parameters as the evidence keeps them: a keyed digest when the verify-checkpoint key can be read (never created here), else a marker. */
 function proofParamsDigest(opts: VerifyJourneyOptions, journey: Journey): string {
   const read = readCheckpointKey(opts.checkpoint?.keyFile ?? checkpointKeyPath());
@@ -1693,7 +1700,8 @@ async function concludeProof(c: ConcludeContext): Promise<JourneyVerifyReport> {
   }));
   const order = new Map(journeyAssertions(journey).map((s, i) => [assertionSiteKey(s), i]));
   const siteOrder = (key: string): number => order.get(key) ?? Number.MAX_SAFE_INTEGER;
-  const verdict = reportedVerdict(checks.verdict);
+  // d-vocab-migration (§6.1): the adjudicator's word is the report's, with the 0.29.0 word beside it.
+  const verdicts = proofVerdictFields(checks.verdict);
   // The evidence names a finding by class; the proof's own words for it also name the lines left open.
   const judgedReason = gathered.taint !== undefined && notIsolated !== undefined && checks.reason === isolationNoteReason(gathered.taint.note, gathered.taint.by) ? notIsolated : checks.reason;
   const reason = plan.pairs.length === 0 && judgedReason?.startsWith("no assertion is paired") === true ? withWhatToAdd(judgedReason, journey) : judgedReason;
@@ -1705,7 +1713,7 @@ async function concludeProof(c: ConcludeContext): Promise<JourneyVerifyReport> {
     journeyHash,
     executionIdentity,
     base: baseFields,
-    verdict,
+    ...verdicts,
     ...(reason === undefined ? {} : { reason }),
     countsForGate: checks.countsForGate,
     mutations,
@@ -1729,23 +1737,71 @@ async function concludeProof(c: ConcludeContext): Promise<JourneyVerifyReport> {
   // secret value happens to be a substring of a digest or protocol discriminant.
   const { executionIdentity: identity, ...redactable } = report;
   const redacted: JourneyVerifyReport = { ...redactSecretParams(redactable, journey, opts.params), executionIdentity: identity };
-  // #432: the verdict is kept beside the Journey (bound to its review hash) for `journey review`.
-  await writePreflightedVerifyRecord(receiptDestination, {
+  // #818: the whole redacted report is on disk before anything is returned or printed, and the receipt binds it.
+  const native = persistNativeReport(receiptDestination, journey, opts.params, redacted, proofContext);
+  const nativeBinding = "error" in native ? { nativeReportError: native.error } : { nativeReport: native };
+  const receipt: JourneyVerifyRecord & { readonly nativeReport?: { readonly path: string; readonly sha256: string }; readonly nativeReportError?: string } = {
     journeyId: journey.metadata.id,
     contentHash: journeyReviewHash(journey),
     proofHash: executionIdentity.proofHash,
     ...(proofContext === undefined ? {} : { proofContext }),
     verdict: redacted.verdict,
     ...(redacted.reason === undefined ? {} : { reason: redacted.reason }),
+    // §5.1: readiness and require-sensitive read whether this proof's target trust lets it count.
+    countsForGate: redacted.countsForGate,
     summary: { ...redacted.summary },
     ...(redacted.suggestedTargetedProofs === undefined ? {} : { suggestedTargetedProofs: redacted.suggestedTargetedProofs }),
     ...(redacted.reusedPairs === 0 ? {} : { reusedPairs: redacted.reusedPairs }),
+    ...("error" in native ? { nativeReportError: native.error } : { nativeReport: { path: relative(receiptDestination.parent, native.path), sha256: native.sha256 } }),
+    // #816: the engine that computed this proof's identity, so a reader can say a mismatch is the engine's, not the Journey's.
+    engine: receiptEngine(),
     at: clock.nowIso(),
-  });
+  };
+  // #432: the verdict is kept beside the Journey (bound to its review hash) for `journey review`.
+  await writePreflightedVerifyRecord(receiptDestination, receipt);
   const errorGap = checkpoint !== undefined && isRepairableIsolation(checkpoint.body.taint) ? true : !tainted() && mutations.some(mutationErrored);
   checkpoint?.finish(redacted.verdict, errorGap);
   opts.onEvidence?.(evidence);
-  return redacted;
+  return { ...redacted, ...nativeBinding };
+}
+
+/**
+ * #818: the redacted report, with the engine and the immutable bindings that identify the run, under
+ * `.verify/reports/<id>/`. A secret parameter's value found anywhere in it withholds the file entirely.
+ */
+function persistNativeReport(
+  destination: Awaited<ReturnType<typeof preflightVerifyRecord>>,
+  journey: Journey,
+  params: Readonly<Record<string, string>>,
+  report: JourneyVerifyReport,
+  proofContext: ReturnType<typeof journeyProofContext>,
+): { readonly path: string; readonly sha256: string } | { readonly error: string } {
+  const at = clock.nowIso();
+  const envelope = {
+    schemaVersion: 1,
+    kind: "journey-verify-native-report",
+    engine: { ...currentEngineInfo(), tree: currentBuildTree() },
+    journeyId: journey.metadata.id,
+    journeyHash: report.journeyHash,
+    contentHash: journeyReviewHash(journey),
+    proofHash: report.executionIdentity.proofHash,
+    ...(proofContext === undefined ? {} : { proofContext }),
+    at,
+    report,
+  };
+  const secrets = secretParamNames(journey, params).flatMap((n) => (params[n] === undefined || params[n] === "" ? [] : [params[n]!]));
+  const text = JSON.stringify(envelope);
+  if (secrets.some((v) => text.includes(v) || text.includes(JSON.stringify(v).slice(1, -1)))) {
+    return { error: "the native report could not be written (withheld: it still carried a secret parameter value); the proof's verdict stands, but its full report exists only in this output" };
+  }
+  const dir = join(destination.parent, "reports", basename(destination.path, ".json"));
+  return writeVerifyNativeReport(dir, artifactStamp(at), envelope);
+}
+
+/** #816: the version and commit a receipt names as its producer (no build time: it is not identity). */
+function receiptEngine(): { readonly version: string; readonly commit: string } {
+  const { version, commit } = currentEngineInfo();
+  return { version, commit };
 }
 
 async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned: { session?: ProofCheckpointSession }): Promise<JourneyVerifyReport> {

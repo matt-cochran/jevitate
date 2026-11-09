@@ -196,8 +196,8 @@ describe("#543 http end-state check on a split-origin app (served)", () => {
     expect(verifyReport.exitCode ?? 0).toBe(0);
   });
 
-  it("verify --mutate's verdict is proven", () => {
-    expect(verifyReport.data.verdict).toBe("proven");
+  it("verify --mutate's verdict is sensitive", () => {
+    expect(verifyReport.data.verdict).toBe("sensitive");
   });
 
   it("the http end-state check is sensitive", () => {

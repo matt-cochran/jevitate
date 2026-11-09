@@ -62,6 +62,9 @@ function boundFieldLocator(page: Page, f: SecretField): Locator {
       return page.locator(`[id=${v}]`);
     case "name":
       return page.locator(`[name=${v}]`);
+    case "param":
+      // #819: a replay's parameter binding: no element on a page is it.
+      return page.locator(":not(*)");
   }
 }
 

@@ -100,11 +100,14 @@ const SECRET_MODE_AUTO = "the secret mode is `auto` (journey-secret-mode.ts); on
 const QUEUED_JOURNEY_CALL = "#797: a queued Journey call carries only id, hash, non-secret params and env (QueuedJourneyCall, a closed schema): no emulation, fixtures or self-heal; run_journey takes those directly";
 const SECRET_ENV_PROCESS = "a target's secretFields `env:` sources are read from this process's environment (the default)";
 
+const TRUST_FROM_RUN_MODE = "#802: the target trust defaults to the run mode the surface decided (run-metadata `runMode`, `run.target.trust`); the option is a seam";
+
 const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // ── explore CLI: the reference surface ──────────────────────────────────────────────────────
-  "goal-strategy.ts runExploration": { hostHealth: SEAM, successAssertion: "the CLI passes --success as successChecks", nowIso: SEAM },
+  "goal-strategy.ts runExploration": { hostHealth: SEAM, successAssertion: "the CLI passes --success as successChecks", nowIso: SEAM, targetTrust: TRUST_FROM_RUN_MODE },
   // #369: every explore-author-journey take is explore's goal run — what authoring leaves out, and why.
   "explore-author.ts runExploration": {
+    targetTrust: TRUST_FROM_RUN_MODE,
     hostHealth: SEAM,
     nowIso: SEAM,
     successAssertion: "authorJourney hands every check (successAssertion included) to the take as successChecks",
@@ -299,6 +302,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
 
   // ── mission run queue (MCP queue_exploration) ───────────────────────────────────────────────
   "mission-queue-runner.ts runExploration": {
+    targetTrust: TRUST_FROM_RUN_MODE,
     blockOffAllowlistNavigation: QUEUE_NARROW,
     secretCommand: "#324: a cmd: secret source runs an operator command — explore --allow-secret-cmd only, never a queued or suite mission",
     secretCommandAttempts: "#359: the bound on a cmd: secret source's command runs — goes with secretCommand (explore --allow-secret-cmd only)",
@@ -359,6 +363,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
 
   // ── check suites ────────────────────────────────────────────────────────────────────────────
   "check-execute.ts runExploration": {
+    targetTrust: TRUST_FROM_RUN_MODE,
     doneCheck: "#800: a suite item takes no --job (suite-explore-options excludes it); a suite gates on its items' --success checks",
     doneCheckBasis: "#800: a suite item takes no --job (suite-explore-options excludes it); a suite gates on its items' --success checks",
     doneCheckPolicy: "#800: a suite item takes no --job (suite-explore-options excludes it); a suite gates on its items' --success checks",

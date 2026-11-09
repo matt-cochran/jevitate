@@ -1,4 +1,4 @@
-import { warnSecretParamsOnArgv } from "./secret-params.js";
+import { REPLAY_SECRET_FIELD_HELP, collectSecretField, secretFieldErrorOf, warnSecretParamsOnArgv, withCommandSecretParams, type BoundSecretParams } from "./secret-params.js";
 import { JourneyRunRefusedError } from "@jevitate/mcp-facade";
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { existsSync } from "node:fs";
@@ -35,6 +35,7 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
   withEnvironmentFlags(withBrowserLaunchFlags(withEmulationFlags(load.command("run <journeyId>"))))
     .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
+    .option("--secret-field <binding>", REPLAY_SECRET_FIELD_HELP, collectSecretField, [] as string[])
     // `--authorized-origin` is mandatory, but enforced IN THE ACTION (below)
     // via a `fail` envelope rather than commander's `.requiredOption` — which
     // hard-exits via `process.exit`, inconsistent with this CLI's convention
@@ -55,9 +56,10 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
     .option("--json", "emit a JSON envelope")
     .option(TAG_FLAG, TAG_HELP, collectTag, [])
     .action(taggedAction(program, "load run", async function (this: Command, journeyId: string) {
-      const { dir, param, authorizedOrigin, concurrency, iterations, seed, storageState: storageStateFlag, json, env: envName, baseUrl, ...emulationFlags } = this.opts<{
+      const { dir, param: paramFlags, secretField, authorizedOrigin, concurrency, iterations, seed, storageState: storageStateFlag, json, env: envName, baseUrl, ...emulationFlags } = this.opts<{
         dir?: string;
         param: Record<string, string>;
+        secretField: string[];
         authorizedOrigin: string[];
         concurrency: string;
         iterations: string;
@@ -65,7 +67,7 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
         storageState?: string;
         json?: boolean;
       } & EmulationFlags & EnvironmentFlags>();
-      await warnSecretParamsOnArgv(program.configureOutput().writeErr, resolveJourneysDir(deps, dir), [journeyId], param);
+      await warnSecretParamsOnArgv(program.configureOutput().writeErr, resolveJourneysDir(deps, dir), [journeyId], paramFlags, "load run");
       if (authorizedOrigin.length === 0) {
         emitJson(
           program,
@@ -80,6 +82,17 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
       } catch (err) {
         if (!isEnvironmentError(err)) throw err;
         emitJson(program, fail(err.code, err.message));
+        return;
+      }
+      // #827: a secret parameter from the environment (--secret-field, targets.json), off the command line.
+      let param: Record<string, string>;
+      let bound: BoundSecretParams | undefined;
+      try {
+        ({ params: param, bound } = await withCommandSecretParams({ dir: resolveJourneysDir(deps, dir), ids: [journeyId], params: paramFlags, flags: secretField, environment, env: deps.explore?.env ?? process.env }));
+      } catch (err) {
+        const e = secretFieldErrorOf(err, "E_LOAD_RUN_ARGS");
+        if (e === undefined) throw err;
+        emitJson(program, fail(e.code, e.message));
         return;
       }
       const storageState = storageStateFlag ?? environment?.storageState;
@@ -100,6 +113,8 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
           dir: resolveJourneysDir(deps, dir),
           id: journeyId,
           params: param,
+          ...(bound === undefined ? {} : { boundSecretParams: bound }),
+          ...(deps.explore?.env === undefined ? {} : { secretEnv: deps.explore.env }),
           concurrency: Number(concurrency),
           iterationsPerActor: Number(iterations),
           seed: Number(seed),

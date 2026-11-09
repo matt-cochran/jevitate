@@ -68,6 +68,7 @@ const USAGE_ERROR_CODES: ReadonlySet<string> = new Set([
   "E_MISSING_CREDENTIAL",
   "E_UNAUTHORIZED_EXPLORE_TARGET", // the target is outside the allowlist
   "E_EXPLORE_FIXTURE", // --fixture names no fixture
+  "E_EXPLORE_JOB", // `explore --job` names no job in .jevitate/jobs.json (or the catalog cannot be read), as the other unknown-id refusals
   "E_SELF_HEAL_MODE",
   "E_UX_MIN_CONFIDENCE",
   "E_UX_MAX_FINDINGS_PER_PAGE",

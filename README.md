@@ -342,13 +342,21 @@ Recording are flushed step by step.
 | Outcome | Exit | Meaning |
 |---|---|---|
 | `clean` | 0 | finished its budget and found nothing (goal: the success checks held) |
-| `defects-found` | 1 | at least one confirmed defect (goal: a success check did not hold) |
-| `inconclusive` / `crashed` | 2 | the run itself could not do its work, so its silence proves nothing |
+| `defects-found` | 1 | at least one confirmed defect (goal: a success check did not hold; Journey: the job's done check read false) |
+| `inconclusive` / `crashed` | 2 | the run itself could not do its work, so its silence proves nothing; also a pass whose job is `unverified`, and a goal run stopped at a boundary |
 | `hang` | 3 | the app hung, and the hang reproduced on replay |
 | `intermittent` | 4 | a hang was observed but did not reproduce on every replay |
 
+**Changed in 0.30.0:** a run that passes but cannot show the user's job got done exits `2`, not `0`.
+That covers `journey run` and `run_journey` of a Journey whose job has no done check, and a goal run
+passed without `--success` or `--job`. Add a done check to the job, or set `"doneCheckPolicy":
+"advisory"` in `.jevitate/project.json` to keep exit `0` meanwhile
+([how to migrate](./docs/outcomes.md#what-changed-in-0300)). A Journey whose steps pass but whose done check
+reads false exits `1`, and a goal run that stops at a wall, a lost session or a link it may not follow
+exits `2` (`goalOutcome: "boundary"`).
+
 A usage or input error (a bad flag, an unreadable suite, an unknown id) exits `64`, never `1`.
-Goal runs also report their own `outcome` (`succeeded`, `failed`, `exhausted`, `blocked`, …). Every value, and
+Goal runs also report their own `outcome` (`succeeded`, `failed`, `exhausted`, `blocked`, `boundary`, …). Every value, and
 the [exit codes for every command](./docs/outcomes.md#exit-codes), is in
 [docs/outcomes.md](./docs/outcomes.md). Without `--json`, commands print a human summary; with
 `--json`, the JSON envelope.

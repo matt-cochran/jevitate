@@ -15,8 +15,13 @@ import { isStepIdOnlyStale } from "./journey-stale-api.js";
 import { findProjectDir } from "./project-dir.js";
 import { journeyTargetSafety } from "./journey-target-policy.js";
 import { loadProjectConfig } from "./project-config.js";
+import { journeyRunLogsRoot, latestJourneyRun } from "./journey-run-record.js";
 
-type ReviewOptions = { readonly targetsFile?: string; readonly catalogDir?: string | null; readonly readiness?: boolean; readonly strict?: boolean; readonly jev?: JevSetup; readonly action?: ApprovalAction };
+type ReviewOptions = {
+  readonly targetsFile?: string; readonly catalogDir?: string | null; readonly readiness?: boolean; readonly strict?: boolean; readonly jev?: JevSetup; readonly action?: ApprovalAction;
+  /** Where the run records are read from (default the logs beside the journeys dir: `<.jevitate>/logs`). */
+  readonly logsRoot?: string;
+};
 
 /**
  * #765: the status of a Journey's pending annotation draft — `current` when the Journey is
@@ -92,6 +97,7 @@ async function reviewNativeJourney(journeysDir: string, id: string, journey: Jou
   const pending = await readJourneyProposal(journeysDir, id);
   const proposalProblem = pending === null ? null : checkProposal(journey, pending);
   const approvedSnapshot = await readApprovedSnapshot(journeysDir, id);
+  const project = loadProjectConfig(opts.catalogDir ?? findProjectDir());
   const review = buildJourneyReview(journey, {
     ...(opts.strict === true ? { strict: true } : {}),
     anchorIssues: await journeyAnchorIssues(journey, { catalogDir: opts.catalogDir === undefined ? resolveCatalogDir(undefined) : opts.catalogDir, journeysDir, catalog }),
@@ -104,7 +110,10 @@ async function reviewNativeJourney(journeysDir: string, id: string, journey: Jou
     catalog: { links, findings, nativeOwnerFindings },
     approvedSnapshot,
     lastVerify: await readVerifyRecord(journeysDir, id),
-    proofPolicy: loadProjectConfig(opts.catalogDir ?? findProjectDir()).mutationProofPolicy ?? "advisory",
+    proofPolicy: project.mutationProofPolicy ?? "advisory",
+    // Owner decision "Proof role": the sheet leads with the latest run's job verdict.
+    latestRun: latestJourneyRun(opts.logsRoot ?? journeyRunLogsRoot(journeysDir), id, journey) ?? null,
+    ...(project.doneCheckPolicy === undefined ? {} : { doneCheckPolicy: project.doneCheckPolicy }),
     proofWaiver: await readProofWaiver(journeysDir, id),
     ...(annotationDraft === undefined ? {} : { annotationDraft }),
   });

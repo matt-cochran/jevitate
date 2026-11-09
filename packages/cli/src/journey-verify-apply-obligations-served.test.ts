@@ -87,7 +87,7 @@ afterAll(async () => {
 
 describe("Apply closes its own dialog and requires both data and action sensitivity (served)", () => {
   it("proves an honest Apply through independent data and action witnesses", () => {
-    expect(echo.verdict).toBe("proven");
+    expect(echo.verdict).toBe("sensitive");
     for (const site of ["step:3", "end-state:0"]) {
       expect(echo.assertions.find((a) => a.site === site)?.obligations).toEqual([
         expect.objectContaining({ kind: "data", verdict: "sensitive" }),

@@ -9,7 +9,7 @@ import { SiteGateRefusedError } from "@jevitate/runtime";
 import { UnknownJourneyError, JourneyRequiresAuthError } from "../journey-api.js";
 import { ExtensionMismatchError } from "../browser-run-options.js";
 import { withSiteGate } from "../site-gate-cli.js";
-import { warnSecretParamsOnArgv } from "../secret-params.js";
+import { REPLAY_SECRET_FIELD_HELP, collectSecretField, secretFieldErrorOf, warnSecretParamsOnArgv, withBoundSecretParams, withCommandSecretParams, type BoundSecretParams } from "../secret-params.js";
 import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFlags } from "../fixture-cli.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "../mission-fixtures.js";
 import { withRecordedFixtures, fixtureDriftFor, type FixtureDrift } from "../journey-fixtures.js";
@@ -67,6 +67,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
     .option("--resume", "with --mutate: continue an interrupted proof of the same Journey and configuration, or one that ended inconclusive on errored replays, reusing finished pairs after the base replay passes again and running errored pairs again; any mismatch, a damaged or over-24h checkpoint, or a live verifier is refused and never starts over")
     .option("--dir <path>", DEPRECATED_DIR_HELP)
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
+    .option("--secret-field <binding>", REPLAY_SECRET_FIELD_HELP, collectSecretField, [] as string[])
     .option("--storage-state <file>", "Playwright storageState JSON to start each replay authenticated (as journey run)")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
@@ -74,11 +75,11 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
       const layout = journeyLayout(program, deps, { dir: locationFlags.dir, project: locationFlags.project, journeysDir: locationFlags.journeysDir });
       if (layout === null) return;
       const verifyJourneysDir = layout.journeysDir;
-      const { mutate, plan, status, resume, param, storageState: storageStateFlag, json, env: envName, baseUrl, ...emulationFlags } = this.opts<
-        { mutate?: boolean; plan?: boolean; status?: boolean; resume?: boolean; dir?: string; param: Record<string, string>; storageState?: string; json?: boolean } & EnvironmentFlags & EmulationFlags
+      const { mutate, plan, status, resume, param, secretField, storageState: storageStateFlag, json, env: envName, baseUrl, ...emulationFlags } = this.opts<
+        { mutate?: boolean; plan?: boolean; status?: boolean; resume?: boolean; dir?: string; param: Record<string, string>; secretField: string[]; storageState?: string; json?: boolean } & EnvironmentFlags & EmulationFlags
       >();
       const checkpointPath = verifyCheckpointPath(layout.projectDir ?? homeDataRoot(), verifyJourneysDir, id);
-      await warnSecretParamsOnArgv(program.configureOutput().writeErr, verifyJourneysDir, [id], param);
+      await warnSecretParamsOnArgv(program.configureOutput().writeErr, verifyJourneysDir, [id], param, "journey verify");
       if (status === true) {
         // `--mutate --status` reads as well as `--status`: it names the proof being asked about, and runs none.
         if (plan === true || resume === true) {
@@ -124,6 +125,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
               out?.(`${mutation.id} (step ${mutation.step}) -> ${sites.length === 0 ? "unpaired" : sites.join(", ")}\n`);
             }
             for (const assertion of report.assertions) if (assertion.mutations.length === 0) out?.(`unpaired ${assertion.site} ${assertion.check}\n`);
+            for (const { note } of report.isolationNotes ?? []) out?.(`note: ${note}\n`);
             if (noReset !== undefined) out?.(`${noReset}\n`);
             out?.(
               `planned — journey '${report.journeyId}': ${report.summary.mutations} mutations, ${report.summary.pairs} pairs, ${report.summary.assertions} assertions, ${report.summary.unpaired} unpaired, at least ${report.summary.minimumReplays} replays\n`,
@@ -153,6 +155,17 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
         ...(ownFixtureFlags.before === undefined && environment?.hooks?.before !== undefined ? { before: environment.hooks.before } : {}),
         ...(ownFixtureFlags.after === undefined && environment?.hooks?.after !== undefined ? { after: environment.hooks.after } : {}),
       };
+      // #827: a secret parameter from the environment (--secret-field, targets.json), off the command line.
+      let runParams: Record<string, string>;
+      let bound: BoundSecretParams | undefined;
+      try {
+        ({ params: runParams, bound } = await withCommandSecretParams({ dir: verifyJourneysDir, ids: [id], params: param, flags: secretField, environment, env: deps.explore?.env ?? process.env }));
+      } catch (err) {
+        const e = secretFieldErrorOf(err, "E_JOURNEY_VERIFY_ARGS");
+        if (e === undefined) throw err;
+        emitJson(program, fail(e.code, e.message));
+        return;
+      }
       const storageState = storageStateFlag ?? environment?.storageState;
       if (storageState !== undefined && !existsSync(storageState)) {
         emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", `storage state not found: ${storageState}`));
@@ -170,7 +183,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
           {
             command: "journey verify",
             json: json === true,
-            secrets: secretParamValues(proved, param),
+            secrets: secretParamValues(proved, runParams),
             artifactPath: join(logsDir, `${runStem}.json`),
             inactivityMs: proofInactivityMs(proved),
           },
@@ -180,13 +193,13 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
         // #544: no --fixtures → the Journey's recorded fixtures (a missing file is refused before any browser).
         const recorded = await withRecordedFixtures(fixtureFlags, { dir: verifyJourneysDir, id });
         let fixtureDrift: FixtureDrift | undefined;
-        const report = await withSiteGate(resolveDbPath(deps), (siteGate) =>
+        const report = await withSiteGate(resolveDbPath(deps), (siteGate) => withBoundSecretParams(bound, () =>
           verifyJourneyMutations(
             {
               ...(siteGate === undefined ? {} : { siteGate }),
               dir: verifyJourneysDir,
               id,
-              params: param,
+              params: runParams,
               onEvidence: (evidence) => {
                 const problem = writeVerifyEvidence(join(logsDir, runStem), evidence);
                 if (problem !== undefined) program.configureOutput().writeErr?.(`${problem}\n`);
@@ -229,9 +242,11 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
               },
             },
             seams.run,
-          ),
+          )),
         );
         const code = verifyExitCode(report.verdict);
+        // #818: the report was persisted (or why not) before this output; a failure is never silent.
+        if (report.nativeReportError !== undefined) program.configureOutput().writeErr?.(`warning: ${report.nativeReportError}\n`);
         const noReset = resetDeclared(proved, recorded.flags, environment) ? undefined : verifyNoResetLine((await planJourneyVerification({ dir: verifyJourneysDir, id, params: param, ...(readRequests === undefined ? {} : { readRequests }) })).summary);
         if (json) {
           emitJson(program, ok(withEngine({ ...report, ...(fixtureDrift === undefined ? {} : { fixtureDrift }), ...(noReset === undefined ? {} : { noReset }) })));
@@ -240,6 +255,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
           if (fixtureDrift !== undefined) program.configureOutput().writeErr?.(`warning: ${(fixtureDrift as FixtureDrift).message}\n`);
           for (const a of report.assertions) out?.(`${verifyAssertionLine(a)}\n`);
           if (noReset !== undefined) out?.(`${noReset}\n`);
+          if (report.nativeReport !== undefined) program.configureOutput().writeErr?.(`native report: ${report.nativeReport.path} (sha256 ${report.nativeReport.sha256})\n`);
           const s = report.summary;
           const targeted = s.targeted > 0 ? `, ${s.targeted} targeted` : "";
           const reused = report.reusedPairs > 0 ? `, ${report.reusedPairs} pairs reused from a checkpoint` : "";

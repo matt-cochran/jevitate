@@ -86,6 +86,10 @@ export interface McpJourneyRunOptions {
    * Set only by `run_journey`'s handler, never from an argument; the value goes to the browser only.
    */
   readonly boundSecretParams?: BoundSecretParams;
+  /** #800 `--no-done-check`: read nothing; the job reads unverified (basis no-check). */
+  readonly noDoneCheck?: boolean;
+  /** #800 `--require-done-check`: an unverified job exits 2 even under project.json's advisory policy. */
+  readonly requireDoneCheck?: boolean;
 }
 
 /**
@@ -270,6 +274,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           ...(o?.environment?.baseUrl === undefined ? {} : { origin: o.environment.baseUrl }),
           ...(storageState === undefined ? {} : { storageState }),
           ...(deps.browserPortFactory === undefined ? {} : { sessionPortFactory: deps.browserPortFactory }),
+          ...(o?.noDoneCheck === true ? { skip: true } : {}),
         }, () => runJourneyProgrammatically({
           dir: deps.journeysDir,
           id,
@@ -294,7 +299,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           // §5.3: a target's secretFields `env:` sources are read from the server's environment (a test seam).
           ...(deps.secretEnv === undefined ? {} : { secretEnv: deps.secretEnv }),
           ...(deps.browserPortFactory === undefined ? {} : { browserPortFactory: deps.browserPortFactory }),
-        })) }),
+        }), o?.requireDoneCheck === true ? "require" : undefined) }),
       ))));
   const pathRoots = deps.pathRoots ?? defaultMcpPathRoots();
   const credentialStore = deps.credentialStore ?? envCredentialStore();
