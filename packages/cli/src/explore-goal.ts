@@ -688,9 +688,9 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
     // `--allow-vacuous-checks` is the operator's explicit acceptance of a goal that held before any action: that
     // `succeeded` stays (the flag's whole meaning), every other zero-action ending is `not-started`.
     const endedAs = host.outcome === preHost ? goalSoFar : host.outcome;
-    const goalOutcome = (opts.allowVacuousChecks === true && endedAs === "succeeded" ? endedAs : startedOutcome(endedAs, mission.run.actions, failureNow?.kind)) as GoalBasedOutcome;
+    const modelGoalOutcome = (opts.allowVacuousChecks === true && endedAs === "succeeded" ? endedAs : startedOutcome(endedAs, mission.run.actions, failureNow?.kind)) as GoalBasedOutcome;
     // #423: THE table (domain `goalMissionOutcome`) — the exit code is unchanged for every combination.
-    const foldedOutcome = goalMissionOutcome(goalOutcome, defectOutcome.status);
+    const foldedOutcome = goalMissionOutcome(modelGoalOutcome, defectOutcome.status);
     // 0.30.0 (#800): the job verdict and decision 3's fold (goalJobDecision: harness #802, find-out exempt).
     const verifiedBy = mission.run.outcome.status === "completed" ? mission.run.outcome.verifiedBy : undefined;
     // rc-030: the loop reads the done check only on a `done` code accepted. A run that ends without that verdict
@@ -706,20 +706,23 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
       lastReading,
       basis: opts.doneCheckBasis,
       unknownReason: opts.doneCheckUnknownReason?.(),
-      goalOutcome,
+      goalOutcome: modelGoalOutcome,
       foldedOutcome,
       policy: opts.doneCheckPolicy,
       requireDoneCheck: opts.requireDoneCheck,
       trust: opts.targetTrust ?? currentRunMetadata()?.runMode?.().target.trust,
     });
     // Decision 2: a pass whose done check read false is `defects-found` (exit 1), `done-check-failed`.
-    const jobFold = goalJobFold({ foldedOutcome, job, unverifiedPass });
+    // rc-030b: the goal's own fields agree with the job's fold (a done check read false over a pass is
+    // `failed`, never `succeeded`; read true over a model-only give-up is `succeeded`: job gates, proof advisory).
+    const jobFold = goalJobFold({ foldedOutcome, job, unverifiedPass, goalOutcome: modelGoalOutcome, defects: defectOutcome.status, runFailed: failureNow !== undefined });
     const missionOutcome: MissionOutcome = jobFold.missionOutcome;
+    const goalOutcome: GoalBasedOutcome = jobFold.goalOutcome ?? modelGoalOutcome;
     const goalReason = goalReasonOf({
       goalOutcome,
       ...(mission.goalEnding === undefined ? {} : { overridden: mission.goalEnding }),
       stop: mission.run.stop,
-      ...(failureNow === undefined ? {} : { failureKind: failureNow.kind }),
+      ...((jobFold.failure ?? failureNow) === undefined ? {} : { failureKind: (jobFold.failure ?? failureNow)!.kind }),
       ...(mission.run.missCause === undefined ? {} : { missCause: mission.run.missCause }),
     });
     journal.writeRecording(recording);
@@ -829,9 +832,10 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
             // #423: `reason` stays prose — the goal's own account (with its correlated server cause),
             // then what the defect oracles found; the structured verdicts are goalOutcome/defectOutcome.
             const parts: string[] = [];
-            const own = withServerCause(mission.reason, goalOutcome, serverLogRun?.transcript);
+            const own = withServerCause(mission.reason, modelGoalOutcome, serverLogRun?.transcript);
             if (own !== undefined) parts.push(own);
             if (jobFold.failure !== undefined) parts.push(jobFold.failure.message);
+            if (jobFold.note !== undefined) parts.push(jobFold.note);
             if (unverifiedPass) parts.push("the goal passed but no done check verified the job (add --success or --job <id>)");
             if (oracleBroken) parts.push(serverLogOutcomeReason("inconclusive", serverLogRun));
             if ((serverLogRun?.defects.length ?? 0) > 0) parts.push(serverLogOutcomeReason("defects-found", serverLogRun));

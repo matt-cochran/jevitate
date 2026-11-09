@@ -65,7 +65,8 @@ The other changes to exit codes:
 | a Journey's steps pass but its job's done check reads false after the run | `0` | `1` `defects-found`, `failure.kind: "done-check-failed"` |
 | a goal run stops at a boundary: a wall, a lost session, a link off the allowlist, a new tab | `1` `defects-found` (`blocked`) | `2` `inconclusive`, `goalOutcome: "boundary"` ([boundary outcomes](#boundary-outcomes)) |
 | a goal run covers every control it can reach and none leads toward the goal | `1` `defects-found` (`blocked`, `exhausted`) | `2` `inconclusive`, `goalReason: "no-route-found"` ([no route found](#no-route-found)) |
-| a goal run passes, but its job's done check reads false (`--job`) | `0`, `job.attainment: "not-achieved"` | `1` `defects-found`, `failure.kind: "done-check-failed"` |
+| a goal run passes, but its job's done check reads false (`--job`) | `0`, `job.attainment: "not-achieved"` | `1` `defects-found`, `failure.kind: "done-check-failed"`, `goalOutcome: "failed"`, `goalReason: "done-check-failed"` |
+| a goal run gives up or runs out of budget, but its job's done check read false before and true after (`--job`) | `1` `defects-found` (`blocked`, `exhausted`) | `0` `clean`, `goalOutcome: "succeeded"` (the job gates; the model's ending is advisory) |
 | `journey verify --mutate` with every mutation noticed | `0`, `verdict: "proven"` | `0`, `verdict: "sensitive"`, `verdictLegacy: "proven"` until 0.32.0 ([`proven` is now `sensitive`](#proven-is-now-sensitive)) |
 
 No exit number changes its meaning. Mutation proof is advisory: the job's done check is the gate
@@ -467,7 +468,12 @@ A goal run folds the same way: a pass with an `unverified` job is `inconclusive`
 `require`, unless an independent `--success` check verified it. `--require-done-check` makes that pass
 `unverified` too. A goal pass whose job is `not-achieved` (the final done-check reading is false) is
 `defects-found`, exit `1`, `failure.kind: "done-check-failed"`, under either policy and whatever verified
-the pass: the find-out exemption covers an `unverified` job only, never a `not-achieved` one.
+the pass: the find-out exemption covers an `unverified` job only, never a `not-achieved` one. Its goal fields
+agree: `goalOutcome: "failed"`, `goalReason: "done-check-failed"`. The other way round, the job gates and the
+model's own ending is advisory: a goal run that gave up, stalled or ran out of budget (`blocked`,
+`exhausted`) while its job's done check read false before the run and true after it (`basis: done-check`)
+did the job: `goalOutcome: "succeeded"`, exit `0`, with no defect and no run failure. A `--success` check
+that did not hold, a defect, a hang, a crash, a boundary or a run with no action keeps its own ending.
 
 #### `doneCheckPolicy`, `--require-done-check`, `--no-done-check`
 

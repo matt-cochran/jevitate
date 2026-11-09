@@ -315,6 +315,8 @@ export function goalMissionOutcome(goalOutcome: GoalOnlyOutcome | MissionOutcome
  * `succeeded`), decided by code from the run's own state, never parsed from `reason`:
  *
  *  - `success-check-failed` — the model said done, but an independent success check did not hold.
+ *  - `done-check-failed` — (`failed`, rc-030b) the goal passed, but its job's done check read false in a
+ *                         fresh session (`failure.kind: "done-check-failed"`, exit 1).
  *  - `not-found`        — a find-out goal's report found no answer on the pages it searched.
  *  - `ungrounded`       — the model's answer was rejected as not grounded until the run gave up.
  *  - `blocked-by-policy` — the model gave up after the safety policy refused a control it chose.
@@ -335,6 +337,8 @@ export function goalMissionOutcome(goalOutcome: GoalOnlyOutcome | MissionOutcome
  */
 export const GOAL_REASONS = [
   "success-check-failed",
+  // rc-030b: a pass whose job's done check read false (`failure.kind: "done-check-failed"`).
+  "done-check-failed",
   "not-found",
   "ungrounded",
   "blocked-by-policy",
@@ -383,7 +387,7 @@ export function goalReasonOf(i: GoalReasonInput): GoalReason | undefined {
     case "clean":
       return undefined;
     case "failed":
-      return "success-check-failed";
+      return i.failureKind === "done-check-failed" ? "done-check-failed" : "success-check-failed";
     case "exhausted":
       return "budget";
     case "blocked":

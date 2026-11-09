@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MISSION_EXIT_CODES } from "@jevitate/domain";
+import { goalMissionOutcome, goalReasonOf, MISSION_EXIT_CODES } from "@jevitate/domain";
 import { goalJobDecision, goalJobFold, type GoalJobInput } from "./explore-job-done-check.js";
 import { EXIT_CODES, exitCodeForError } from "./exit-codes.js";
 
@@ -119,5 +119,41 @@ describe("decision 2: a pass whose done check reads false exits 1 (goalJobFold)"
     expect(goalJobFold({ foldedOutcome: "clean", ...unverified })).toEqual({ missionOutcome: "inconclusive" });
     const harness = goalJobDecision(pass({ hasReader: true, lastReading: false, trust: "harness" }));
     expect(goalJobFold({ foldedOutcome: "clean", ...harness })).toEqual({ missionOutcome: "clean" });
+  });
+});
+
+describe("rc-030b: the goal's own fields agree with the job fold", () => {
+  it("job-http looks-done-wrong-page r8: a pass whose done check read false is goalOutcome failed, goalReason done-check-failed, exit 1", () => {
+    const d = goalJobDecision(pass({ verifiedBy: "grounded-judgment", hasReader: true, lastReading: false }));
+    const f = goalJobFold({ foldedOutcome: "clean", ...d, goalOutcome: "succeeded", defects: "none", runFailed: false });
+    expect(f).toMatchObject({ missionOutcome: "defects-found", goalOutcome: "failed", failure: { kind: "done-check-failed" } });
+    expect(goalReasonOf({ goalOutcome: f.goalOutcome!, stop: "done", failureKind: f.failure!.kind })).toBe("done-check-failed");
+    // The table agrees: the goal's own ending folds to the same mission outcome and exit code.
+    expect(goalMissionOutcome(f.goalOutcome!, "none")).toBe(f.missionOutcome);
+    expect(MISSION_EXIT_CODES[f.missionOutcome]).toBe(1);
+  });
+
+  it("job-page looks-done-wrong-page r7 (job gates, proof advisory): achieved over the model's blocked is succeeded, clean, exit 0", () => {
+    const d = goalJobDecision(pass({ completed: false, goalOutcome: "blocked", foldedOutcome: "defects-found", hasReader: true, lastReading: true }));
+    expect(d.job).toEqual({ attainment: "achieved", basis: "done-check" });
+    for (const goalOutcome of ["blocked", "exhausted"]) {
+      const f = goalJobFold({ foldedOutcome: "defects-found", ...d, goalOutcome, defects: "none", runFailed: false });
+      expect(f).toMatchObject({ missionOutcome: "clean", goalOutcome: "succeeded" });
+      expect(f.note).toMatch(/the job decides/);
+      expect(MISSION_EXIT_CODES[f.missionOutcome]).toBe(0);
+    }
+  });
+
+  it("achieved never overrides a defect, a run failure, an independent check that did not hold, or a boundary/hang/crash", () => {
+    const d = goalJobDecision(pass({ completed: false, goalOutcome: "blocked", foldedOutcome: "defects-found", hasReader: true, lastReading: true }));
+    expect(goalJobFold({ foldedOutcome: "defects-found", ...d, goalOutcome: "blocked", defects: "defects", runFailed: false })).toEqual({ missionOutcome: "defects-found" });
+    expect(goalJobFold({ foldedOutcome: "defects-found", ...d, goalOutcome: "blocked", defects: "none", runFailed: true })).toEqual({ missionOutcome: "defects-found" });
+    for (const [goalOutcome, folded] of [["failed", "defects-found"], ["boundary", "inconclusive"], ["hang", "hang"], ["crashed", "crashed"], ["inconclusive", "inconclusive"]] as const) {
+      expect(goalJobFold({ foldedOutcome: folded, ...d, goalOutcome, defects: "none", runFailed: false })).toEqual({ missionOutcome: folded });
+    }
+    // An achieved job read already-true, or on a harness, decides nothing.
+    for (const job of [{ attainment: "unverified", basis: "already-true" }, { attainment: "unverified", basis: "harness" }] as const) {
+      expect(goalJobFold({ foldedOutcome: "defects-found", job, unverifiedPass: false, goalOutcome: "blocked", defects: "none", runFailed: false })).toEqual({ missionOutcome: "defects-found" });
+    }
   });
 });

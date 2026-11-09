@@ -164,11 +164,23 @@ export function goalJobDecision(i: GoalJobInput): { readonly job: JobVerdict | u
 export const GOAL_DONE_CHECK_FAILED_MESSAGE =
   "the goal run ended passing, but the job's done check read false in a fresh session: the job did not happen";
 
+/** Code-templated: what a goal run says when its done check read true over the model's own non-pass. Never a value. */
+export const GOAL_JOB_ACHIEVED_MESSAGE =
+  "the job's done check read false before the run and true after it in a fresh session: the job happened, so the job decides (the run's own ending is advisory)";
+
+/** The goal endings only the model's judgment decided (it gave up, stalled, or spent the budget): advisory. */
+const MODEL_ENDINGS: ReadonlySet<string> = new Set(["blocked", "exhausted"]);
+
 /**
  * Decision 2 (exit-codes.md): the mission outcome of a goal run with its job verdict folded in.
  *  - `not-achieved` over a pass (`clean`) or a pending review is `defects-found` (exit 1) with
  *    `failure.kind: "done-check-failed"`, whatever verified the pass (a grounded answer, a `--success`
  *    check, the judgment) and whatever the policy: the find-out exemption covers only `unverified`.
+ *    rc-030b: the goal's own fields agree with that exit: `goalOutcome: "failed"` (never `succeeded`).
+ *  - rc-030b, owner rule "job gates, proof advisory": `achieved` by a fresh reading (`basis: done-check`:
+ *    false before, true after) over an ending only the model's judgment decided (`blocked`, `exhausted`),
+ *    with no defect and no run failure, is the job done: `succeeded`, `clean` (exit 0). An independent
+ *    check that did not hold (`failed`), a defect, a hang, a crash or a boundary keeps its own ending.
  *  - an unverified pass decision 3 folds (`unverifiedPass`) is `inconclusive` (exit 2).
  *  - anything else keeps the folded outcome; a run already failing keeps its own ending.
  */
@@ -176,9 +188,29 @@ export function goalJobFold(i: {
   readonly foldedOutcome: MissionOutcome;
   readonly job: JobVerdict | undefined;
   readonly unverifiedPass: boolean;
-}): { readonly missionOutcome: MissionOutcome; readonly failure?: { readonly kind: "done-check-failed"; readonly message: string } } {
+  /** The goal's own ending (`goalOutcome`) and whether the run failed; absent: no job-achieved fold. */
+  readonly goalOutcome?: string;
+  readonly defects?: "none" | "defects";
+  readonly runFailed?: boolean;
+}): {
+  readonly missionOutcome: MissionOutcome;
+  readonly failure?: { readonly kind: "done-check-failed"; readonly message: string };
+  /** The goal's own ending as the job decided it, when it did (else `goalOutcome` stands). */
+  readonly goalOutcome?: "failed" | "succeeded";
+  readonly note?: string;
+} {
   if (i.job?.attainment === "not-achieved" && (i.foldedOutcome === "clean" || i.foldedOutcome === "pending-review")) {
-    return { missionOutcome: "defects-found", failure: { kind: "done-check-failed", message: GOAL_DONE_CHECK_FAILED_MESSAGE } };
+    return { missionOutcome: "defects-found", failure: { kind: "done-check-failed", message: GOAL_DONE_CHECK_FAILED_MESSAGE }, goalOutcome: "failed" };
+  }
+  if (
+    i.job?.attainment === "achieved" &&
+    i.job.basis === "done-check" &&
+    i.goalOutcome !== undefined &&
+    MODEL_ENDINGS.has(i.goalOutcome) &&
+    i.defects === "none" &&
+    i.runFailed !== true
+  ) {
+    return { missionOutcome: "clean", goalOutcome: "succeeded", note: GOAL_JOB_ACHIEVED_MESSAGE };
   }
   return { missionOutcome: i.unverifiedPass ? "inconclusive" : i.foldedOutcome };
 }

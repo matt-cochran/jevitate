@@ -72,6 +72,9 @@ describe("goalReasonOf (#423): decided from the run's state, never from reason t
     expect(goalReasonOf({ goalOutcome: "exhausted", stop: "exhausted" })).toBe("budget");
     // 0.30.0 (#807): a run that met its coverage floor and found no route.
     expect(goalReasonOf({ goalOutcome: "inconclusive", stop: "inconclusive", failureKind: "no-route-found" })).toBe("no-route-found");
+    // rc-030b: a pass whose job's done check read false is `failed`, and says why.
+    expect(goalReasonOf({ goalOutcome: "failed", stop: "done", failureKind: "done-check-failed" })).toBe("done-check-failed");
+    expect(goalReasonOf({ goalOutcome: "failed", stop: "done" })).toBe("success-check-failed");
     expect(goalReasonOf({ goalOutcome: "blocked", stop: "blocked", missCause: "not-found" })).toBe("not-found");
     expect(goalReasonOf({ goalOutcome: "blocked", stop: "blocked", missCause: "ungrounded" })).toBe("ungrounded");
     expect(goalReasonOf({ goalOutcome: "blocked", stop: "blocked", missCause: "blocked-by-policy" })).toBe("blocked-by-policy");

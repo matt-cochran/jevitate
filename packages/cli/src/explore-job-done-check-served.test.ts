@@ -31,6 +31,12 @@ function serve(): Promise<Server> {
     if (path === "/__state") return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ case: "lab", done: state.done, docs: ["/"] }));
     // Answers nothing: the connection is dropped, so no reading can be taken.
     if (path === "/__hangup") return void req.socket.destroy();
+    // rc-030b: a page whose one link does the job (the lab's looks-done-wrong-page: the real page reached).
+    if (path === "/act") return void res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end('<!doctype html><html><body><h1>Act</h1><a href="/do">Open billing settings</a></body></html>');
+    if (path === "/do") {
+      state.done = true;
+      return void res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end("<!doctype html><html><body><h1>Billing settings</h1></body></html>");
+    }
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end("<!doctype html><html><body><h1>Home</h1></body></html>");
   });
   return new Promise((r) => s.listen(0, "127.0.0.1", () => r(s)));
@@ -136,6 +142,41 @@ describe("explore --job: a run that ends with every done rejected (served)", () 
     expect(result.goalOutcome).not.toBe("succeeded");
     expect(reads).toBeGreaterThan(0);
     expect(result.job).toEqual({ attainment: "not-achieved", basis: "done-check" });
+  }, 90_000);
+
+  it("rc-030b (job gates, proof advisory): a final reading of true over the model's own non-pass is the job done, exit 0, and the fields agree", async () => {
+    const outDir = mkdtempSync(join(root, "out-"));
+    const rejecting = rejectingJudge();
+    let clicked = false;
+    // Opens the link that does the job, then proposes done at every turn; the judgment rejects each one.
+    const judge: JudgmentPort = {
+      async systemOne(args) {
+        const q = args.questions.action;
+        if (!clicked && q?.kind === "choice") {
+          const link = q.options.find((id) => (q.descriptions?.[id] ?? "").includes('"Open billing settings"'));
+          if (link !== undefined) {
+            clicked = true;
+            return { action: { kind: "choice", value: link, confidence: 1 } };
+          }
+        }
+        return rejecting.systemOne(args);
+      },
+    };
+    const result = await runExploration({
+      url: `${origin}/act`,
+      goal: "open the billing settings",
+      allowlist: [origin],
+      judge,
+      gen: new FakeGenerationGateway(),
+      outDir,
+      bounds: { maxDecisions: 4 },
+      doneCheck: async () => state.done,
+    });
+    expect(result.job).toEqual({ attainment: "achieved", basis: "done-check" });
+    expect(result).toMatchObject({ goalOutcome: "succeeded", outcome: "succeeded", missionOutcome: "clean", exitCode: 0 });
+    expect(result.goalReason).toBeUndefined();
+    expect(result.failure).toBeUndefined();
+    expect(result.reason).toMatch(/the job happened, so the job decides \(the run's own ending is advisory\)/);
   }, 90_000);
 
   it("a final reading that cannot be taken stays unknown and says why", async () => {
