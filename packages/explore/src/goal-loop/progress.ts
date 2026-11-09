@@ -21,7 +21,7 @@ import { descriptorToLocator } from "@jevitate/recorder";
 import type { RunContext } from "./context.js";
 import type { ActionableControlEvidence } from "./context/types.js";
 import { armRecoveryTurn, collectActionableControlEvidence, forwardControls } from "./handle-blocked.js";
-import { EXPECTED_RETURN, savedAndLeft, settledNavigation } from "./helpers.js";
+import { EXPECTED_RETURN, forwardStepKey, savedAndLeft, settledNavigation } from "./helpers.js";
 import { LAST_CHANCE_NOTE, LAST_CHANCE_NO_WRITE_NOTE, MAX_MOVING_SCROLLS, NO_PROGRESS_RECOVERY_NOTE } from "./limits.js";
 import { returnToStart } from "./return-to-start.js";
 import type { Flow, Perceived } from "./step.js";
@@ -134,6 +134,9 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
       !m.sawNewState &&
       snap.signature !== m.before &&
       m.seenBefore.has(snap.signature) &&
+      // RC3 lab (j3-deadend): the same action from the same state landed where it first led — a
+      // repeated forward step (a wizard walked again), not an action that sent the page back.
+      ctx.enteredBy.get(snap.signature) !== forwardStepKey(m.before, m.label) &&
       // A link that navigated to ANOTHER route already visited is ordinary navigation, not an
       // in-place action that silently undid itself (#153): the stall rule is for in-place actions.
       !((m.linkFromRoute ?? null) !== null && m.linkFromRoute !== hangRoute(snap.url)) &&

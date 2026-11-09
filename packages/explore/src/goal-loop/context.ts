@@ -334,6 +334,12 @@ export interface RunContext {
   readonly waitOpMs: number;
   /** Every page state seen so far (for "the action sent the page back to an earlier state"). */
   readonly seen: Set<string>;
+  /**
+   * The step each page state was first reached by — `forwardStepKey(before, label)` of the action
+   * whose own result it was. An action that lands, again, on the state it first reached from the
+   * same state repeated a forward step: it did not send the page back to an earlier state.
+   */
+  readonly enteredBy: Map<string, string>;
   /** The last executed page-changing action: when, from which state, and its Recording index. */
   readonly track: {
     lastMutation: {
@@ -348,6 +354,8 @@ export interface RunContext {
       linkFromRoute?: string | null;
       /** #289: ANY click — the route it was clicked on (null for any other action). */
       clickFromRoute?: string | null;
+      /** Has the perception right after this action been observed (the action's own result)? */
+      looked?: boolean;
     } | null;
     /** The raw descriptor of the last RECORDED action's target, to check it is still on the page. */
     lastRecordedTarget: string | null;

@@ -12,7 +12,7 @@ import { maskSecretFields } from "../secret-fields.js";
 import { markTypeFixtures, markUploadFixtures } from "../type-fixtures.js";
 import type { RunContext } from "./context.js";
 import type { Flow, Perceived } from "./step.js";
-import { documentOf } from "./helpers.js";
+import { documentOf, forwardStepKey } from "./helpers.js";
 import { clock } from "@jevitate/domain";
 import { dialogHistoryLine, takeDialogEvents } from "../native-dialogs.js";
 
@@ -57,6 +57,13 @@ export async function perceiveStep(ctx: RunContext): Promise<Perceived> {
   {
     const m = ctx.track.lastMutation;
     if (m !== null && snap.signature !== m.before && !m.seenBefore.has(snap.signature)) m.sawNewState = true;
+    // The action's own result (the first perception after it): a state it reached first is entered by it.
+    if (m !== null && m.looked !== true) {
+      m.looked = true;
+      if (snap.signature !== m.before && !m.seenBefore.has(snap.signature) && !ctx.enteredBy.has(snap.signature)) {
+        ctx.enteredBy.set(snap.signature, forwardStepKey(m.before, m.label));
+      }
+    }
   }
   await ctx.heap.sample(ctx.page, ctx.transcript.nextStep);
   // Re-observe the PREVIOUS action's effect: patch its postcondition + open
