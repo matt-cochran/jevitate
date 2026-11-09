@@ -468,3 +468,12 @@ describe("#796: find_capabilities and journey find expose parameter types", () =
     }
   });
 });
+
+describe("#800: run_exploration takes the job whose done check verifies the goal run", () => {
+  it("exposes job (--job) and requireDoneCheck (--require-done-check), as `explore` does", () => {
+    const spec = CLI_TOOL_SPECS.find((t) => t.name === "run_exploration")!;
+    const params = spec.command.params as Record<string, { flag?: string }>;
+    expect(params["job"]?.flag).toBe("--job");
+    expect(params["requireDoneCheck"]?.flag).toBe("--require-done-check");
+  });
+});

@@ -1,10 +1,8 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { APPROVAL_CHANNELS } from "@jevitate/journey";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
-  EvidenceApprovalChannelSchema,
   KnownSchema,
   RunEvidenceSchema,
   WriteShapeSchema,
@@ -161,10 +159,6 @@ describe("RunEvidence v1 schema", () => {
     expect(zero).not.toEqual(unknown);
     expect(schema.safeParse({ known: true }).success).toBe(false);
     expect(schema.safeParse({ known: false }).success).toBe(false);
-  });
-
-  it("mirrors the approval channels of @jevitate/journey", () => {
-    expect(EvidenceApprovalChannelSchema.options).toEqual([...APPROVAL_CHANNELS]);
   });
 
   it("bounds every string in the schema source", () => {

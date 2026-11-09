@@ -3,6 +3,10 @@ import { inMcpInvocation, noteMcpRefusal } from "./approval-provenance.js";
 import { environmentsFilePath, loadEnvironmentsFile, type EnvironmentDef, type ResolvedJourneyEnvironment } from "./environments.js";
 import { EXIT_CODES } from "./exit-codes.js";
 import { hasRunHookOwner, registerRunHooks, RunHookError, type RunHookContext } from "./journey-run-hooks.js";
+import { JourneyRunRefusedError } from "@jevitate/mcp-facade";
+import { journeyReviewHash } from "./journey-review.js";
+import { assertMcpRunnable } from "./journey-stale-api.js";
+import { prepareMcpRunGuard, type McpRunGuard, type McpRunGuardRequest } from "./mcp-run-guard.js";
 import { resolveTargetTrust, runModeFor, stricterTrust, type RunMode, type TargetTrust } from "./run-mode.js";
 import { canonicalOrigin, loadTargetsFile, type TargetConfig } from "./target-config.js";
 
@@ -255,4 +259,74 @@ export async function draftOnAutomationTargetWarning(req: { readonly journeysDir
   const target = resolveRunTarget({ origin: req.environment?.baseUrl ?? journey.recording.site, environment: req.environment, targetsFile: req.targetsFile });
   if (target.mode !== "automation") return undefined;
   return `warning: journey '${req.id}' is a draft, running on ${target.origin}, an automation-mode target (trust "${target.trust}"); a target a person can reset is declared "trust": "test" in .jevitate/environments.json\n`;
+}
+
+/** What `runGuardedJourney` decided before the run: the target, its mode and the #789 guard request (never a value). */
+export interface GuardedJourneyDecision {
+  readonly journey: Journey;
+  readonly target: RunTarget;
+  /** The exact arguments `prepareMcpRunGuard` was given (the run arms the same guard). */
+  readonly guardRequest: McpRunGuardRequest;
+  /** The #789 guard (undefined outside an MCP invocation). */
+  readonly guard: McpRunGuard | undefined;
+}
+
+export interface GuardedJourneyRequest<T> {
+  readonly journeysDir: string;
+  readonly id: string;
+  readonly catalogDir?: string | null | undefined;
+  readonly environment?: ResolvedJourneyEnvironment | undefined;
+  readonly environmentsFile?: string | null | undefined;
+  readonly targetsFile?: string | undefined;
+  /** A queued call: the content hash the call was queued against; a Journey changed since is refused `E_JOURNEY_APPROVAL_STALE`. */
+  readonly expectedHash?: string | undefined;
+  /** The run itself, started only when every gate passed. `decision` is undefined for an id the store does not hold (the run reports that). */
+  readonly run: (decision: GuardedJourneyDecision | undefined) => Promise<T>;
+}
+
+/**
+ * #797: the one gate of a Journey run a served surface starts (`run_journey`, and a queued Journey call):
+ * the promotion check (#788, `assertMcpRunnable`), then the run-mode gate (`resolveRunTarget` +
+ * `runModeRefusal`) and the #789 guard (`prepareMcpRunGuard`), all before any browser, then `run`.
+ * Refusals are the typed ones those functions throw. A secret the Journey needs is met by the run's own
+ * secret mode (vault or hold), never by anything this function is given.
+ */
+export async function runGuardedJourney<T>(req: GuardedJourneyRequest<T>): Promise<T> {
+  const stored = await new FsJourneyStore(req.journeysDir).get(req.id);
+  if (stored === null) {
+    if (req.expectedHash !== undefined) {
+      throw new JourneyRunRefusedError("E_JOURNEY_APPROVAL_UNKNOWN", `journey '${req.id}' is not in the store, so the call queued against it does not run.`, `jevitate journey list`, `jevitate journey run ${req.id}`);
+    }
+    return req.run(undefined);
+  }
+  await assertMcpRunnable(stored, req.journeysDir, ...(req.catalogDir === undefined ? [] : [req.catalogDir]));
+  if (req.expectedHash !== undefined && journeyReviewHash(stored) !== req.expectedHash) {
+    const now = journeyReviewHash(stored);
+    throw new JourneyRunRefusedError(
+      "E_JOURNEY_APPROVAL_STALE",
+      `journey '${req.id}' changed since this call was queued (queued against ${req.expectedHash}, now ${now}); nothing ran. Review it, then queue the call again.`,
+      `jevitate journey review ${req.id}`,
+      `jevitate journey run ${req.id}`,
+    );
+  }
+  const origin = req.environment?.baseUrl ?? stored.recording.site;
+  const target = resolveRunTarget({ origin, environment: req.environment, ...(req.environmentsFile === undefined ? {} : { environmentsFile: req.environmentsFile }), targetsFile: req.targetsFile });
+  const mcp = inMcpInvocation();
+  const refusal = runModeRefusal(stored, target, { mcp });
+  if (refusal !== undefined) {
+    if (mcp) noteMcpRefusal(refusal);
+    throw refusal;
+  }
+  // Loaded late: journey-api reaches this module through the run guard.
+  const { effectiveAllowedOrigins } = await import("./journey-api.js");
+  const guardRequest: McpRunGuardRequest = {
+    site: stored.recording.site,
+    allowedOrigins: effectiveAllowedOrigins(stored, req.environment),
+    environment: req.environment,
+    targetsFile: req.targetsFile,
+    mode: target.mode,
+    authoredOrigins: stored.metadata.allowedOrigins ?? [],
+  };
+  const guard = prepareMcpRunGuard(guardRequest);
+  return req.run({ journey: stored, target, guardRequest, guard });
 }

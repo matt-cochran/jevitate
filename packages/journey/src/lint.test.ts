@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Recording, RecordedStep, Step } from "@jevitate/recording";
-import { journeyWriteSteps, lintJourney, lintUploadFixtures, planJourneyMutations, judgeAssertions, mutationProofVerdict, type Journey, type MutationRunResult } from "./index.js";
+import { journeyWriteSteps, lintJourney, lintUploadFixtures, planJourneyMutations, type Journey, type MutationRunResult, journeyAssertions, mutationPlanSites, type MutationPlan } from "./index.js";
+import { judgeAssertions as judgeSites, mutationProofVerdict } from "@jevitate/adjudicator";
+/** #812: the adjudicator's judging of a Journey's own assertion sites, as `journey verify` gathers them. */
+const judgeAssertions = (j: Journey, plan: MutationPlan, results: ReadonlyMap<string, MutationRunResult>) =>
+  judgeSites(journeyAssertions(j), plan, results, new Map(mutationPlanSites(j).map((s) => [s.site, s])));
 
 // #401 Part A — the pure assertion-strength lint. Fixtures are small inline Journeys (see
 // assertions.test.ts / journey.test.ts for the shape).

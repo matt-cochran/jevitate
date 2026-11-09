@@ -1,6 +1,6 @@
 === DECLARATION (src/index.ts, TS compiler API) ===
 
-# @jevitate/adjudicator (69 exports)
+# @jevitate/adjudicator (73 exports)
   adjudicate: other
   AdvisoryJudgment: type-alias
   AdvisoryJudgmentSchema: variable
@@ -22,9 +22,13 @@
   DoneCheckSpecSchema: variable
   DoneReading: type-alias
   DoneReadingSchema: variable
+  evaluatedOwnRequestFailure: other
   EvidenceApprovalChannelSchema: variable
   EvidenceSubject: type-alias
   EvidenceSubjectSchema: variable
+  IsolationNote: type-alias
+  isolationNoteReason: other
+  IsolationNoteSchema: variable
   JobVerdict: interface
   judgeAssertions: other
   judgeDoneCheck: other
@@ -1329,7 +1333,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (342 exports)
+# @jevitate/journey (339 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1401,7 +1405,6 @@
   checkPersona: function
   checkStatement: function
   classifyHandback: function
-  classifyMutation: function
   classifyReplay: function
   controlCanChangeVerdict: function
   declaredNonSecretParams: function
@@ -1545,7 +1548,6 @@
   JourneyTargetedProofPlan: interface
   JourneyWriteStep: interface
   journeyWriteSteps: function
-  judgeAssertions: function
   JudgmentUsageSchema: variable
   lintDoneCheck: function
   lintJourney: function
@@ -1559,15 +1561,14 @@
   METRIC_KINDS: variable
   MetricKind: type-alias
   MetricSchema: variable
-  mutationErrored: function
   MutationFailedSite: type-alias
   MutationKind: type-alias
   MutationPair: interface
   mutationPairIssues: function
   MutationPlan: interface
+  mutationPlanSites: function
   MutationProofPolicyResult: type-alias
   MutationProofPolicyResultSchema: variable
-  mutationProofVerdict: function
   MutationProofVerdict: type-alias
   mutationReplay: function
   MutationReplay: interface
@@ -1731,7 +1732,7 @@
   QueueExplorationResult: interface
   runJourney: function
 
-# @jevitate/missions (27 exports)
+# @jevitate/missions (31 exports)
   Budget: type-alias
   BudgetExceedsCeilingError: class
   ClaimOwner: interface
@@ -1752,6 +1753,10 @@
   MissionTargetStore: interface
   QUEUED_MISSION_STATUSES: variable
   QUEUED_SCREENSHOT_MODES: variable
+  QueuedEntry: type-alias
+  QueuedEntrySchema: variable
+  QueuedJourneyCall: interface
+  QueuedJourneyCallSchema: variable
   QueuedMission: interface
   QueuedMissionSchema: variable
   QueuedMissionStatus: type-alias

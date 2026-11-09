@@ -1,6 +1,6 @@
 import { NOT_A_CREDENTIAL_WAY_OUT, fixtureSecretNeeds, secretBoundNeeds, type BoundSecretParams } from "./secret-params.js";
 import type { JourneyRunRecorder } from "./journey-run-record.js";
-import { JourneyRunEvidenceWriter } from "./journey-run-evidence.js";
+import { JourneyRunEvidenceWriter, type WriteReceipt } from "./journey-run-evidence.js";
 import { hasRunHooks, resolveRunMode, runReadDoneCheckHooks, runValidateParamsHooks, withRunHookGuard, type RunHookContext, type RunMode } from "./journey-run-hooks.js";
 import { allowedOriginSet, offAllowlistWriteOrigin, prepareMcpRunGuard } from "./mcp-run-guard.js";
 import { FsJourneyStore, JourneyRegistry, ParamValidationError, declaredNonSecretParams, describeStep, isSecretName, loadRefusedParamNames, flatJourneySteps, journeyEndState, journeyParamSchema, journeyPrefix, lintJourney, lintUploadFixtures, secretNamedValues, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
@@ -589,7 +589,7 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
  * `ParamValidationError`, from `@jevitate/journey`) BEFORE any browser is
  * launched, then builds the real Actor + `JourneyRunner` and runs.
  */
-export type RunJourneyResult = JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[]; actionDeltas?: ReplayDeltaSummary; slowSteps?: SlowStep[]; offAllowlistWrites?: string[]; handback?: HandbackOutcome } & Partial<ScreenshotsResult> & MutationReplayFields & HealRunFields;
+export type RunJourneyResult = JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[]; actionDeltas?: ReplayDeltaSummary; slowSteps?: SlowStep[]; offAllowlistWrites?: string[]; handback?: HandbackOutcome; writes?: WriteReceipt[] } & Partial<ScreenshotsResult> & MutationReplayFields & HealRunFields;
 
 /**
  * #812/#800: a surface's run (one with a `runRecorder`: `journey run` and `run_journey`) writes its
@@ -617,7 +617,8 @@ export async function runJourneyProgrammatically(opts: RunJourneyProgrammaticall
     throw err;
   }
   const problem = evidence?.finish(undefined, result);
-  return problem === undefined ? result : { ...result, evidenceError: problem };
+  const withReceipts = evidence === undefined ? result : { ...result, writes: evidence.writer.receipts() };
+  return problem === undefined ? withReceipts : { ...withReceipts, evidenceError: problem };
 }
 
 /** The `evidenceError` a run's thrown error carries, if any. */

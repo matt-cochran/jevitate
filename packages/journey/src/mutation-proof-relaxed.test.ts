@@ -6,13 +6,16 @@ import {
   relaxedMutationReplay,
   targetedMutationReplay,
   targetedControlReplay,
-  classifyMutation,
-  judgeAssertions,
-  mutationProofVerdict,
   assertionSiteKey,
   type Journey,
   type MutationRunResult,
+  mutationPlanSites,
+  type MutationPlan,
 } from "./index.js";
+import { classifyMutation, judgeAssertions as judgeSites, mutationProofVerdict } from "@jevitate/adjudicator";
+/** #812: the adjudicator's judging of a Journey's own assertion sites, as `journey verify` gathers them. */
+const judgeAssertions = (j: Journey, plan: MutationPlan, results: ReadonlyMap<string, MutationRunResult>) =>
+  judgeSites(journeyAssertions(j), plan, results, new Map(mutationPlanSites(j).map((s) => [s.site, s])));
 
 // #567 — a relaxed mutated step must stay schema-valid: `expect` is REQUIRED by the Recording schema
 // for fill/click/etc, so instead of deleting it the relaxed step gets a weak postcondition that does
@@ -129,6 +132,6 @@ describe("#567 the issue shape is judged on the relaxed replay", () => {
 
   it("the issue shape's proof verdict is proven", () => {
     const assertions = judgeAssertions(issueJourney(), { mutations: [staleFill], pairs: [{ site: "end-state:0", mutation: staleFill.id }] }, new Map([[staleFill.id, relaxedFailsAtEndState]]));
-    expect(mutationProofVerdict({ basePassed: true, mutations: [relaxedFailsAtEndState], assertions }).verdict).toBe("proven");
+    expect(mutationProofVerdict({ basePassed: true, mutations: [relaxedFailsAtEndState], assertions }).verdict).toBe("sensitive");
   });
 });

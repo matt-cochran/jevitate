@@ -571,6 +571,9 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         success: many("--success"),
         successWhen: s("--success-when", { enum: ["final", "held", "each"] }),
         allowVacuousChecks: b("--allow-vacuous-checks"),
+        // 0.30.0 (#800): the job whose done check (jobs.json, read in a fresh context) verifies the goal run.
+        job: s("--job"),
+        requireDoneCheck: b("--require-done-check"),
         actionDeltas: b("--action-deltas"),
         feature: s("--feature"),
         route: many("--route"),

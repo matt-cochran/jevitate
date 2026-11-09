@@ -486,6 +486,11 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
         );
         return;
       }
+      // 0.30.0 (#800): a job's done check verifies a goal run only — refused elsewhere, never dropped.
+      if ((o.job !== undefined || o.requireDoneCheck === true) && (o.feature !== undefined || strategy !== "goal")) {
+        emitExplore(fail("E_EXPLORE_ARGS", `--job and --require-done-check are supported only with --strategy goal (not ${o.feature !== undefined ? "--feature" : `--strategy ${strategy}`})`));
+        return;
+      }
       // #303: action deltas are recorded by the goal loop (goal and usability runs) only — refused
       // elsewhere, never silently ignored.
       if (o.actionDeltas === true && o.feature !== undefined) {
@@ -697,7 +702,7 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
       }
 
       const ctx: ExploreRunContext = {
-        deps: runDeps, o, emitExplore, strategy, target, browser, screenshotsOpt, emulation, overflow, withInvariants, serverLog, withServerLog, withPrefix, withScopeRegion, emitJourneyFailure, withEvidence, runFiling, issueFiler, conversation, secretFields, secretCommand, actors, primaryStorageState, invariants, journeyPrefix, prefixRequest, typeFixtures, uploadFixtures,
+        deps: runDeps, o, warn: (line) => void program.configureOutput().writeErr?.(line), emitExplore, strategy, target, browser, screenshotsOpt, emulation, overflow, withInvariants, serverLog, withServerLog, withPrefix, withScopeRegion, emitJourneyFailure, withEvidence, runFiling, issueFiler, conversation, secretFields, secretCommand, actors, primaryStorageState, invariants, journeyPrefix, prefixRequest, typeFixtures, uploadFixtures,
       };
 
       await withRunMetadata(modeMeta, async () => {

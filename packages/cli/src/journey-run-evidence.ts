@@ -79,6 +79,16 @@ interface SeenWrite {
   refused: boolean;
 }
 
+/** #795: one write's receipt on a run's result. */
+export interface WriteReceipt {
+  readonly method: WriteShape["method"];
+  readonly path: string;
+  readonly status: string;
+  readonly count: number;
+  readonly origin?: string;
+  readonly refused?: true;
+}
+
 /** A step as the run reports it; its writes are counted here. */
 export type StepReport = Omit<StepEvidence, "writes">;
 
@@ -264,6 +274,19 @@ export class JourneyRunEvidenceWriter {
     }
     const listed = [...shapes.values()].map(({ status, ...s }): WriteShape => ({ ...s, status: this.#unknown === undefined ? { known: true, value: status } : { known: false, reason: this.#unknown } }));
     return { shapes: listed.slice(0, MAX_SHAPES), truncated: listed.length > MAX_SHAPES };
+  }
+
+  /** #795: each write's receipt: method, path shape, status, count and refused flag. Never a value, body or full URL. */
+  receipts(): WriteReceipt[] {
+    const values = [...Object.values(this.#req.params), ...this.#extracted];
+    return this.#shapes(values).shapes.map((s) => ({
+      method: s.method,
+      path: s.path,
+      status: s.status.known ? s.status.value : "unknown",
+      count: s.count,
+      ...(s.origin === undefined ? {} : { origin: s.origin }),
+      ...(s.refused === true ? { refused: true as const } : {}),
+    }));
   }
 
   /** The record, parsed by `RunEvidenceSchema`: throws on anything the schema refuses. */

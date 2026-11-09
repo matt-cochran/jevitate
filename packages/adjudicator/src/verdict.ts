@@ -21,6 +21,16 @@ export interface AssertionResult {
   readonly provedBy?: string;
   /** The earlier postconditions a targeted proof weakened to reach a sensitive verdict. */
   readonly relaxedSites?: readonly string[];
+  /** #609: why a targeted proof was refused, when the verdict stays a cascade. */
+  readonly targetedRefusal?: string;
+  /** #811: the data and action propositions, when both kinds of mutation are paired with this site. */
+  readonly obligations?: readonly {
+    readonly kind: "data" | "action";
+    readonly verdict: MutationVerdict;
+    readonly provedBy?: string;
+    readonly relaxedSites?: readonly string[];
+    readonly targetedRefusal?: string;
+  }[];
 }
 
 /** §3.1: did the job happen, read in a fresh session before and after the run. */

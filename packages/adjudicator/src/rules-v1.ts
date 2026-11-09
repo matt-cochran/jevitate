@@ -23,11 +23,19 @@
  * aborted another step's request); this replaces #811's rule that read the site as insensitive only
  * for an inferred pair. The judging (`provenSensitive`, `judgePairedAssertion`) reads that verdict,
  * and the unpaired-required reason names an assertion, not an end state.
+ *
+ * From #812, the gatherer move: journey's copies are gone, and `journey verify` reads its verdict here.
+ * Three facts the gatherer established in 0.29.0 and decided on in place now reach the rules as evidence,
+ * each read as journey-verify.ts read it: a targeted proof the gatherer refused (`ReplayEvidence.refused`,
+ * any of #609's refusals, not only a struck failure) is a cascade; a finding that one replay may have
+ * decided another (`MutationEvidence.taint`) leaves the proof inconclusive in the gatherer's words; and a
+ * replay other than the closing one that closed with a write open, or could not say, does too.
  */
 import type {
   BoundaryEvidence,
   DoneCheckEvidence,
   DoneReading,
+  IsolationNote,
   MutationEvidence,
   MutationKindSchema,
   ReplayEvidence,
@@ -181,7 +189,7 @@ export function classifyMutationPlain(
 }
 
 /** #811: an already judged own-request failure survives only the completed action's own DOM failure. */
-function evaluatedOwnRequestFailure(step: number, checkIndex: number, m: PlannedMutation, result: Pick<MutationRunResult, "outcome" | "failedSites">): boolean {
+export function evaluatedOwnRequestFailure(step: number, checkIndex: number, m: PlannedMutation, result: Pick<MutationRunResult, "outcome" | "failedSites">): boolean {
   if (result.outcome !== "failed" || step !== m.step) return false;
   return (
     result.failedSites.some((f) => f.where === "step-request" && f.step === step && f.checkIndex === checkIndex && f.evaluated === true) &&
@@ -460,7 +468,11 @@ export function mutationResults(ev: MutationEvidence): Map<string, MutationRunRe
         relaxedSites: run.relaxedSites ?? [],
         outcome: outcomeOf(run.outcome),
         failedSites: failedOf(run),
-        ...(run.waitsCut?.includes(site) === true ? { refused: `the targeted proof of ${site} failed once and did not reproduce` } : {}),
+        ...(run.refused !== undefined
+          ? { refused: run.refused }
+          : run.waitsCut?.includes(site) === true
+            ? { refused: `the targeted proof of ${site} failed once and did not reproduce` }
+            : {}),
         ...(control === undefined ? {} : { control: outcomeOf(control.outcome) }),
       };
     });
@@ -484,11 +496,52 @@ export function mutationResults(ev: MutationEvidence): Map<string, MutationRunRe
   return out;
 }
 
-/** Why the replays may not have stayed independent, read from the independence and closing replays. */
+const CROSSED = "so state from one replay may cross into the next (a job it started, by any route, still running); isolate the replays or let the job end, and run the proof again";
+const OPEN = "closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided";
+
+/** Why a replay may have decided another, for each class of finding the gatherer notes (`MutationEvidence.taint`). */
+export function isolationNoteReason(note: IsolationNote, by?: string): string {
+  if (note === "write-open") return `a replay of ${by ?? "a mutation"} ${OPEN}`;
+  if (note === "independence-write-open") return `the independence replay (the Journey as recorded, straight after the base) ${OPEN}`;
+  if (note === "control-write-open") return `the control for ${by ?? "a mutation"} (the Journey as recorded, no mutation applied) ${OPEN}`;
+  if (note === "base-write-open") return `the base replay ${OPEN}`;
+  if (note === "state-crossed") return `the Journey as recorded failed straight after the base replay and passed after a quiet gap, ${CROSSED}`;
+  if (note === "state-stuck") return `the Journey as recorded no longer passes after the base replay, ${CROSSED}`;
+  if (note === "independence-errored") return "the replay as recorded after the base errored, so the proof cannot say the replays are independent; retry it (--resume keeps what finished and runs this replay again)";
+  return "sibling mutations disagree on a site, and a control and a re-run could not settle it; run the proof again";
+}
+
+/** A replay's writes still open at its close, read as the class of finding a gatherer would note. */
+function openWriteNote(r: ReplayEvidence): IsolationNote {
+  if (r.role === "base") return "base-write-open";
+  if (r.role === "independence") return "independence-write-open";
+  if (r.role === "control") return "control-write-open";
+  return "write-open";
+}
+
+/**
+ * Why the replays may not have stayed independent: the gatherer's noted finding first, then the
+ * independence replay's reading, then any replay (the closing one aside: nothing runs after it) that
+ * closed with a write open or could not say, then the closing replay. An unknown isolation reading
+ * matters only once a mutated replay ran: with none there is nothing it could have decided.
+ */
 function notIsolatedOf(ev: MutationEvidence): string | undefined {
-  if (!ev.isolation.known) return `the proof could not establish that the replays stayed independent (${ev.isolation.reason}); retry it`;
-  if (ev.isolation.value === "state-crossed") return "the independence replay showed state from one replay reaching the next; isolate the replays (a fixture restore, or a longer job's end) and run the proof again";
-  const closing = lastOf([...ev.replays].sort((a, b) => a.ordinal - b.ordinal), (r) => r.role === "closing");
+  if (ev.taint !== undefined) return isolationNoteReason(ev.taint.note, ev.taint.by);
+  const replays = [...ev.replays].sort((a, b) => a.ordinal - b.ordinal);
+  const mutated = replays.some((r) => r.role === "mutated");
+  if (!ev.isolation.known && mutated) {
+    if (ev.isolation.reason === "replay-errored") return isolationNoteReason("independence-errored");
+    return `the proof could not establish that the replays stayed independent (${ev.isolation.reason}); retry it`;
+  }
+  if (ev.isolation.known && ev.isolation.value === "state-crossed") return "the independence replay showed state from one replay reaching the next; isolate the replays (a fixture restore, or a longer job's end) and run the proof again";
+  for (const r of replays) {
+    if (r.role === "closing") continue;
+    const open = r.writes.openAtClose;
+    if (open.known && open.value === 0) continue;
+    if (open.known) return isolationNoteReason(openWriteNote(r), r.mutation);
+    return `a replay ${r.mutation === undefined ? `(${r.role})` : `of ${r.mutation}`} closed and the proof could not tell whether a write was still unanswered (${open.reason}), so it cannot say the replays stayed isolated; retry it`;
+  }
+  const closing = lastOf(replays, (r) => r.role === "closing");
   if (closing === undefined || closing.outcome === "passed") return undefined;
   if (closing.outcome === "failed") return "the Journey as recorded no longer passes after the mutated replays, so state one left behind may have decided another; isolate the replays (a fixture restore, or a longer job's end) and run the proof again";
   return "the closing replay as recorded errored, so the proof cannot say the replays stayed isolated; retry it";
@@ -562,11 +615,13 @@ export function judgeChecks(evidence: RunEvidence, mutation: MutationEvidence): 
       : unnamed !== undefined && judged.verdict === "sensitive"
         ? { verdict: "inconclusive" as const, reason: `the plan names an assertion site ${unnamed.site} that is not a site key, so it was not judged` }
         : judged;
-  const assertions = proofs.map(({ site, verdict: v, provedBy, relaxedSites }): AssertionResult => ({
+  const assertions = proofs.map(({ site, verdict: v, provedBy, relaxedSites, targetedRefusal, obligations }): AssertionResult => ({
     site,
     verdict: v satisfies AssertionVerdict,
     ...(provedBy === undefined ? {} : { provedBy }),
     ...(relaxedSites === undefined ? {} : { relaxedSites }),
+    ...(targetedRefusal === undefined ? {} : { targetedRefusal }),
+    ...(obligations === undefined ? {} : { obligations }),
   }));
   return { verdict, assertions, ...(reason === undefined ? {} : { reason }), countsForGate: countsForGate(evidence.run.target.trust) };
 }

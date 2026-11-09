@@ -12,7 +12,7 @@ import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type Assertion, type InvariantSpec, type Recording } from "@jevitate/recording";
 import type { ActionDeltaStats, ActionableControlOutcome, HostHealthSampler, InvariantDefect, InvariantReport, MinEffortRequest, PartialReport, RunDepth, SafetyOverride, SideEffect } from "@jevitate/explore";
-import type { DefectOutcome, EnvironmentDegraded, GoalReason, HostHealthSummary, StartupAttempt } from "@jevitate/domain";
+import type { DefectOutcome, DoneCheckPolicy, EnvironmentDegraded, GoalReason, JobBasis, JobVerdict, HostHealthSummary, StartupAttempt } from "@jevitate/domain";
 import { runGoalBasedMission, assertAuthorizedExploreTarget, type BoundaryEvidence, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type SecretCommandRunner, type TypeFixture, type UploadFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
 import { GOAL_ONLY_OUTCOMES, defectOutcomeOf, goalMissionOutcome, goalReasonOf, startedOutcome, type FilingConfig, type IssueDraft, type IssueFilerPort, type MissionFailure, type MissionOutcome, clock } from "@jevitate/domain";
@@ -193,7 +193,21 @@ export interface RunExplorationOptions {
    * the expected landing.
    */
   readonly journeyPrefix?: JourneyPrefix;
+  /** 0.30.0 (#800): the job's done check, read in a FRESH context after the model's `done` (`explore --job`); its reading decides attainment. */
+  readonly doneCheck?: DoneCheckReader;
+  /** Why no reading decides the job when `doneCheck` is absent (`already-true`, `reading-unknown`); default `no-check`. */
+  readonly doneCheckBasis?: JobBasis;
+  /**
+   * The done-check policy for an unverified pass (owner decision 3): `require` makes it `inconclusive` (exit 2), `advisory`
+   * keeps exit 0. Absent: the result is reported but its exit is not folded (callers that are not `explore --goal`).
+   */
+  readonly doneCheckPolicy?: DoneCheckPolicy;
+  /** `--require-done-check`: a pass an independent `--success` check alone verified is unverified too. */
+  readonly requireDoneCheck?: boolean;
 }
+
+/** The fresh-context done-check reader (`cfg.doneCheck`): true = holds, false = does not, null = unreadable. */
+export type DoneCheckReader = () => Promise<boolean | null>;
 
 export interface RunExplorationResult {
   /** The result schema's version (#195): the common fields below are filled the same way by every strategy. */
@@ -216,6 +230,8 @@ export interface RunExplorationResult {
    * here and `defects` in `defectOutcome`.
    */
   readonly goalOutcome: GoalBasedOutcome;
+  /** 0.30.0 (#800): did the job get done? `unverified` when no fresh-session done check decided it. */
+  readonly job?: JobVerdict;
   /** #423: why the goal was not achieved (absent when `succeeded`). */
   readonly goalReason?: GoalReason;
   /** 0.30.0 (#807): the boundary the run stopped at (kind, signal, step, and the origin an off-allowlist or new-tab stop names), when goalOutcome is `boundary`. */
@@ -546,6 +562,15 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
     // #293: a journey-anchored run first replays its Journey's prefix into this very session.
     const start = await startFromJourney(opts.journeyPrefix, session, opts.url, opts.allowlist, opts.browser);
     const actor = CastActor.named("explorer").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
+    // 0.30.0 (#800): remember what the fresh-context reader last said, for a run that ends on a rejected `done`.
+    let lastReading: boolean | null | undefined;
+    const doneCheck: DoneCheckReader | undefined =
+      opts.doneCheck === undefined
+        ? undefined
+        : async () => {
+            lastReading = await opts.doneCheck!();
+            return lastReading;
+          };
     const mission = await runGoalBasedMission({
       ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
       ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
@@ -572,6 +597,7 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
       ...(opts.successChecks === undefined ? {} : { successChecks: opts.successChecks }),
       ...(opts.successWhen === undefined ? {} : { successWhen: opts.successWhen }),
       ...(opts.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
+      ...(doneCheck === undefined ? {} : { doneCheck }),
       // #543: http checks request through the allowlist-bound probe; `${setup.x}` from the fixtures.
       ...((opts.successChecks ?? []).some((c) => c.kind === "http")
         ? { httpProbe: createHttpProbe({ allowlist: opts.allowlist }), httpRefs: httpCheckRefs(fx === undefined ? {} : { bindings: fx.bindings() }) }
@@ -652,7 +678,25 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
     const endedAs = host.outcome === preHost ? goalSoFar : host.outcome;
     const goalOutcome = (opts.allowVacuousChecks === true && endedAs === "succeeded" ? endedAs : startedOutcome(endedAs, mission.run.actions, failureNow?.kind)) as GoalBasedOutcome;
     // #423: THE table (domain `goalMissionOutcome`) — the exit code is unchanged for every combination.
-    const missionOutcome = goalMissionOutcome(goalOutcome, defectOutcome.status);
+    const foldedOutcome = goalMissionOutcome(goalOutcome, defectOutcome.status);
+    // 0.30.0 (#800): the job verdict. A done check's reading decides it; otherwise nothing fresh was read.
+    const verifiedBy = mission.run.outcome.status === "completed" ? mission.run.outcome.verifiedBy : undefined;
+    const job: JobVerdict | undefined =
+      mission.run.outcome.status === "completed" && mission.run.outcome.job !== undefined
+        ? mission.run.outcome.job
+        : opts.doneCheck !== undefined && lastReading === false
+          ? { attainment: "not-achieved", basis: "done-check" }
+          : goalOutcome === "succeeded" || opts.doneCheck !== undefined || opts.doneCheckBasis !== undefined
+            ? { attainment: "unverified", basis: opts.doneCheckBasis ?? (opts.doneCheck === undefined ? "no-check" : "reading-unknown") }
+            : undefined;
+    // Owner decision 3: an unverified pass exits 2 under `require`. An independent `--success` check is the run's
+    // own verification, so it stands unless `--require-done-check` asks for a done check.
+    const unverifiedPass =
+      opts.doneCheckPolicy === "require" ||
+      opts.requireDoneCheck === true
+        ? foldedOutcome === "clean" && job?.attainment === "unverified" && (opts.requireDoneCheck === true || verifiedBy !== "success-condition")
+        : false;
+    const missionOutcome: MissionOutcome = unverifiedPass ? "inconclusive" : foldedOutcome;
     const goalReason = goalReasonOf({
       goalOutcome,
       ...(mission.goalEnding === undefined ? {} : { overridden: mission.goalEnding }),
@@ -691,6 +735,7 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
       strategy: "goal",
       missionOutcome,
       goalOutcome,
+      ...(job === undefined ? {} : { job }),
       ...(goalReason === undefined ? {} : { goalReason }),
       issues,
       timing: mission.run.timing,
@@ -767,6 +812,7 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
             const parts: string[] = [];
             const own = withServerCause(mission.reason, goalOutcome, serverLogRun?.transcript);
             if (own !== undefined) parts.push(own);
+            if (unverifiedPass) parts.push("the goal passed but no done check verified the job (add --success or --job <id>)");
             if (oracleBroken) parts.push(serverLogOutcomeReason("inconclusive", serverLogRun));
             if ((serverLogRun?.defects.length ?? 0) > 0) parts.push(serverLogOutcomeReason("defects-found", serverLogRun));
             if (httpDefects.length > 0) {

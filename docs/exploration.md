@@ -257,6 +257,19 @@ budget"), or the page stopped showing work code recognizes before then ("after
 376s of the 900s job-wait budget"). It also gives the wall-clock time since
 the first deferral and when the app last completed a request.
 
+### Returning to an earlier page
+
+A goal run remembers each page it has seen that still offers controls it has
+not tried. When the current branch is a dead end (the model reports `blocked`,
+the page has no control at all, or the run stalls past its last-chance turn),
+the run goes back to the most recent such page instead of stopping, and takes
+the control it had not tried. The return is a navigation in the Recording, so a
+Journey saved from the run replays it with no model. A page with nothing
+untried is never a target, a sign-in page after a credential was typed is never
+a target, a page is returned to at most twice and a run at most three times, and
+a target outside the allowlist is refused. A real dead end (a disabled control
+with no other route) still ends `blocked` once the returns are spent.
+
 ### Known limits of the hang heuristics
 
 - A request that runs longer than `longPollMs` on an interactive page is treated

@@ -8,14 +8,17 @@ import {
   mutationReplay,
   relaxedMutationReplay,
   needsRelaxedReplay,
-  classifyMutation,
-  judgeAssertions,
-  mutationProofVerdict,
   assertionSiteKey,
   type Journey,
   type JourneyMutation,
   type MutationRunResult,
+  mutationPlanSites,
+  type MutationPlan,
 } from "./index.js";
+import { classifyMutation, judgeAssertions as judgeSites, mutationProofVerdict } from "@jevitate/adjudicator";
+/** #812: the adjudicator's judging of a Journey's own assertion sites, as `journey verify` gathers them. */
+const judgeAssertions = (j: Journey, plan: MutationPlan, results: ReadonlyMap<string, MutationRunResult>) =>
+  judgeSites(journeyAssertions(j), plan, results, new Map(mutationPlanSites(j).map((s) => [s.site, s])));
 
 // #402 — the pure half of `journey verify --mutate`: which mutations a Journey gets, which assertion
 // each one must break, how a mutated replay is set up, and how its result is classified.
@@ -338,7 +341,7 @@ describe("#402 mutationProofVerdict", () => {
   it("every paired assertion sensitive: proven (unpaired ones do not count)", () => {
     expect(
       mutationProofVerdict({ basePassed: true, mutations: [ok], assertions: [{ site: "step:1", verdict: "unpaired" }, { site: "step:2", verdict: "sensitive", provedBy: "skip:2" }] }).verdict,
-    ).toBe("proven");
+    ).toBe("sensitive");
   });
   it("a failed fixture restore keeps every-sensitive assertions from reading proven", () => {
     expect(mutationProofVerdict({ basePassed: true, mutations: [ok], assertions: [{ site: "step:2", verdict: "sensitive" }], restoreFailed: true }).verdict).toBe("inconclusive");
@@ -377,7 +380,7 @@ describe("#402 mutationProofVerdict", () => {
   it("a refused targeted proof, which ran no replay, is not an errored replay", () => {
     expect(
       mutationProofVerdict({ basePassed: true, mutations: [{ ...ok, targeted: [{ site: "end-state:0", relaxedSites: [], outcome: "error" as const, failedSites: [], refused: "not paired" }] }], assertions: [{ site: "step:2", verdict: "sensitive" }] }).verdict,
-    ).toBe("proven");
+    ).toBe("sensitive");
   });
   it("any insensitive: insensitive", () => {
     expect(
@@ -493,7 +496,7 @@ describe("#554 relaxed replay", () => {
       ["block-write:3", { ...failed(ownPost), relaxed: failed({ where: "end-state", index: 0 }) }],
       ["stale-value:2", { ...failed({ where: "step", step: 2, postcondition: true }), relaxed: failed({ where: "end-state", index: 0 }) }],
     ]);
-    expect(mutationProofVerdict({ basePassed: true, mutations: plan.mutations, assertions: judgeAssertions(journey, plan, results) }).verdict).toBe("proven");
+    expect(mutationProofVerdict({ basePassed: true, mutations: plan.mutations, assertions: judgeAssertions(journey, plan, results) }).verdict).toBe("sensitive");
   });
 });
 

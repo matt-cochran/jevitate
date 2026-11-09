@@ -51,9 +51,6 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
     devDependencies:
-      '@jevitate/journey':
-        specifier: workspace:*
-        version: link:../journey
       fast-check:
         specifier: 4.10.2
         version: 4.10.2
@@ -283,6 +280,9 @@ importers:
 
   packages/journey:
     dependencies:
+      '@jevitate/adjudicator':
+        specifier: workspace:*
+        version: link:../adjudicator
       '@jevitate/domain':
         specifier: workspace:*
         version: link:../domain

@@ -117,7 +117,11 @@ describe("an errored mutated replay", () => {
 
   it("leaves the proof proven when its retry succeeds", async () => {
     const report = await prove(proofErroringAt(2).run);
-    expect(report.verdict).toBe("proven");
+    // #812: this double reports no step of the base, so no independence replay runs, and the adjudicator
+    // never counts a proof whose replays were not shown independent. The retry itself leaves no gap.
+    expect(report.verdict).toBe("inconclusive");
+    expect(report.reason).toBe("the proof could not establish that the replays stayed independent (not-gathered); retry it");
+    expect(report.assertions.every((a) => a.verdict === "sensitive" || a.verdict === "unpaired")).toBe(true);
   });
 
   it("records the retry and the error it followed on the mutation", async () => {

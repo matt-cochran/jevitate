@@ -14,6 +14,7 @@ import { runJourneyProgrammatically } from "./journey-api.js";
 import { registerRunSurfaceHooks } from "./run-surface-hooks.js";
 import type { BrowserPort } from "@jevitate/playwright";
 import type { BoundSecretParams } from "./secret-params.js";
+import { runGuardedJourney } from "./journey-run-mode-gate.js";
 import { assertMcpRunnable } from "./journey-stale-api.js";
 import { runAsMcpInvocation } from "./approval-provenance.js";
 import { withJourneyRunRecord } from "./journey-run-record.js";
@@ -251,6 +252,8 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     ((id: string, params: Record<string, string>, storageState?: string, o?: McpJourneyRunOptions) =>
       // #789: an MCP invocation, so the run guard applies (and an approval made here would say `mcp`).
       runAsMcpInvocation(() => withJourneyRunRecord({ channel: "mcp", id, params, logsRoot: deps.runRecordLogsRoot }, (runRecorder) => withSiteGate(deps.sitePolicyDbPath, (siteGate) =>
+        // #797: the one guarded run (promotion check, mode gate, #789 guard) a queued Journey call goes through too.
+        runGuardedJourney({ journeysDir: deps.journeysDir, id, environment: o?.environment, targetsFile: deps.targetsConfigPath, run: () =>
         runJourneyProgrammatically({
           dir: deps.journeysDir,
           id,
@@ -275,7 +278,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           // §5.3: a target's secretFields `env:` sources are read from the server's environment (a test seam).
           ...(deps.secretEnv === undefined ? {} : { secretEnv: deps.secretEnv }),
           ...(deps.browserPortFactory === undefined ? {} : { browserPortFactory: deps.browserPortFactory }),
-        }),
+        }) }),
       ))));
   const pathRoots = deps.pathRoots ?? defaultMcpPathRoots();
   const credentialStore = deps.credentialStore ?? envCredentialStore();
