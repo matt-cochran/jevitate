@@ -11,14 +11,18 @@
  *
  * From #811's judging side: an own-request failure the applied run already `evaluated` stays
  * sensitive when the step's DOM postcondition also fails; a site that is `required` (a network or
- * persistence end state) and unpaired leaves the proof inconclusive; a final network check that only
- * a non-declared `block-write` broke, while the same step's `skip` left it holding, is insensitive
- * (the block aborted another step's request); and data mutations and action mutations (`skip`,
+ * persistence end state) and unpaired leaves the proof inconclusive; and data mutations and action mutations (`skip`,
  * `block-write`) paired with one site are separate obligations that must both be sensitive. Where
  * journey reads a `Journey`, these read the plan site: `required` from the gatherer, and the check
  * kind as the first word of `check` (`requestMade`/`responseStatus` are network checks). #811's
  * planning side (skip-only UI effects, `blockMatchers`, pairing a request check with its unique
  * originating step) decides what runs, so it stays in journey and reaches here only as the plan.
+ *
+ * From #813: a `block-write` that broke a final network check, while a `skip` of the same step paired
+ * with that check left it holding, is a cascade for that block, declared pair or inferred (the block
+ * aborted another step's request); this replaces #811's rule that read the site as insensitive only
+ * for an inferred pair. The judging (`provenSensitive`, `judgePairedAssertion`) reads that verdict,
+ * and the unpaired-required reason names an assertion, not an end state.
  */
 import type {
   BoundaryEvidence,
@@ -225,15 +229,17 @@ export function provenSensitive(
   results: ReadonlyMap<string, MutationRunResult>,
   key: string,
   visiting: ReadonlySet<string>,
+  plan: MutationPlan = { mutations: [], pairs: [] },
+  info: ReadonlyMap<string, PlanSiteInfo> = new Map(),
 ): boolean {
   if (visiting.has(key)) return false;
   const site = sites.find((s) => assertionSiteKey(s) === key);
   const result = results.get(m.id) ?? ERRORED;
-  if (site === undefined || classifyMutation(site, m, result) !== "sensitive") return false;
+  if (site === undefined || effectiveVerdict(plan, info, site, m, results) !== "sensitive") return false;
   const proof = result.targeted?.find((t) => t.site === key);
   if (proof === undefined || proof.refused !== undefined) return true;
   const next = new Set([...visiting, key]);
-  return proof.relaxedSites.every((relaxed) => provenSensitive(sites, m, results, relaxed, next));
+  return proof.relaxedSites.every((relaxed) => provenSensitive(sites, m, results, relaxed, next, plan, info));
 }
 
 /** #811: the check kind a plan site names, as the first word of its `check`. */
@@ -242,26 +248,31 @@ function checkKindOf(info: PlanSiteInfo | undefined): string | undefined {
 }
 
 /**
- * #811: a final network check pairs with the step that recorded its request, and recorded requests
- * are placed by time. A step that really sends the request breaks the check when it is skipped too.
- * If the check holds under the skip and fails only under the block, the block aborted another step's
- * request (a timer firing in this step's window), so that failure is not evidence about this step.
+ * #813: a passing same-owner skip contradicts its block's alleged final-request ownership, declared or
+ * inferred. A final network check pairs with the step that recorded its request, and recorded requests
+ * are placed by time: a step that really sends the request breaks the check when it is skipped too. If
+ * the check holds under a skip of the step that is paired with it and fails only under the block, the
+ * block aborted another step's request, so its failure is a cascade, not evidence about this step.
  */
-function blockAloneBrokeNetworkCheck(
+function effectiveVerdict(
+  plan: MutationPlan,
+  info: ReadonlyMap<string, PlanSiteInfo>,
   site: AssertionSite,
-  info: PlanSiteInfo | undefined,
-  pairs: MutationPlan["pairs"],
-  verdicts: readonly { readonly m: PlannedMutation; readonly v: MutationVerdict }[],
-): boolean {
-  const kind = checkKindOf(info);
-  if (site.where !== "end-state" || (kind !== "requestMade" && kind !== "responseStatus")) return false;
-  return verdicts.some(
-    ({ m, v }) =>
-      m.kind === "block-write" &&
-      v === "sensitive" &&
-      pairs.find((p) => p.mutation === m.id)?.declared !== true &&
-      verdicts.some((other) => other.m.kind === "skip" && other.m.step === m.step && other.v === "insensitive"),
+  m: PlannedMutation,
+  results: ReadonlyMap<string, MutationRunResult>,
+): MutationVerdict {
+  const verdict = classifyMutation(site, m, results.get(m.id) ?? ERRORED);
+  const key = assertionSiteKey(site);
+  const kind = checkKindOf(info.get(key));
+  if (verdict !== "sensitive" || m.kind !== "block-write" || site.where !== "end-state" || (kind !== "requestMade" && kind !== "responseStatus")) return verdict;
+  const contradicted = plan.mutations.some(
+    (other) =>
+      other.kind === "skip" &&
+      other.step === m.step &&
+      plan.pairs.some((p) => p.site === key && p.mutation === other.id) &&
+      classifyMutation(site, other, results.get(other.id) ?? ERRORED) === "insensitive",
   );
+  return contradicted ? "cascade" : verdict;
 }
 
 /**
@@ -272,13 +283,15 @@ function blockAloneBrokeNetworkCheck(
  */
 function judgePairedAssertion(
   sites: readonly AssertionSite[],
+  plan: MutationPlan,
+  info: ReadonlyMap<string, PlanSiteInfo>,
   site: AssertionSite,
   paired: readonly PlannedMutation[],
   results: ReadonlyMap<string, MutationRunResult>,
 ): AssertionProof & { readonly verdict: MutationVerdict } {
   const key = assertionSiteKey(site);
   const proofFor = (m: PlannedMutation): TargetedProof | undefined => results.get(m.id)?.targeted?.find((t) => t.site === key);
-  const verdicts = paired.map((m) => ({ m, v: classifyMutation(site, m, results.get(m.id) ?? ERRORED) }));
+  const verdicts = paired.map((m) => ({ m, v: effectiveVerdict(plan, info, site, m, results) }));
   // #616: set when every sensitive verdict rested on an unproven relaxed site — those count as cascades.
   let unsound: string | undefined;
   for (const v of PRECEDENCE) {
@@ -288,7 +301,7 @@ function judgePairedAssertion(
       for (const { m } of verdicts.filter((x) => x.v === "sensitive")) {
         const proof = proofFor(m);
         if (proof === undefined || proof.refused !== undefined) return { site: key, verdict: v, provedBy: m.id };
-        const bad = proof.relaxedSites.find((relaxed) => !provenSensitive(sites, m, results, relaxed, new Set([key])));
+        const bad = proof.relaxedSites.find((relaxed) => !provenSensitive(sites, m, results, relaxed, new Set([key]), plan, info));
         if (bad === undefined) return { site: key, verdict: v, provedBy: m.id, relaxedSites: proof.relaxedSites };
         unsound ??= `relaxed site ${bad} is not itself proven sensitive to ${m.id}`;
       }
@@ -322,18 +335,16 @@ export function judgeAssertions(
     const sitePairs = plan.pairs.filter((p) => p.site === key);
     const paired = plan.mutations.filter((m) => sitePairs.some((p) => p.mutation === m.id));
     if (paired.length === 0) return { site: key, verdict: "unpaired", ...(info.get(key)?.required === true ? { required: true as const } : {}) };
-    const verdicts = paired.map((m) => ({ m, v: classifyMutation(site, m, results.get(m.id) ?? ERRORED) }));
-    if (blockAloneBrokeNetworkCheck(site, info.get(key), sitePairs, verdicts)) return { site: key, verdict: "insensitive" };
     const data = paired.filter((m) => m.kind !== "skip" && m.kind !== "block-write");
     const action = paired.filter((m) => m.kind === "skip" || m.kind === "block-write");
-    if (data.length === 0 || action.length === 0) return judgePairedAssertion(sites, site, paired, results);
+    if (data.length === 0 || action.length === 0) return judgePairedAssertion(sites, plan, info, site, paired, results);
     const obligations = [
-      { kind: "data" as const, ...judgePairedAssertion(sites, site, data, results) },
-      { kind: "action" as const, ...judgePairedAssertion(sites, site, action, results) },
+      { kind: "data" as const, ...judgePairedAssertion(sites, plan, info, site, data, results) },
+      { kind: "action" as const, ...judgePairedAssertion(sites, plan, info, site, action, results) },
     ];
     const listed = obligations.map(({ site: _site, ...o }) => o);
     // Once both propositions are proven, keep the first sound witness in plan order.
-    if (obligations.every((o) => o.verdict === "sensitive")) return { ...judgePairedAssertion(sites, site, paired, results), obligations: listed };
+    if (obligations.every((o) => o.verdict === "sensitive")) return { ...judgePairedAssertion(sites, plan, info, site, paired, results), obligations: listed };
     // Across propositions, any vacuity or unresolved evidence stays visible; both must be sensitive.
     const decisive =
       obligations.find((o) => o.verdict === "insensitive") ??
@@ -388,7 +399,7 @@ export function mutationProofVerdict(input: {
   if (errored > 0) {
     return { verdict: "inconclusive", reason: `${errored} of ${input.mutations.length} mutated replays errored, so the proof has a gap; retry it` };
   }
-  if (input.assertions.some((a) => a.required === true && a.verdict === "unpaired")) return { verdict: "inconclusive", reason: "a network or persistence end-state has no established causal mutation pair" };
+  if (input.assertions.some((a) => a.required === true && a.verdict === "unpaired")) return { verdict: "inconclusive", reason: "a network or persistence assertion has no established causal mutation pair" };
   if (paired.every((a) => a.verdict === "sensitive")) return { verdict: "sensitive" };
   const refusals = input.assertions.map((a) => a.targetedRefusal).filter((r): r is string => r !== undefined);
   if (refusals.length > 0) {

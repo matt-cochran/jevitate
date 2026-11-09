@@ -164,8 +164,8 @@ function requiredUnpaired(required: boolean): RunEvidence {
   return { ...e, mutation: { ...e.mutation!, plan: { ...plan, sites: [...plan.sites, { site: "end-state:1", check: "requestMade POST", ...(required ? { required: true as const } : {}) }] } } };
 }
 
-/** #811: a final network check broken by block-write:2 while skip:2 left it holding. */
-function blockAlone(declared: boolean): RunEvidence {
+/** #811/#813: a final network check broken by block-write:2 while skip:2 left it holding; `skipPaired` false leaves skip:2 off the site. */
+function blockAlone(declared: boolean, skipPaired = true): RunEvidence {
   return proofWith(
     {
       mutations: [
@@ -174,7 +174,7 @@ function blockAlone(declared: boolean): RunEvidence {
       ],
       pairs: [
         { site: "end-state:0", mutation: "block-write:2", ...(declared ? { declared: true as const } : {}) },
-        { site: "end-state:0", mutation: "skip:2" },
+        ...(skipPaired ? [{ site: "end-state:0", mutation: "skip:2" }] : []),
       ],
       sites: [{ site: "end-state:0", check: "requestMade POST" }],
     },
@@ -222,6 +222,7 @@ const fixtures: Record<string, RunEvidence> = {
   requiredUnpaired: requiredUnpaired(true),
   blockAlone: blockAlone(false),
   blockAloneDeclared: blockAlone(true),
+  blockAloneSkipUnpaired: blockAlone(true, false),
   obligationsOneSided: obligations(false),
   obligationsBoth: obligations(true),
 };
@@ -325,15 +326,22 @@ describe("mutation proof (ported rules)", () => {
     const checks = adjudicate(fixtures.requiredUnpaired!).checks!;
     expect(checks.assertions[2]).toEqual({ site: "end-state:1", verdict: "unpaired" });
     expect(checks.verdict).toBe("inconclusive");
-    expect(checks.reason).toBe("a network or persistence end-state has no established causal mutation pair");
+    expect(checks.reason).toBe("a network or persistence assertion has no established causal mutation pair");
     expect(adjudicate(requiredUnpaired(false)).checks?.verdict).toBe("sensitive");
   });
   it("#811: a network check only an undeclared block broke, while the skip held, is insensitive", () => {
     const checks = adjudicate(fixtures.blockAlone!).checks!;
     expect(checks.assertions).toEqual([{ site: "end-state:0", verdict: "insensitive" }]);
     expect(checks.verdict).toBe("insensitive");
-    // A declared pair is the author's causal claim, so the block's failure counts.
-    expect(adjudicate(fixtures.blockAloneDeclared!).checks!.assertions).toEqual([{ site: "end-state:0", verdict: "sensitive", provedBy: "block-write:2" }]);
+  });
+  it("#813: the paired skip's pass contradicts a declared block's ownership too; an unpaired skip does not", () => {
+    const declared = adjudicate(fixtures.blockAloneDeclared!).checks!;
+    expect(declared.assertions).toEqual([{ site: "end-state:0", verdict: "insensitive" }]);
+    expect(declared.verdict).toBe("insensitive");
+    // With no skip paired with the check, nothing contradicts the block: its failure is sensitive.
+    const unpaired = adjudicate(fixtures.blockAloneSkipUnpaired!).checks!;
+    expect(unpaired.assertions).toEqual([{ site: "end-state:0", verdict: "sensitive", provedBy: "block-write:2" }]);
+    expect(unpaired.verdict).toBe("sensitive");
   });
   it("#811: data and action mutations are separate obligations that must both be sensitive", () => {
     const checks = adjudicate(fixtures.obligationsOneSided!).checks!;

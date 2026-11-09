@@ -118,6 +118,7 @@ async function cli(journeysDir: string, args: string[], gen?: GenerationPort): P
   const err: string[] = [];
   const program = buildProgram({
     profiles: new ProfileManager("/unused"),
+    approval: { env: {}, stdinIsTTY: () => true, stdoutIsTTY: () => true, prompt: async () => "token", user: () => "offline-test" },
     journeysDir,
     dbPath: join(dir, "no-site-policy.sqlite"),
     explore: { browserPortFactory: () => new PlaywrightBrowserPort(), ...(gen === undefined ? {} : { gen }) },

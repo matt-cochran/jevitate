@@ -1,7 +1,8 @@
 import { existsSync, realpathSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
+import { canonicalJson } from "@jevitate/domain";
 import type { Assertion, RecordedStep, Step, TargetDescriptor } from "@jevitate/recording";
-import { assertionRefs, fixtureEscapesRoot, fixtureRootRefusal, fixtureSensitiveReason, targetDescriptorSelectorProblem, writeClassifier, type WriteClassifier } from "@jevitate/recording";
+import { assertionRefs, fixtureEscapesRoot, fixtureRootRefusal, fixtureSensitiveReason, targetDescriptorSelectorProblem, writeClassifier, WRITE_METHODS, type WriteClassifier } from "@jevitate/recording";
 import type { Journey } from "./journey.js";
 import { isNoClaimExpect, isOwnTargetVisible, journeyAssertions, type JourneyAssertionSite } from "./assertions.js";
 import { anchorLintIssues, type AnchorRuleCode } from "./anchor-rules.js";
@@ -173,12 +174,16 @@ function writeRequestsOf(recorded: RecordedStep, classify: WriteClassifier): Wri
 /** A request method that can carry a configured read (read RPCs are POSTs). Any other text is unknown evidence, never a read. */
 const BODY_METHODS = /^(?:POST|PUT|PATCH|DELETE)$/i;
 
-/**
- * Does a request check's glob name a write? The classifier reads paths, and `Get*` is not a method name:
- * read it as a path the glob stands for, so `/pkg.Items/Get*` is a read RPC and `/pkg.Items/*` stays unknown.
- */
+/** A declared RPC glob is not a concrete request: never classify its language from one sample. */
+function declaredRequestEvidence(check: { readonly method: string; readonly pathGlob: string }, classify: WriteClassifier): "read" | "write" | "unresolved" {
+  if (!WRITE_METHODS.has(check.method.toUpperCase())) return "read";
+  const path = check.pathGlob.replace(/^[a-z][a-z\d+.-]*:\/\/[^/]*/i, "").split(/[?#]/)[0]!;
+  if (/[*{}]/.test(path) && /\/[^/]*\.[^/]*\//.test(path)) return "unresolved";
+  return classify({ method: check.method, path: check.pathGlob }) ? "write" : "read";
+}
+
 function checkNamesWrite(check: { readonly method: string; readonly pathGlob: string }, classify: WriteClassifier): boolean {
-  return classify({ method: check.method, path: check.pathGlob.replaceAll("*", "X") });
+  return declaredRequestEvidence(check, classify) === "write";
 }
 
 function isWriteStep(recorded: RecordedStep, classify: WriteClassifier, requests: readonly WriteRequest[]): boolean {
@@ -196,18 +201,31 @@ function isWriteStep(recorded: RecordedStep, classify: WriteClassifier, requests
   return recorded.delta?.verdict === "relevant-change" && STATE_CHANGING.has(recorded.step.kind);
 }
 
+/** Only display/tracking metadata is ignored; operative descriptors are compared symbolically. */
+function operativeTarget(target: TargetDescriptor): string {
+  const { display: _display, tflowId: _tflowId, testIdAttr: _testIdAttr, ...descriptor } = target;
+  return canonicalJson(descriptor);
+}
+
 /**
  * #401: an EFFECT assertion is one that could prove the step did something — everything except an
  * `expect` that only restates the step's own target (`isOwnTargetVisible`), an explicit "no claim"
- * (`isNoClaimExpect`), or a bare `visible` page check.
+ * (`isNoClaimExpect`), or a bare `visible` page check. A targeted local UI action's own
+ * distinct visible outcome is eligible for negative proof, without certifying absent HTTP writes.
  */
-function isEffectSite(site: JourneyAssertionSite, step: Step | undefined, refsBound: (a: Assertion) => boolean): boolean {
+function isEffectSite(site: JourneyAssertionSite, step: Step | undefined, refsBound: (a: Assertion) => boolean, knownHttpWrite: boolean): boolean {
   if (site.where === "step-request") return true;
   if (site.where === "end-state") {
     if (site.check.kind === "page" || site.check.kind === "reloadThen") return site.check.assertion.kind !== "visible" && refsBound(site.check.assertion);
     return true;
   }
-  if (site.field === "expect" && step !== undefined && (isOwnTargetVisible(step) || isNoClaimExpect(step))) return false;
+  if (site.field === "expect" && step !== undefined) {
+    if (isOwnTargetVisible(step) || isNoClaimExpect(step)) return false;
+    if (site.check.assertion.kind === "visible") {
+      return !knownHttpWrite && STATE_CHANGING.has(step.kind) && "target" in step &&
+        operativeTarget(step.target) !== operativeTarget(site.check.assertion.target) && refsBound(site.check.assertion);
+    }
+  }
   return site.check.assertion.kind !== "visible" && refsBound(site.check.assertion);
 }
 
@@ -317,13 +335,16 @@ export function lintJourney(journey: Journey, opts: JourneyLintOptions = {}): Jo
   const sites = journeyAssertions(journey);
   const stepOf = (n: number): Step => recorded[n - 1]!.step;
   const refsBound = (a: Assertion): boolean => assertionRefsBound(journey, a);
-  const effects = sites.filter((site) => isEffectSite(site, site.where === "step" ? stepOf(site.step) : undefined, refsBound));
+  const writeRequests = recorded.map((r) => writeRequestsOf(r, classify));
+  const knownHttpWrites = recorded.map((r, i) => writeRequests[i]!.length > 0 ||
+    (r.expectRequests ?? []).some((check) => checkNamesWrite(check, classify)));
+  const effects = sites.filter((site) => isEffectSite(site, site.where === "step" ? stepOf(site.step) : undefined, refsBound,
+    site.where === "step" && knownHttpWrites[site.step - 1] === true));
   const endEffects = effects.filter((site) => site.where === "end-state");
   // #659: a `waitFor` step's target and state are enforced at run time — they are its checked outcome.
   const effectAt = (n: number): boolean =>
     recorded[n - 1]?.step.kind === "waitFor" || effects.some((site) => (site.where === "step" || site.where === "step-request") && site.step === n);
 
-  const writeRequests = recorded.map((r) => writeRequestsOf(r, classify));
   const isWrite = recorded.map((r, i) => isWriteStep(r, classify, writeRequests[i]!));
   const lastWrite = isWrite.lastIndexOf(true) + 1; // 0 when there is no write step
 
@@ -383,7 +404,7 @@ export function lintJourney(journey: Journey, opts: JourneyLintOptions = {}): Jo
       rule: "write-without-effect",
       level: "error",
       step: n,
-      message: `step ${n}: write step has no effect assertion${request === undefined ? "" : ` (write request: ${request})`}`,
+      message: `step ${n}: ${knownHttpWrites[i] === true ? "write step" : "UI effect"} has no effect assertion${request === undefined ? "" : ` (write request: ${request})`}`,
     });
   }
 
@@ -408,7 +429,9 @@ export function lintJourney(journey: Journey, opts: JourneyLintOptions = {}): Jo
     findings.push({
       rule: "no-persistence-check",
       level: "warning",
-      message: `write step (step ${lastWrite}) has no reloadThen or http end-state check — persistence is unverified`,
+      message: knownHttpWrites[lastWrite - 1] === true
+        ? `write step (step ${lastWrite}) has no reloadThen or http end-state check — persistence is unverified`
+        : `UI effect at step ${lastWrite} has incomplete write coverage; persistence requirements are unresolved.`,
     });
   }
 

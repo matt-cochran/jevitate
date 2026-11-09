@@ -1,4 +1,5 @@
 import { contentHash } from "@jevitate/domain";
+import { needsFinalNetworkObservation } from "./assertions.js";
 import type { Journey } from "./journey.js";
 
 /*
@@ -83,7 +84,7 @@ export function journeyProofHash(journey: Journey): string {
     ...p,
     steps: p.steps.map((s) => omit(s, STEP_PROSE)),
   }));
-  // Planner semantics are part of the evidence identity. Legacy combined data/action
-  // obligations, last-write pairing and unknown-request blocks must not remain fresh.
-  return contentHash(stripDescriptorMetadata({ mutationPlannerVersion: 5, metadata, recording }));
+  // Planner semantics include waived checks, request ownership/observation horizons and
+  // required unresolved requests. Earlier planner receipts must not remain fresh.
+  return contentHash(stripDescriptorMetadata({ mutationPlannerVersion: 7, ...(needsFinalNetworkObservation(journey) ? { finalNetworkObservationVersion: 1 } : {}), metadata, recording }));
 }

@@ -843,7 +843,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (207 exports)
+# @jevitate/journey (208 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -1003,6 +1003,7 @@
   mutationReplay: function
   mutationWait: function
   mutationWriteMatches: function
+  needsFinalNetworkObservation: function
   needsRelaxedReplay: function
   nextTargetedRelaxation: function
   outputKeyFields: function

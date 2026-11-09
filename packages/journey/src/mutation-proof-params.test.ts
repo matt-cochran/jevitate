@@ -134,9 +134,12 @@ describe("#565 mutationReplay: a param mutation alters params, not the recording
     expect(stepAt(j, 3)).toMatchObject({ expect: { kind: "valueEquals", value: REPLY } });
   });
 
-  it("a relaxed param replay leaves the reading step a weak claim on its own target", () => {
-    const j = relaxedMutationReplay(composeJourney(), mutationById("swap-param:reply"), { params }).journey;
-    expect(stepAt(j, 3)).toMatchObject({ expect: { kind: "visible", target: { label: "Reply" } } });
+  it("a relaxed param replay waives the reading step without inventing target survival", () => {
+    const original = composeJourney();
+    const before = structuredClone(original);
+    const j = relaxedMutationReplay(original, mutationById("swap-param:reply"), { params }).journey;
+    expect(stepAt(j, 3)).toMatchObject({ expect: { kind: "urlIncludes", text: "" } });
+    expect(original).toEqual(before);
   });
 
   it("a {var} fill's stale-value types an altered value of the parameter", () => {
