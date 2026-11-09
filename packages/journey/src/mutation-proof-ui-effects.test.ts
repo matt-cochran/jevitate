@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { RecordedStep } from "@jevitate/recording";
 import { writeClassifier } from "@jevitate/recording";
-import { judgeAssertions, lintJourney, mutationProofVerdict, mutationReplay, mutationWriteMatches, planJourneyMutations, type Journey, type MutationRunResult } from "./index.js";
+import { lintJourney, mutationReplay, mutationWriteMatches, planJourneyMutations, type Journey, type MutationRunResult, journeyAssertions, mutationPlanSites, type MutationPlan } from "./index.js";
+import { judgeAssertions as judgeSites, mutationProofVerdict } from "@jevitate/adjudicator";
+/** #812: the adjudicator's judging of a Journey's own assertion sites, as `journey verify` gathers them. */
+const judgeAssertions = (j: Journey, plan: MutationPlan, results: ReadonlyMap<string, MutationRunResult>) =>
+  judgeSites(journeyAssertions(j), plan, results, new Map(mutationPlanSites(j).map((s) => [s.site, s])));
 
 function journey(steps: RecordedStep[], endState: Journey["metadata"]["endState"] = []): Journey {
   return {
@@ -423,7 +427,7 @@ describe("data sensitivity and UI necessity are independent obligations", () => 
         { kind: "action", verdict: "sensitive", provedBy: "skip:2" },
       ],
     });
-    expect(mutationProofVerdict({ basePassed: true, mutations: [...results.values()], assertions }).verdict).toBe("proven");
+    expect(mutationProofVerdict({ basePassed: true, mutations: [...results.values()], assertions }).verdict).toBe("sensitive");
   });
 
   it("data sensitivity cannot substitute for an unnecessary Apply action", () => {

@@ -18,6 +18,7 @@ export const UnknownReasonSchema = z.enum([
   "check-unevaluable", // the check names a target that does not exist on this page
   "replay-stalled", // the replay never finished closing
   "not-gathered", // this producer version does not gather this fact
+  "replay-errored", // the replay that would have established the fact errored
 ]);
 export type UnknownReason = z.infer<typeof UnknownReasonSchema>;
 
@@ -37,6 +38,8 @@ const ORIGIN = /^https?:\/\/[^/?#\s]+$/;
 const ERROR_CODE = /^E_[A-Z0-9_]+$/;
 /** An identifier-like token (a step kind, a judgment task, a name): never free text. */
 const TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+/** A parameter name (`swap-param:<name>` names one): an identifier, underscores included. Never a value. */
+const IDENT = /^[A-Za-z0-9_][A-Za-z0-9_.:-]*$/;
 /** ISO 8601 date-time, as `clock` produces it. */
 const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
 
@@ -45,18 +48,32 @@ const stepIndex = z.number().int().positive();
 
 /** §5.1 target trust. */
 export const TargetTrustSchema = z.enum(["test", "harness", "production", "unknown"]);
-/** Mirrors `APPROVAL_CHANNELS` in @jevitate/journey (approval-schema.ts); a test pins the two equal. */
+/** Mirrors `APPROVAL_CHANNELS` in @jevitate/journey (approval-schema.ts), which fails to build if the two differ. */
 export const EvidenceApprovalChannelSchema = z.enum(["tty", "non-interactive", "mcp", "ci", "pr-review"]);
 /** `E_RUN_REFUSED_*`, `E_SECRET_ORIGIN_REFUSED`, …: the code only, never its message. */
 export const RefusalCodeSchema = z.string().max(64).regex(ERROR_CODE);
-/** Mirrors `MutationKind` in @jevitate/journey (mutation-proof.ts). */
+/** Mirrors `MutationKind` in @jevitate/journey (mutation-proof.ts), which fails to build if the two differ. */
 export const MutationKindSchema = z.enum(["skip", "block-write", "stale-value", "swap-param", "truncate-param", "guard-param"]);
+/** Why a replay may have decided another, by class: mirrors `IsolationNote` in the cli (journey-verify-checkpoint.ts). */
+export const IsolationNoteSchema = z.enum([
+  "write-open",
+  "independence-write-open",
+  "control-write-open",
+  "base-write-open",
+  "state-crossed",
+  "state-stuck",
+  "independence-errored",
+  "siblings-undecided",
+]);
+export type IsolationNote = z.infer<typeof IsolationNoteSchema>;
 /** The methods journey-run-record.ts names; anything else is `OTHER`, never the page's own text. */
 export const WriteMethodSchema = z.enum(["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE", "CONNECT", "TRACE", "OTHER"]);
 
 const hash = z.string().max(128);
-const name = z.string().max(128).regex(TOKEN);
+const name = z.string().max(128).regex(IDENT);
 const site = z.string().max(64).regex(TOKEN);
+/** A mutation id: `<kind>:<step>` or `<kind>:<param>`, so it carries a parameter's name, never its value. */
+const mutationId = z.string().max(160).regex(IDENT);
 const reason = z.string().max(500);
 
 export const EvidenceSubjectSchema = z
@@ -150,7 +167,7 @@ export const ReplayEvidenceSchema = z
     ordinal: count,
     role: z.enum(["base", "independence", "mutated", "relaxed", "targeted", "control", "at-base-time", "rerun", "closing"]),
     /** The mutation id, for every role but base/independence/closing. */
-    mutation: site.optional(),
+    mutation: mutationId.optional(),
     relaxedSites: z.array(site).optional(),
     /** The target assertion site of a `targeted` replay and of its `control`; absent on every other replay. */
     site: site.optional(),
@@ -162,6 +179,11 @@ export const ReplayEvidenceSchema = z
     /** From a #787 checkpoint. */
     reused: z.literal(true).optional(),
     retries: z.array(z.object({ reason }).strict()).optional(),
+    /**
+     * A `targeted` proof the gatherer refused, and why (a code template naming sites and mutations): it
+     * reads as a cascade whatever its replay read. A refused attempt may have run no replay at all.
+     */
+    refused: reason.optional(),
   })
   .strict();
 export type ReplayEvidence = z.infer<typeof ReplayEvidenceSchema>;
@@ -170,8 +192,8 @@ export const MutationEvidenceSchema = z
   .object({
     plan: z
       .object({
-        mutations: z.array(z.object({ id: site, kind: MutationKindSchema, step: stepIndex, param: name.optional() }).strict()),
-        pairs: z.array(z.object({ site, mutation: site, declared: z.literal(true).optional() }).strict()),
+        mutations: z.array(z.object({ id: mutationId, kind: MutationKindSchema, step: stepIndex, param: name.optional() }).strict()),
+        pairs: z.array(z.object({ site, mutation: mutationId, declared: z.literal(true).optional() }).strict()),
         sites: z.array(z.object({ site, check: z.string().max(500), required: z.literal(true).optional() }).strict()),
       })
       .strict(),
@@ -179,6 +201,16 @@ export const MutationEvidenceSchema = z
     restore: z.enum(["ok", "failed", "none"]),
     /** The independence replay's reading. */
     isolation: KnownSchema(z.enum(["isolated", "state-crossed"])),
+    /**
+     * The first finding, as the gatherer noted it, that one replay may have decided another (a replay
+     * that closed with a write open, state crossing replays, sibling mutations a control and a re-run
+     * could not settle), and the mutation it names. `carried`: an earlier, interrupted run of this
+     * proof noted it on its checkpoint. Absent: nothing was noted.
+     */
+    taint: z
+      .object({ note: IsolationNoteSchema, by: mutationId.optional(), carried: z.literal(true).optional() })
+      .strict()
+      .optional(),
   })
   .strict();
 export type MutationEvidence = z.infer<typeof MutationEvidenceSchema>;

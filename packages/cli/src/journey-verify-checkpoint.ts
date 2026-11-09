@@ -7,8 +7,6 @@ import { clock } from "@jevitate/domain";
 import {
   assertionSiteKey,
   MAX_TARGETED_RELAXATIONS,
-  classifyMutation,
-  mutationErrored,
   needsRelaxedReplay,
   sitesReachedEarly,
   thinSites,
@@ -22,6 +20,7 @@ import {
   type ReplayPace,
   type TargetedProof,
 } from "@jevitate/journey";
+import { classifyMutation, mutationErrored } from "@jevitate/adjudicator";
 import { systemProcessTable } from "@jevitate/playwright";
 import { homeDataRoot } from "./project-dir.js";
 
@@ -863,7 +862,7 @@ export function checkpointReplayOf(kind: string, run: { readonly outcome: Mutati
   return { kind, outcome: run.outcome, failedSites: structuredSites(run.failedSites), reachedMs: Array.from(run.reachedMs ?? [], (ms) => ms ?? null), ...optional("endStateReachedMs", run.endStateReachedMs), writesInFlightAtClose };
 }
 
-/** The result `classifyMutation` and `mutationProofVerdict` read, as the uninterrupted proof gave them. */
+/** The result the adjudicator's rules read (`classifyMutation`, the proof's verdict), as the uninterrupted proof gave them. */
 export function reusedProofFields(pair: CheckpointPair): Pick<MutationRunResult, "outcome" | "failedSites"> & Partial<Pick<MutationRunResult, "waitsCut" | "relaxed" | "targeted" | "control" | "atBaseTime">> {
   return {
     outcome: pair.outcome,

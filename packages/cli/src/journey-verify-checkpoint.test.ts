@@ -7,7 +7,11 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ProfileManager } from "@jevitate/daemon";
 import { FakeClock, installClock, resetClock } from "@jevitate/domain";
-import { FsJourneyStore, ParamValidationError, assertionSiteKey, journeyAssertions, judgeAssertions, mutationProofVerdict, planJourneyMutations, type Journey, type JourneyAssertionSite, type MutationPlan, type ReplayPace } from "@jevitate/journey";
+import { FsJourneyStore, ParamValidationError, assertionSiteKey, journeyAssertions, planJourneyMutations, type Journey, type JourneyAssertionSite, type MutationPlan, type ReplayPace, mutationPlanSites, type MutationRunResult } from "@jevitate/journey";
+import { judgeAssertions as judgeSites, mutationProofVerdict } from "@jevitate/adjudicator";
+/** #812: the adjudicator's judging of a Journey's own assertion sites, as `journey verify` gathers them. */
+const judgeAssertions = (j: Journey, plan: MutationPlan, results: ReadonlyMap<string, MutationRunResult>) =>
+  judgeSites(journeyAssertions(j), plan, results, new Map(mutationPlanSites(j).map((s) => [s.site, s])));
 import { registerJourneyVerify, type JourneyVerifySeams } from "./journey-cli/verify.js";
 import { JourneyVerifyStalledError, planJourneyVerification, verifyJourneyMutations, type JourneyVerifyReport } from "./journey-verify.js";
 import {
@@ -1281,7 +1285,9 @@ describe("MCP (`verify_journey`) and the CLI", () => {
       return n2 === 1 ? passed : n2 === 2 ? requestBroken : n2 === 3 ? stepBroken : passed;
     };
     const resumed = (await mcp({ id: ID, mutate: true, resume: true })) as unknown as { body: { exitCode: number; data: JourneyVerifyReport } };
-    expect(resumed.body).toMatchObject({ exitCode: 0, data: { verdict: "proven", reusedPairs: 1 } });
+    // #812: the resumed base reports no step to this double, so no independence replay runs on the resume,
+    // and the adjudicator never counts a proof whose replays were not shown independent.
+    expect(resumed.body).toMatchObject({ exitCode: 2, data: { verdict: "inconclusive", reusedPairs: 1, reason: expect.stringContaining("could not establish that the replays stayed independent") } });
   });
 
   it("refuse alike, naming the reason in `data` on both", async () => {

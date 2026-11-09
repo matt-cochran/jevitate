@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FakeClock, installClock, resetClock } from "@jevitate/domain";
 import { FsJourneyStore, type Journey } from "@jevitate/journey";
+import { RunEvidenceSchema, type RunEvidence } from "@jevitate/adjudicator";
 import type { BrowserPort, BrowserSession } from "@jevitate/playwright";
 import type { JourneyVerifySeams } from "./journey-cli/verify.js";
 import { verifyCheckpointPath } from "./journey-verify-checkpoint.js";
@@ -71,6 +72,18 @@ const progressPath = (): string => verifyCheckpointPath(join(dir, ".jevitate"), 
 const taintOnFile = (): unknown => (JSON.parse(readFileSync(progressPath(), "utf8")) as { body: { taint: unknown } }).body.taint;
 const stalled = (sessionsClosed: boolean): JourneyVerifyStalledError => new JourneyVerifyStalledError({ replay: 3 }, 1, sessionsClosed);
 const realTimer = setTimeout;
+/** #812: the evidence the last proof's verdict was adjudicated from. */
+let evidence: RunEvidence | undefined;
+
+/** H1/H2: the proof is inconclusive, and its evidence says, as a known count, that a write was left open. */
+function expectOpenWriteEvidence(report: JourneyVerifyReport): void {
+  expect(report.verdict, report.reason).toBe("inconclusive");
+  const parsed = RunEvidenceSchema.parse(evidence);
+  expect(parsed.writes.openAtClose).toMatchObject({ known: true });
+  expect((parsed.writes.openAtClose as { value: number }).value).toBeGreaterThanOrEqual(1);
+  const mutated = parsed.mutation?.replays.find((r) => r.role === "mutated");
+  expect((mutated?.writes.openAtClose as { value?: number } | undefined)?.value).toBeGreaterThanOrEqual(1);
+}
 
 /** A proof whose first mutated replay does `during` on its browser, then closes it. */
 async function proveWith(during: (browser: Browser) => void, thenThrow: boolean | Error = false, resume?: boolean, atReplay = 3): Promise<JourneyVerifyReport> {
@@ -102,7 +115,8 @@ async function proveWith(during: (browser: Browser) => void, thenThrow: boolean 
     return passed;
   }) as unknown as Run;
   const checkpoint = resume === undefined ? {} : { checkpoint: { path: progressPath(), keyFile: join(dir, "k.key"), resume, build: { version: "t", commit: "c", builtAt: "b", tree: "tr" }, config: { hook: {}, origin: {}, browser: {} } } };
-  const proving = verifyJourneyMutations({ dir, id: ID, params: {}, browserPortFactory, ...checkpoint }, run);
+  evidence = undefined;
+  const proving = verifyJourneyMutations({ dir, id: ID, params: {}, browserPortFactory, ...checkpoint, onEvidence: (e) => void (evidence = e) }, run);
   let done = false;
   const ended = proving.finally(() => void (done = true));
   ended.catch(() => undefined);
@@ -147,6 +161,7 @@ describe("a write a new document dropped", () => {
     it("a frame starting to load leaves the write open", async () => {
       const report = await proveWith(loadedBy(request("GET", page, true, () => ({ name: "frame" }))));
       expect(report.reason).toMatch(UNANSWERED);
+      expectOpenWriteEvidence(report);
     });
 
     it("a popup's first request, whose frame Playwright can't name, leaves the write open", async () => {
@@ -260,6 +275,7 @@ describe("a write a new document dropped", () => {
         b.cdp.emit("Network.loadingFinished", { requestId: "b" });
       });
       expect(report.reason).toMatch(UNANSWERED);
+      expectOpenWriteEvidence(report);
     });
 
     it("the browser says the body ended before Playwright does: the held write is still open", async () => {
@@ -270,6 +286,7 @@ describe("a write a new document dropped", () => {
         b.context.emit("requestfinished", other);
       });
       expect(report.reason).toMatch(UNANSWERED);
+      expectOpenWriteEvidence(report);
     });
   });
 

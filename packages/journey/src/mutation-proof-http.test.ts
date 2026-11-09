@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HttpCheck, RecordedStep } from "@jevitate/recording";
-import { assertionSiteKey, classifyMutation, journeyAssertions, planJourneyMutations, type Journey } from "./index.js";
+import { assertionSiteKey, journeyAssertions, planJourneyMutations, type Journey } from "./index.js";
+import { classifyMutation } from "@jevitate/adjudicator";
 
 // #543 — an `http` end-state check under the mutation proof: no rule change, but its failure must
 // prove the skipped write, and a probe that got no answer must never count as proof.

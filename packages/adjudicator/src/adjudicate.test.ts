@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { adjudicate, rejudge } from "./adjudicate.js";
+import { isolationNoteReason } from "./rules-v1.js";
 import { RunEvidenceSchema, type DoneReading, type Known, type ReplayEvidence, type RunEvidence } from "./evidence.js";
 import type { Verdict } from "./verdict.js";
 
@@ -225,7 +226,31 @@ const fixtures: Record<string, RunEvidence> = {
   blockAloneSkipUnpaired: blockAlone(true, false),
   obligationsOneSided: obligations(false),
   obligationsBoth: obligations(true),
+  targetedRefused: refusedTargeted(),
+  writeLeftOpen: openAt("mutated"),
+  baseWriteLeftOpen: openAt("base"),
+  tainted: withTaint(),
 };
+
+/** #812: a targeted proof the gatherer refused, though its replay failed at the target. */
+function refusedTargeted(): RunEvidence {
+  const e = targetedProof();
+  const m = e.mutation!;
+  return { ...e, mutation: { ...m, replays: m.replays.map((r) => (r.role === "targeted" ? { ...r, refused: "relaxation bound 4 reached" } : r)) } };
+}
+
+/** #812: a replay of `role` closed with a write the proof counts still open. */
+function openAt(role: ReplayEvidence["role"]): RunEvidence {
+  const e = proof();
+  const m = e.mutation!;
+  return { ...e, mutation: { ...m, replays: m.replays.map((r) => (r.role === role ? { ...r, writes: { ...r.writes, openAtClose: known(1) } } : r)) } };
+}
+
+/** #812: the gatherer noted sibling mutations a control and a re-run could not settle. */
+function withTaint(): RunEvidence {
+  const e = proof();
+  return { ...e, mutation: { ...e.mutation!, taint: { note: "siblings-undecided" } } };
+}
 
 describe("fixtures", () => {
   it("are all valid RunEvidence", () => {
@@ -345,11 +370,40 @@ describe("mutation proof (ported rules)", () => {
   });
   it("#811: data and action mutations are separate obligations that must both be sensitive", () => {
     const checks = adjudicate(fixtures.obligationsOneSided!).checks!;
-    expect(checks.assertions).toEqual([{ site: "step:2", verdict: "insensitive" }]);
+    // The verdict names both propositions, so a report can say which one was vacuous.
+    expect(checks.assertions).toEqual([
+      { site: "step:2", verdict: "insensitive", obligations: [{ kind: "data", verdict: "insensitive" }, { kind: "action", verdict: "sensitive", provedBy: "skip:2" }] },
+    ]);
     expect(checks.verdict).toBe("insensitive");
     const both = adjudicate(fixtures.obligationsBoth!).checks!;
-    expect(both.assertions).toEqual([{ site: "step:2", verdict: "sensitive", provedBy: "stale-value:2" }]);
+    expect(both.assertions).toMatchObject([{ site: "step:2", verdict: "sensitive", provedBy: "stale-value:2" }]);
+    expect(both.assertions[0]?.obligations?.map((o) => [o.kind, o.verdict])).toEqual([["data", "sensitive"], ["action", "sensitive"]]);
     expect(both.verdict).toBe("sensitive");
+  });
+  it("#812: a targeted proof the gatherer refused is a cascade, and the proof quotes why", () => {
+    const checks = adjudicate(fixtures.targetedRefused!).checks!;
+    expect(checks.assertions[1]).toEqual({ site: "end-state:0", verdict: "cascade", targetedRefusal: "relaxation bound 4 reached" });
+    expect(checks.verdict).toBe("inconclusive");
+    expect(checks.reason).toMatch(/a targeted proof was refused: relaxation bound 4 reached$/);
+  });
+  it("#812: a replay that closed with a write open leaves the proof inconclusive, naming whose", () => {
+    expect(adjudicate(fixtures.writeLeftOpen!).checks).toMatchObject({ verdict: "inconclusive", reason: expect.stringMatching(/^a replay of block-write:2 closed with a write still unanswered/) });
+    expect(adjudicate(fixtures.baseWriteLeftOpen!).checks?.reason).toMatch(/^the base replay closed with a write still unanswered/);
+    // Nothing runs after the closing replay, so what it leaves open decides no replay.
+    expect(adjudicate(openAt("closing")).checks?.verdict).toBe("sensitive");
+  });
+  it("#812: a finding the gatherer noted leaves the proof inconclusive, in its words", () => {
+    const checks = adjudicate(fixtures.tainted!).checks!;
+    expect(checks.verdict).toBe("inconclusive");
+    expect(checks.reason).toBe(isolationNoteReason("siblings-undecided"));
+  });
+  it("#812: an isolation reading never gathered matters only once a mutated replay ran", () => {
+    const e = proof();
+    const m = e.mutation!;
+    const unknown = { known: false as const, reason: "not-gathered" as const };
+    expect(adjudicate({ ...e, mutation: { ...m, isolation: unknown } }).checks?.verdict).toBe("inconclusive");
+    const baseFailed = { ...m, isolation: unknown, replays: m.replays.filter((r) => r.role === "base").map((r) => ({ ...r, outcome: "failed" as const })) };
+    expect(adjudicate({ ...e, mutation: baseFailed }).checks?.reason).toBe("the unmutated replay failed — no mutation was run");
   });
   it("leaves checks out when there is no mutation proof", () => {
     expect(adjudicate(fixtures.achieved!).checks).toBeUndefined();

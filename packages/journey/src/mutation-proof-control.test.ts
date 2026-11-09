@@ -3,7 +3,6 @@ import {
   JourneySchema,
   assertionSiteKey,
   journeyAssertions,
-  classifyMutation,
   mutationWait,
   nextTargetedRelaxation,
   planJourneyMutations,
@@ -16,6 +15,7 @@ import {
   type MutationReplay,
   type TargetedProof,
 } from "./index.js";
+import { classifyMutation } from "@jevitate/adjudicator";
 
 const PREFILL = { kind: "textIncludes", target: { css: "#prefill" }, text: "Prefilled" } as const;
 const WAIT = { maxMs: 600_000, stallMs: 10_000 };

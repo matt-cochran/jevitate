@@ -6,6 +6,8 @@ export {
   classifyMutation,
   classifyMutationPlain,
   countsForGate,
+  evaluatedOwnRequestFailure,
+  isolationNoteReason,
   judgeAssertions,
   judgeDoneCheck,
   mutationErrored,

@@ -15,7 +15,6 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@jevitate/journey": "workspace:*",
     "fast-check": "4.10.2"
   }
 }

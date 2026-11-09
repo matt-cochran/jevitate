@@ -6,9 +6,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGzip } from "node:zlib";
 import { clock } from "@jevitate/domain";
-import { FsJourneyStore, assertionSiteKey, classifyMutation, journeyAssertions, type Journey } from "@jevitate/journey";
+import { FsJourneyStore, assertionSiteKey, journeyAssertions, type Journey } from "@jevitate/journey";
+import { classifyMutation } from "@jevitate/adjudicator";
 import { PlaywrightBrowserPort, type BrowserPort } from "@jevitate/playwright";
 import { appendFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { runJourneyProgrammatically } from "./journey-api.js";
 import { planJourneyVerification, verifyJourneyMutations, type JourneyVerifyReport, type VerifyJourneyOptions } from "./journey-verify.js";
 import { MissionFixtures } from "./mission-fixtures.js";
@@ -87,8 +90,28 @@ const PROOF_POOL = 8;
 /** With this set, every proof appends what each replay took, by kind and step, as one JSON line. */
 const COST_LOG = process.env["JEV_PROOF_COST_LOG"];
 
+/** #812: with this set to a directory, every proof writes the evidence its verdict was adjudicated from, as `<row>.evidence.json`. */
+const RECORD_EVIDENCE = process.env["JEVITATE_RECORD_EVIDENCE"];
+
+/** A row's name as a file name: readable, and unique by a digest of the whole name. */
+const evidenceFile = (name: string): string =>
+  `${name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 120)}-${createHash("sha256").update(name).digest("hex").slice(0, 8)}.evidence.json`;
+
+/** The proof's options, recording its evidence when `RECORD_EVIDENCE` is set: nothing about the proof itself changes. */
+function recorded(name: string, opts: VerifyJourneyOptions): VerifyJourneyOptions {
+  if (RECORD_EVIDENCE === undefined) return opts;
+  return {
+    ...opts,
+    onEvidence: (evidence) => {
+      mkdirSync(RECORD_EVIDENCE, { recursive: true });
+      writeFileSync(join(RECORD_EVIDENCE, evidenceFile(name)), `${JSON.stringify(evidence, null, 2)}\n`);
+    },
+  };
+}
+
 /** A proof, measured through the `run` seam and the progress lines when `COST_LOG` is set: nothing about the proof itself changes. */
-async function proveMeasured(name: string, opts: VerifyJourneyOptions): Promise<JourneyVerifyReport> {
+async function proveMeasured(name: string, given: VerifyJourneyOptions): Promise<JourneyVerifyReport> {
+  const opts = recorded(name, given);
   if (COST_LOG === undefined) return verifyJourneyMutations(opts);
   const startedAt = clock.monotonicMs();
   const replays: { label: string; atMs: number; endedMs?: number; stepEndMs: Record<number, number> }[] = [];
@@ -556,7 +579,7 @@ describe("[realtime] a job that outlasts the whole base replay and lands in a la
     });
     const dir = await mkdtemp(join(tmpdir(), "jev-leak-"));
     await new FsJourneyStore(dir).put(journey);
-    report = await verifyJourneyMutations({ dir, id: journey.metadata.id, params: {}, browserPortFactory: () => new PlaywrightBrowserPort() });
+    report = await verifyJourneyMutations(recorded("a job that outlasts the whole base replay and lands in a later one", { dir, id: journey.metadata.id, params: {}, browserPortFactory: () => new PlaywrightBrowserPort() }));
   }, 300_000);
   afterAll(() => close());
 
@@ -594,7 +617,7 @@ document.getElementById('ack').onclick = async () => { await fetch('/api/ack', {
     const journey = probeJourney(served.origin, [NAV, START, { ...click("#ack", text("#acked", "Acked"), { waitFor: { maxMs: 12_000 } }), expectRequests: POST("/api/ack") }], { endState: [JOB_DONE] });
     const dir = await mkdtemp(join(tmpdir(), "jev-slower-"));
     await new FsJourneyStore(dir).put(journey);
-    report = await verifyJourneyMutations({ dir, id: journey.metadata.id, params: {}, browserPortFactory: () => new PlaywrightBrowserPort() });
+    report = await verifyJourneyMutations(recorded("a job that runs slower after the base replay than in it", { dir, id: journey.metadata.id, params: {}, browserPortFactory: () => new PlaywrightBrowserPort() }));
   }, 300_000);
   afterAll(() => close());
 

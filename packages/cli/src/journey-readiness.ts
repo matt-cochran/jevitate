@@ -330,7 +330,7 @@ function proofCheck(ctx: JourneyContext, journeysDir: string, cwd: string): { ch
   };
 }
 
-/** #609: the marker `mutationProofVerdict` puts before a refused targeted proof's own refusal text. */
+/** #609: the marker the adjudicator's proof verdict puts before a refused targeted proof's own refusal text. */
 const TARGETED_REFUSAL_MARKER = "a targeted proof was refused: ";
 
 /**

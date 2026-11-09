@@ -4,10 +4,7 @@ import {
   JourneySchema,
   MAX_TARGETED_RELAXATIONS,
   assertionSiteKey,
-  classifyMutation,
   journeyAssertions,
-  judgeAssertions,
-  mutationProofVerdict,
   nextTargetedRelaxation,
   planJourneyMutations,
   relaxedMutationReplay,
@@ -19,7 +16,12 @@ import {
   type MutationFailedSite,
   type MutationPlan,
   type MutationRunResult,
+  mutationPlanSites,
 } from "./index.js";
+import { classifyMutation, judgeAssertions as judgeSites, mutationProofVerdict } from "@jevitate/adjudicator";
+/** #812: the adjudicator's judging of a Journey's own assertion sites, as `journey verify` gathers them. */
+const judgeAssertions = (j: Journey, plan: MutationPlan, results: ReadonlyMap<string, MutationRunResult>) =>
+  judgeSites(journeyAssertions(j), plan, results, new Map(mutationPlanSites(j).map((s) => [s.site, s])));
 
 // #609 — a TARGETED proof for an assertion that is a `cascade` under a paired mutation only because
 // an EARLIER intentional defense caught the same mutation first. The earlier step's postcondition is
