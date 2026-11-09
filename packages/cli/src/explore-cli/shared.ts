@@ -117,6 +117,7 @@ export type ExploreOpts = {
     replyCeilingMs?: string;
     replyMaxChars?: string;
     jobWaitMs?: string;
+    renderWaitMs?: number;
     deny: string[];
     paid: string[];
     allowControl?: string[];

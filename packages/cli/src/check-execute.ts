@@ -381,6 +381,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         goal,
         successChecks,
         ...(g.successWhen === undefined ? {} : { successWhen: g.successWhen }),
+        ...(x.renderWaitMs === undefined ? {} : { renderWaitMs: x.renderWaitMs }),
         ...(x.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
         ...(x.actionDeltas === true ? { actionDeltas: true } : {}),
         ...(x.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),

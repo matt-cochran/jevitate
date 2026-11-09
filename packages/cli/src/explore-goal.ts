@@ -15,6 +15,7 @@ import type { ActionDeltaStats, ActionableControlOutcome, HostHealthSampler, Inv
 import type { DefectOutcome, EnvironmentDegraded, GoalReason, HostHealthSummary, StartupAttempt } from "@jevitate/domain";
 import { runGoalBasedMission, assertAuthorizedExploreTarget, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type SecretCommandRunner, type TypeFixture, type UploadFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
+import { renderWaitMsFromFlags } from "./goal-run-flags.js";
 import { GOAL_ONLY_OUTCOMES, defectOutcomeOf, goalMissionOutcome, goalReasonOf, startedOutcome, type FilingConfig, type IssueDraft, type IssueFilerPort, type MissionFailure, type MissionOutcome, clock } from "@jevitate/domain";
 import { draftForCrash, draftForHang, type HangFinding, type TimingSummary } from "@jevitate/explore";
 import { processIssueDrafts, type FindingsIssues } from "./findings-filing.js";
@@ -47,6 +48,8 @@ import { triageOf, type ServerLogOptions, serverLogResult, serverLogRuntimeOptio
  */
 
 export interface RunExplorationOptions {
+  /** #837: finite page-perception settle bound; absent retains the core's normal default. */
+  readonly renderWaitMs?: number;
   /** Test seam (#203): the run's host-health sampler (a deterministic fake host). Default: this host's. */
   readonly hostHealth?: HostHealthSampler;
   readonly url: string;
@@ -419,6 +422,7 @@ export async function runExploration(opts: RunExplorationOptions): Promise<RunEx
 async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: ReturnType<typeof openModelSecretScope>): Promise<RunExplorationResult> {
   // Guardrail #1 — authorize BEFORE opening a browser. Throws on refusal.
   const origin = assertAuthorizedExploreTarget(opts.url, opts.allowlist);
+  const renderWaitMs = renderWaitMsFromFlags(opts);
   // #543: every http success check's origin, too (the probe re-checks each request after substitution).
   assertHttpChecksAllowed(opts.successChecks ?? [], opts.allowlist);
   assertSaveStorageStateOutsideProject(opts.saveStorageState);
@@ -545,6 +549,7 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
     const start = await startFromJourney(opts.journeyPrefix, session, opts.url, opts.allowlist, opts.browser);
     const actor = CastActor.named("explorer").whoCan(new BrowseTheWeb(session, [...opts.allowlist]));
     const mission = await runGoalBasedMission({
+      ...(renderWaitMs === undefined ? {} : { renderWaitMs }),
       ...(opts.target?.timing === undefined ? {} : { timingConfig: opts.target.timing }),
       ...(opts.target?.settle === undefined ? {} : { settle: opts.target.settle }),
       ...(opts.target?.hangs === undefined ? {} : { hangs: opts.target.hangs }),
