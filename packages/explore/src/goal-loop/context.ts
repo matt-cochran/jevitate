@@ -65,6 +65,11 @@ export interface RunContext {
   readonly secrets: string[];
   /** #359: how many times each `cmd:` binding's command has run this run (by descriptor). */
   readonly secretCommandRuns: Map<string, number>;
+  /**
+   * Values the run typed into credential fields that were not bound secrets (a goal-stated password),
+   * by field — each is a run secret from then on. A retype into the same field reuses its value.
+   */
+  readonly typedCredentials: Map<string, string>;
   readonly secretContext: string | null;
   readonly missionContext: string | undefined;
   readonly bounds: Bounds;

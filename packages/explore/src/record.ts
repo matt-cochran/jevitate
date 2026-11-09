@@ -16,6 +16,7 @@ import { assertNoSecretInPayload, redactText, redactUrl, secretForms } from "@je
 import { targetDisplay } from "@jevitate/recorder";
 import type { PageTiming } from "./timing.js";
 import { controlDisplay } from "./snapshot.js";
+import { isSecretFieldDescriptor } from "./credential-input.js";
 
 /**
  * record: accumulate executed steps into a schema-valid, deterministically
@@ -247,12 +248,15 @@ export class RunRecorder {
   /**
    * Record a fill. `value` is a non-secret, model-authored string recorded as
    * `{ redacted:false, value }` by default (self-contained replay). Pass an
-   * explicit `ValueOrVar` to keep the value out of the artifact.
+   * explicit `ValueOrVar` to keep the value out of the artifact. A fill into a control the snapshot
+   * perceived as a secret field (`credential-input.ts`) is ALWAYS `{ redacted: true }`, whatever the
+   * value's source (a goal-stated password is still a password).
    */
   fill(rawDescriptor: TargetDescriptor, value: string | ValueOrVar, atMs: number, durationMs = 0): void {
     this.#ensureSegment("/");
     const descriptor = this.#target(rawDescriptor);
-    const v = this.#value(value);
+    const plain = typeof value === "string" ? value : "var" in value || value.redacted ? null : value.value;
+    const v: ValueOrVar = plain !== null && isSecretFieldDescriptor(rawDescriptor) ? { redacted: true, length: plain.length } : this.#value(value);
     this.#append({ kind: "fill", target: { ...descriptor }, value: v, expect: visible(descriptor) }, atMs, durationMs);
   }
 
