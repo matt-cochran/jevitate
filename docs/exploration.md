@@ -2,6 +2,13 @@
 
 How exploring missions stay in scope, what counts as coverage, how hangs are detected and confirmed, and what Jevitate measures about page timing.
 
+## A goal that matters needs a success check
+
+A goal run without `--success` ends on the model's own judgment that the goal is done, and that
+judgment can be wrong: on Jevitate's navigation lab, 8 of 20 judgment-only passes were false (the
+model said done on a page that only looked done). Give every goal whose result you rely on a success
+check (`--success`), which code reads independently of the model.
+
 ## Starting from a Journey step
 
 Every strategy except `--feature` can start from a promoted Journey instead of a bare URL:

@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.29.1] – 2026-11-09
+
+### Security
+
+- **A credential typed into a credential field is always stored redacted (#829).** Before, redaction
+  matched only values registered with `--secret` / `--secret-field`, so a password stated in a goal's text
+  was recorded in the clear in the Recording's fill and intent. Now a value typed into a password input, a
+  password / one-time-code / card autocomplete field, or a credential-named field is recorded
+  `{ redacted: true }` and masked in the intent, transcript, later model calls, result, evidence, issue
+  drafts and screenshots. Replaying such a fill fails with `E_REDACTED_FILL`, naming the field and how to
+  bind it. If you have Recordings or Journeys made from goals that stated a credential, check them for the
+  plaintext value, delete or re-record them, and rotate that credential.
+
+### Known limits
+
+- **A goal without a success check can pass falsely.** A goal run without `--success` ends on the
+  model's judgment, and on the navigation lab 8 of 20 such passes were false. Give a goal that matters
+  a `--success` check; see docs/exploration.md. The fix (job done checks, `explore --job`) is in 0.30.0.
+  This warning was due in the 0.29.0 notes and was missed there.
+
 ## [0.29.0] – 2026-11-07
 
 ### Behaviour changes
