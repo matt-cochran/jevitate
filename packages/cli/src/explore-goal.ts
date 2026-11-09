@@ -258,6 +258,11 @@ export interface RunExplorationResult {
   readonly runOutcome: RunOutcome;
   /** #688: a blocked goal's safe, manager-resumable control, with the observed proof. */
   readonly actionableControl?: ActionableControlOutcome;
+  /**
+   * rc-030b (#807): why a goal run that stopped blocked, without progress or out of budget did not end
+   * `no-route-found` (the no-route floor's first shortfall, or the other cause that kept its ending).
+   */
+  readonly noRouteShortfall?: string;
   /** A find-out goal's answer (#101), present only when code grounded it on the observed pages. */
   readonly answer?: RunAnswer;
   /**
@@ -755,6 +760,7 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
       outcome: goalOutcome,
       runOutcome: mission.run.outcome,
       ...(mission.run.actionableControl === undefined ? {} : { actionableControl: mission.run.actionableControl }),
+      ...(mission.run.noRouteShortfall === undefined ? {} : { noRouteShortfall: mission.run.noRouteShortfall }),
       ...(mission.run.answer === undefined ? {} : { answer: mission.run.answer }),
       ...(mission.run.boundary === undefined ? {} : { boundary: mission.run.boundary }),
       ...(mission.run.partialReport === undefined ? {} : { partialReport: mission.run.partialReport }),

@@ -10,7 +10,7 @@ import type { RunOutcome } from "../conversation.js";
 import { buildCrashReport } from "../crash-report.js";
 import type { ExploreRun, MissCause } from "../explore.js";
 import { MAX_REPORT_REJECTIONS } from "./limits.js";
-import { noRouteFound } from "./no-route.js";
+import { noRouteFound, noRouteShortfall } from "./no-route.js";
 import { targetStoppedAnswering } from "../mission-failure.js";
 import { emptyRecording } from "../record.js";
 import { redactText, redactUrl } from "../redact.js";
@@ -100,6 +100,10 @@ export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
     }
   }
 
+  // rc-030b: a blocked, stalled or exhausted run that did not end no-route-found says why (scorable).
+  const missed = ctx.stop === "blocked" || ctx.stop === "no-progress" || ctx.stop === "exhausted" ? noRouteShortfall(ctx) : null;
+  const noRouteMissed = missed === null ? null : redactText(missed.length > 240 ? `${missed.slice(0, 240)}…` : missed, ctx.secrets);
+
   await ctx.readOnly?.disarm();
   ctx.page.off("request", ctx.onRequestSeen);
   ctx.page.off("response", ctx.onDocumentResponse);
@@ -180,6 +184,7 @@ export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
     ...(missCause === undefined ? {} : { missCause }),
     ...(boundary === undefined ? {} : { boundary }),
     ...(ctx.actionableControl === null ? {} : { actionableControl: ctx.actionableControl }),
+    ...(noRouteMissed === null ? {} : { noRouteShortfall: noRouteMissed }),
     ...(ctx.endedOnRejectedDone && ctx.stop === "done" ? { doneRejected: true as const } : {}),
     ...(ctx.stop === "crashed" && ctx.failure !== undefined
       ? { crash: buildCrashReport(ctx.failure, ctx.crashWatch.signals(), ctx.heap.samples(), { host: await ctx.probeHost() }) }

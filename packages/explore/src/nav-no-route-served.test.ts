@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
-import { FakeGenerationGateway } from "@jevitate/ai-core";
+import { FakeGenerationGateway, type JudgmentState } from "@jevitate/ai-core";
 import { goalMissionOutcome, goalReasonOf, MISSION_EXIT_CODES } from "@jevitate/domain";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runGoalBasedMission, type GoalBasedResult } from "./missions/goal-based.js";
@@ -42,7 +42,7 @@ afterEach(async () => {
 });
 
 /** `met`: what the scripted goal judgment says (no route: the goal is not met on any page). */
-async function replay(caseId: string, prefs: (call: number) => readonly Preference[], met = 0.1): Promise<GoalBasedResult> {
+async function replay(caseId: string, prefs: (call: number, state: JudgmentState) => readonly Preference[], met = 0.1): Promise<GoalBasedResult> {
   const lab = await startLab(caseId);
   labs.push(lab);
   const judge = new PreferenceJudge(prefs, "blocked");
@@ -105,7 +105,69 @@ describe("#807 nav lab, served: the no-route group ends no-route-found once the 
   }
 });
 
+/**
+ * rc-030b no-route-absent-feature r0, decision by decision: nav links only, giving up (`null`) between
+ * them while return-to-start moves it back; never an invoice, the profile or the team page.
+ */
+const NAV_ONLY: ReadonlyArray<string | null> = ["Invoices", "Settings", "Invoices", null, "Pinecrest Books", "Customers", "Invoices", null, "Settings", null, "Pinecrest Books", "Customers", "Invoices"];
+/** What the floor steer names after NAV_ONLY: the invoice pages, profile and team. */
+const LEAVES = ["INV-1024", "Invoices", "INV-1042", "Invoices", "INV-1057", "Settings", "Profile", "Settings", "Team"];
+/** A model that tours `first` (`null`: gives up) and gives up; once the floor steer is in its history, tours `then`. */
+const steered = (first: ReadonlyArray<string | null>, then: readonly string[]) => {
+  let i = 0;
+  let j = 0;
+  return (_call: number, state: { readonly history: readonly string[] }): readonly Preference[] => {
+    if (!state.history.some((h) => h.startsWith("blocked deferred (1/3)"))) {
+      const name = i < first.length ? first[i++] : null;
+      return name === null || name === undefined ? [] : [click(name)];
+    }
+    return j < then.length ? [click(then[j++]!)] : [];
+  };
+};
+
+describe("rc-030b nav lab, served: a give-up below the floor is steered to what is left, then the floor decides", () => {
+  const CASES: Array<{ id: string; first: ReadonlyArray<string | null>; then: readonly string[]; pages: readonly string[] }> = [
+    { id: "no-route-absent-feature", first: NAV_ONLY, then: LEAVES, pages: ["/invoices/1057", "/settings/team"] },
+    { id: "no-route-removed-link", first: NAV_ONLY, then: LEAVES, pages: ["/invoices/1024", "/settings/profile"] },
+    { id: "wall-role-hidden", first: NAV_ONLY, then: LEAVES, pages: ["/invoices/1042", "/settings/team"] },
+    // rc-030b large-no-route r3/r4/r5/r9: gave up on the directory, having opened no customer.
+    { id: "large-no-route", first: ["Customer directory"], then: ["Customer 1", "Next customer", "Next customer"], pages: ["/customer/1", "/customer/3"] },
+  ];
+  for (const c of CASES) {
+    it(`${c.id}: the rc-030b give-up is deferred toward the unopened pages and ends no-route-found (exit 2)`, async () => {
+      const r = await replay(c.id, steered(c.first, c.then));
+      expect(r.run.failure?.kind, r.reason).toBe("no-route-found");
+      expect(reasonOf(r)).toBe("no-route-found");
+      expect(MISSION_EXIT_CODES[goalMissionOutcome(r.outcome, "none")]).toBe(2);
+      expect(r.run.noRouteShortfall).toBeUndefined();
+      for (const p of c.pages) expect(r.reason).toContain(p);
+      expect(r.run.transcript.some((t) => /blocked deferred \(1\/3\): the run has not covered what it can reach yet/.test(t.reason ?? ""))).toBe(true);
+    }, 120_000);
+  }
+
+  it("a model that ignores the steer ends as before (blocked, exit 1), and the result names the floor's shortfall", async () => {
+    const r = await replay("no-route-absent-feature", steered(NAV_ONLY, []));
+    expect(r.outcome).toBe("blocked");
+    expect(r.run.failure).toBeUndefined();
+    expect(r.run.noRouteShortfall).toMatch(/"INV-1024" on \/invoices leads to a page not opened/);
+  }, 120_000);
+});
+
 describe("#807 nav lab, served: a reachable goal never reads no-route-found", () => {
+  it("hover-menu-span: the route is a link the page hides in a hover menu, so the floor is not met even after every visible control", async () => {
+    const r = await replay("hover-menu-span", tour(APP_TOUR));
+    expect(r.run.failure?.kind).not.toBe("no-route-found");
+    expect(reasonOf(r)).not.toBe("no-route-found");
+    expect(r.run.noRouteShortfall).toMatch(/hides a control the run cannot see \("Report library"\)/);
+  }, 120_000);
+
+  it("route-hidden-from-model: no steer is given while something clickable is beyond the run, and the shortfall says so", async () => {
+    const r = await replay("route-hidden-from-model", steered(NAV_ONLY, LEAVES));
+    expect(reasonOf(r)).not.toBe("no-route-found");
+    expect(r.run.transcript.some((t) => /blocked deferred \(\d\/3\)/.test(t.reason ?? ""))).toBe(false);
+    expect(r.run.noRouteShortfall).toMatch(/shows something clickable the run cannot use/);
+  }, 120_000);
+
   it("route-hidden-from-model: the route is a clickable span the run cannot use, so the floor is not met", async () => {
     const r = await replay("route-hidden-from-model", tour(APP_TOUR));
     expect(r.run.failure?.kind).not.toBe("no-route-found");

@@ -291,8 +291,12 @@ it could reach, and none leads toward the goal, it ends `inconclusive` (exit `2`
 from the run's own tracking: every top-level navigation page opened, no untried control left on any page
 seen (a link counts once its destination was opened; three pages of one shape, such as `/customer/1`,
 `/customer/2`, `/customer/3`, cover the rest), no control naming the goal, and nothing clickable on a
-page that the run cannot use (an `onclick` element outside a control, a canvas, a frame). Below the floor
-the run ends as it did before. A role word on the page ("Viewer", "Read-only", "Guest") is named as a
+page that the run cannot use (an `onclick` element outside a control, a canvas, a frame) or that it hides
+(a link in a hover or collapsed menu to a page not opened, a hidden button). Below the floor the run ends as
+it did before, and the result's `noRouteShortfall` names the first gap (or the other cause that kept the
+ending). A give-up below the floor whose only gaps the run can still open (an unopened page, an untried
+safe control) is deferred, at most 3 times and only after an action since the last, with a hint naming
+what is left; the floor, not the hint, decides the ending. A role word on the page ("Viewer", "Read-only", "Guest") is named as a
 hint that another role may see more; it is never read as a wall. See
 [no route found](./outcomes.md#no-route-found).
 

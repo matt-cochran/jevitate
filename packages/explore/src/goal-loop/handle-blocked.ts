@@ -16,6 +16,7 @@ import { terms } from "./goal-focus.js";
 import { JOB_WAIT_SLICE_MS, MAX_EARLY_BLOCKED_REFUSALS, quote, waitOutJob } from "./helpers.js";
 import { detectRunBoundary, endAtBoundary } from "./boundary.js";
 import { deferEnding } from "./min-effort.js";
+import { steerToFloor } from "./no-route.js";
 import type { Flow, Step } from "./step.js";
 
 /**
@@ -255,6 +256,14 @@ export async function handleBlocked(ctx: RunContext, step: Step): Promise<Flow> 
   if (deferred !== null) {
     record(false, deferred, { origin: "engine" });
     // #769 — no action was taken: this turn must not count toward no-progress.
+    ctx.refusedTurn = true;
+    return "continue";
+  }
+  // rc-030b (#807): a give-up below the no-route floor whose only gaps the run can still open is deferred
+  // toward them (bounded; the floor, not the steer, decides the ending).
+  const floorNote = steerToFloor(ctx);
+  if (floorNote !== null) {
+    record(false, floorNote, { origin: "engine" });
     ctx.refusedTurn = true;
     return "continue";
   }

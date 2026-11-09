@@ -463,6 +463,11 @@ export interface ExploreRun {
   /** 0.30.0 (#807): the wall or session boundary the run stopped at; the goal ends `boundary` (exit 2), `missCause` names its signal. */
   readonly boundary?: BoundaryEvidence;
   /**
+   * rc-030b (#807): why a run that stopped `blocked`, `no-progress` or `exhausted` did not end
+   * `no-route-found` — the no-route floor's first shortfall or the other cause that kept its ending.
+   */
+  readonly noRouteShortfall?: string;
+  /**
    * #688 — the distinct, machine-readable terminal outcome when a blocked run stopped with an
    * actionable control: the candidate a manager resumes through (locator, label, visible/enabled
    * facts, screenshot, exact resume identity) and the safe-predicate clauses it satisfied and did
