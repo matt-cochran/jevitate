@@ -526,6 +526,7 @@ export class PageMonitor {
   #lastNavigation: number;
   /** Long-lived requests that are not in-flight work, and why. */
   readonly #background = new Map<Request, "stream" | "ignored" | "long-poll">();
+  #lastAppRequest: CompletedRequest | null = null;
   #ignore: (url: string) => boolean = () => false;
   #longPollMs = DEFAULT_LONG_POLL_MS;
   /** #745: the target opted into the dev-server (Vite/HMR) settle policy. */
@@ -634,7 +635,7 @@ export class PageMonitor {
         const endedAt = this.#now();
         const contentType = this.#contentTypes.get(r) ?? null;
         const rpcStatus = this.#rpcStatuses.get(r);
-        this.#completed.push({
+        const done: CompletedRequest = {
           ...started,
           status,
           contentType,
@@ -643,7 +644,9 @@ export class PageMonitor {
           endedAt,
           durationMs: Math.max(0, endedAt - started.startedAt),
           ...(ignored ? { ignored: true as const } : {}),
-        });
+        };
+        this.#completed.push(done);
+        if (done.resourceType !== "document" && !ignored) this.#lastAppRequest = done;
         for (const c of this.#captures) {
           c.ended(r, {
             method: started.method.toUpperCase(),
@@ -882,6 +885,15 @@ export class PageMonitor {
   /** #649: the string values the writes started since `sinceMs` sent, from URLs `keep` accepts. */
   writeBodyValuesSince(sinceMs: number, keep: (url: string) => boolean): string[] {
     return this.#writeBodies.filter((w) => w.startedAt >= sinceMs && keep(w.url)).flatMap((w) => w.values);
+  }
+
+  /**
+   * #689: the app's most recent completed request (not a document, not ignored background traffic),
+   * kept apart from the recent history `closeWindow` prunes at RECENT_REQUESTS_MS: a hang that stands
+   * a minute into a job wait still says when the app last answered.
+   */
+  lastAppRequest(): CompletedRequest | null {
+    return this.#lastAppRequest;
   }
 
   /** Requests that ended since `sinceMs` (wall clock). */
