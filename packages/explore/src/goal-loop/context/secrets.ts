@@ -10,6 +10,7 @@ export function initSecrets(ctx: MutableRunContext, cfg: ExploreConfig): void {
   // A bound secret field's value (or TOTP seed) is a run secret: every redaction seam scrubs it.
   ctx.secrets = [...(cfg.secrets ?? []), ...secretFieldSecrets(cfg.secretFields)];
   ctx.secretCommandRuns = new Map();
+  ctx.typedCredentials = new Map();
   ctx.secretContext = secretFieldContext(cfg.secretFields);
   ctx.missionContext = [
       cfg.missionContext,

@@ -202,6 +202,12 @@ export interface ExploreConfig {
    * type step fails without spawning it again.
    */
   readonly secretCommandAttempts?: number;
+  /**
+   * Called with each value the run itself learns is a secret mid-run (a value typed into a
+   * credential field, `credential-input.ts`), right before it is typed — so a caller that persists
+   * or sends anything of its own (a result, evidence, screenshots, model calls) masks it too.
+   */
+  readonly onRunSecret?: (value: string) => void;
   readonly missionContext?: string;
   /** Recording.site label. Defaults to the start origin. */
   readonly site?: string;
