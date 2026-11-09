@@ -179,7 +179,7 @@ export async function handleBlocked(ctx: RunContext, step: Step): Promise<Flow> 
     return "continue";
   }
   // 0.30.0 (#807): a give-up at a wall or a lost session is a boundary, not a defect.
-  const boundary = detectRunBoundary(ctx, step.snap);
+  const boundary = detectRunBoundary(ctx, step.snap, { giveUp: true });
   if (boundary !== null) {
     record(false, boundary.reason, { origin: "engine" });
     endAtBoundary(ctx, boundary);

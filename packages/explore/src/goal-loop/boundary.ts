@@ -35,6 +35,8 @@ export interface ObservedWrite {
 export interface ObservedControl {
   readonly name: string;
   readonly landmark?: string | null;
+  /** False for a disabled control; absent reads as enabled. */
+  readonly enabled?: boolean;
 }
 
 /** A sign-in word in the goal: such a goal is about the sign-in page, so landing there is no boundary. */
@@ -54,6 +56,8 @@ export function detectWall(input: {
   readonly goal: string;
   /** True when the safety policy refuses this control as a paid action. */
   readonly isPaid: (c: ObservedControl) => boolean;
+  /** Whether a paid-control wall may be named (a give-up); default true. */
+  readonly paidWall?: boolean;
 }): (BoundaryEvidence & { readonly reason: string }) | null {
   const step = Math.max(1, input.step);
   const doc = denial(input.documentStatus);
@@ -64,23 +68,37 @@ export function detectWall(input: {
   }
   const words = input.goal.toLowerCase().match(/[a-z0-9]{2,}/g) ?? [];
   const names = (c: ObservedControl): boolean => words.some((w) => w.length > 3 && c.name.toLowerCase().includes(w.replace(/s$/, "")));
-  const main = input.controls.filter((c) => (c.landmark ?? null) !== "navigation" && (c.landmark ?? null) !== "banner");
+  const main = input.controls.filter((c) => c.enabled !== false && (c.landmark ?? null) !== "navigation" && (c.landmark ?? null) !== "banner");
   const paid = main.find((c) => input.isPaid(c));
-  if (paid !== undefined && !names(paid) && !main.some((c) => c !== paid && names(c))) {
+  // A paywall stands where the goal's control would be: the page's main region offers nothing but paid
+  // controls. A page that still offers other work is no wall: the run can try it.
+  if (
+    input.paidWall !== false &&
+    paid !== undefined &&
+    main.every((c) => input.isPaid(c)) &&
+    !names(paid) &&
+    !main.some((c) => c !== paid && names(c))
+  ) {
     return { kind: "wall", step, signal: "paid-control", reason: `the page offers only a paid control ("${paid.name}") where the goal's control would be` };
   }
   return null;
 }
 
-/** `session`: a settled step, after actions and none of them signing in, on a sign-in URL the goal never asked for. */
+/**
+ * `session`: a settled step, after actions and none of them signing in, on a sign-in URL the goal never
+ * asked for — reached from a page of the app (`leftSignIn`). A run that has only ever been on the
+ * sign-in page (it was seeded there) lost no session: the app never sent it anywhere.
+ */
 export function detectSession(input: {
   readonly step: number;
   readonly url: string;
   readonly goal: string;
   readonly actions: number;
   readonly authAttempted: boolean;
+  /** True once the run settled on a page that is not a sign-in page. */
+  readonly leftSignIn: boolean;
 }): (BoundaryEvidence & { readonly reason: string }) | null {
-  if (input.actions <= 0 || input.authAttempted || !isLoginLikeUrl(input.url) || SIGN_IN_GOAL.test(input.goal)) return null;
+  if (input.actions <= 0 || input.authAttempted || !input.leftSignIn || !isLoginLikeUrl(input.url) || SIGN_IN_GOAL.test(input.goal)) return null;
   let path = input.url;
   try {
     path = new URL(input.url).pathname;
@@ -90,10 +108,19 @@ export function detectSession(input: {
   return { kind: "session", step: Math.max(1, input.step), signal: "login-url", reason: `the session ended mid-run: the app sent the run to its sign-in page (${path})` };
 }
 
-/** Detect a wall or a session boundary from the run's own observed state. */
+/** The runs (by context) that have settled on a page that is not a sign-in page. */
+const leftSignIn = new WeakSet<object>();
+
+/**
+ * Detect a wall or a session boundary from the run's own observed state. On a settled step a
+ * `paid-control` wall needs the run to have acted (a paywall it reached, as `session` does); before
+ * any action the seed page is the model's to try first, and a give-up there (`opts.giveUp`, from
+ * `handleBlocked`) may still name one.
+ */
 export function detectRunBoundary(
   ctx: RunContext,
   snap: { readonly url: string; readonly controls: readonly (ObservedControl & { readonly role?: string; readonly descriptor?: unknown })[] },
+  opts: { readonly giveUp?: boolean } = {},
 ): (BoundaryEvidence & { readonly reason: string }) | null {
   const step = ctx.tracker.actions + 1;
   const writes = ctx.effectLog.entries().sideEffects.map((e) => ({ method: e.request.method, endpoint: e.request.endpoint, status: e.request.status, ...(e.thirdParty === true ? { thirdParty: true } : {}) }));
@@ -103,9 +130,11 @@ export function detectRunBoundary(
     writes,
     controls: snap.controls,
     goal: ctx.cfg.goal,
+    paidWall: opts.giveUp === true || ctx.tracker.actions > 0,
     isPaid: (c) => ctx.safety.refuses(c as Parameters<typeof ctx.safety.refuses>[0])?.risk === "paid",
   });
-  return wall ?? detectSession({ step, url: snap.url, goal: ctx.cfg.goal, actions: ctx.tracker.actions, authAttempted: ctx.auth.attempted });
+  if (!isLoginLikeUrl(snap.url)) leftSignIn.add(ctx);
+  return wall ?? detectSession({ step, url: snap.url, goal: ctx.cfg.goal, actions: ctx.tracker.actions, authAttempted: ctx.auth.attempted, leftSignIn: leftSignIn.has(ctx) });
 }
 
 /** End the run at a boundary: `finish.ts` reads `ctx.boundary` and ends it `goalOutcome: "boundary"`. */
