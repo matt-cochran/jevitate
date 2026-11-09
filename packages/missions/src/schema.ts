@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AssertionSchema, InvariantSpecSchema, type Assertion, type InvariantSpec } from "@jevitate/recording";
+import { AssertionSchema, InvariantSpecSchema, isSecretName, type Assertion, type InvariantSpec } from "@jevitate/recording";
 
 // `id` is used to build a filesystem path (both for `MissionTarget`s and for
 // `QueuedMission`s), so it is constrained to a safe format at the schema
@@ -305,3 +305,45 @@ export const QueuedMissionSchema: z.ZodType<QueuedMission> = z
   })
   .strict()
   .superRefine(refineStrategyShape);
+
+/**
+ * #797 (0.30.0): a queued call of a promoted Journey. It carries the Journey's id and the content hash
+ * the call was queued against (a Journey changed since is refused at run time), non-secret params, the
+ * environment name or a base URL, and when it was requested. NEVER a secret value: a secret-named param
+ * is refused at parse (the message names the param, never its value); a secret the Journey needs is met
+ * at run time by the run's secret mode (vault or hold).
+ */
+export interface QueuedJourneyCall {
+  kind: "journey";
+  journey: { id: string; hash: string };
+  params?: Record<string, string>;
+  env?: string;
+  baseUrl?: string;
+  requestedAt: string;
+}
+
+export const QueuedJourneyCallSchema: z.ZodType<QueuedJourneyCall> = z
+  .object({
+    kind: z.literal("journey"),
+    journey: z.object({ id: z.string().regex(SAFE_ID_RE, "invalid id"), hash: z.string().min(1) }).strict(),
+    params: z.record(z.string(), z.string()).optional(),
+    env: z.string().min(1).optional(),
+    baseUrl: z.string().min(1).optional(),
+    requestedAt: z.string().min(1),
+  })
+  .strict()
+  .superRefine((call, ctx) => {
+    for (const name of Object.keys(call.params ?? {})) {
+      if (isSecretName(name)) {
+        ctx.addIssue({ code: "custom", path: ["params", name], message: `param '${name}' is secret-named: a queued call never stores a secret value; the run meets it with its secret mode (vault or hold)` });
+      }
+    }
+    if (call.env !== undefined && call.baseUrl !== undefined) {
+      ctx.addIssue({ code: "custom", path: ["baseUrl"], message: "give env or baseUrl, not both" });
+    }
+  });
+
+/** What the queue holds: an exploration mission or a Journey call. */
+export type QueuedEntry = QueuedMission | QueuedJourneyCall;
+
+export const QueuedEntrySchema: z.ZodType<QueuedEntry> = z.union([QueuedMissionSchema, QueuedJourneyCallSchema]);

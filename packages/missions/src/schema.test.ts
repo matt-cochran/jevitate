@@ -3,6 +3,8 @@ import {
   MissionTargetSchema,
   MissionRequestSchema,
   QueuedMissionSchema,
+  QueuedJourneyCallSchema,
+  QueuedEntrySchema,
   targetAllowlist,
 } from "./schema.js";
 
@@ -231,5 +233,27 @@ describe("QueuedMissionSchema", () => {
     expect(() => QueuedMissionSchema.parse({ ...queued, status: "failed", error: "unknown or unpromoted mission target" })).not.toThrow();
     expect(() => QueuedMissionSchema.parse({ ...queued, status: "bogus" })).toThrow();
     expect(() => QueuedMissionSchema.parse({ ...queued, status: "done", resultId: "../../etc/passwd" })).toThrow();
+  });
+});
+
+describe("QueuedJourneyCallSchema (#797)", () => {
+  const call = { kind: "journey", journey: { id: "login", hash: "abc123" }, params: { email: "a@b.co" }, env: "staging", requestedAt: "2026-11-09T00:00:00Z" };
+
+  it("accepts a call with id, hash, non-secret params and env, and QueuedEntry takes it", () => {
+    expect(QueuedJourneyCallSchema.parse(call)).toEqual(call);
+    expect(QueuedEntrySchema.parse(call)).toEqual(call);
+  });
+
+  it("refuses a secret-named param by name, never echoing its value", () => {
+    const r = QueuedJourneyCallSchema.safeParse({ ...call, params: { password: "x" } });
+    expect(r.success).toBe(false);
+    const message = r.success ? "" : r.error.message;
+    expect(message).toContain("password");
+    expect(message).not.toContain("x");
+  });
+
+  it("refuses env with baseUrl and an unsafe id", () => {
+    expect(QueuedJourneyCallSchema.safeParse({ ...call, baseUrl: "https://s.example.com" }).success).toBe(false);
+    expect(QueuedJourneyCallSchema.safeParse({ ...call, journey: { id: "../x", hash: "h" } }).success).toBe(false);
   });
 });

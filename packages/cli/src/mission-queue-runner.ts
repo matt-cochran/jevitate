@@ -12,8 +12,12 @@ import {
   type DrainableMissionQueueStore,
   type MissionTarget,
   type MissionTargetRegistry,
+  type QueuedJourneyCall,
   type QueuedMission,
 } from "@jevitate/missions";
+import { runGuardedJourney, type GuardedJourneyDecision } from "./journey-run-mode-gate.js";
+import { environmentFromFlags } from "./environments.js";
+import type { ResolvedJourneyEnvironment } from "./environments.js";
 import {
   CLI_ADVERSARIAL_STRATEGIES,
   runAdversarialCliMission,
@@ -613,4 +617,36 @@ function runQueuedMission(opts: RealExecutorOptions): (job: Parameters<QueuedMis
       await fx?.restore();
     }
   };
+}
+
+export interface QueuedJourneyRunDeps {
+  readonly journeysDir: string;
+  readonly environmentsFile?: string | undefined;
+  readonly targetsFile?: string | undefined;
+  /**
+   * The replay itself, started only once the shared gate (`runGuardedJourney`: promotion check, run-mode
+   * gate, #789 guard) passed. It gets the call's non-secret params; a secret the Journey needs is met by
+   * the run's own secret mode (vault or hold), never by the call.
+   */
+  readonly run: (run: { readonly id: string; readonly params: Record<string, string>; readonly environment: ResolvedJourneyEnvironment | undefined; readonly decision: GuardedJourneyDecision | undefined }) => Promise<unknown>;
+}
+
+/**
+ * #797: runs one queued Journey call through the same gate as `run_journey` (`runGuardedJourney`). A
+ * Journey whose content changed since the call was queued is refused `E_JOURNEY_APPROVAL_STALE` before any
+ * browser. Throws the gate's typed refusals; the caller records them on the call.
+ */
+export async function runQueuedJourneyCall(call: QueuedJourneyCall, deps: QueuedJourneyRunDeps): Promise<unknown> {
+  const environment = environmentFromFlags(
+    { ...(call.env === undefined ? {} : { env: call.env }), ...(call.baseUrl === undefined ? {} : { baseUrl: call.baseUrl }) },
+    { ...(deps.environmentsFile === undefined ? {} : { environmentsFile: deps.environmentsFile }), ...(deps.targetsFile === undefined ? {} : { targetsFile: deps.targetsFile }) },
+  );
+  return runGuardedJourney({
+    journeysDir: deps.journeysDir,
+    id: call.journey.id,
+    environment,
+    targetsFile: deps.targetsFile,
+    expectedHash: call.journey.hash,
+    run: (decision) => deps.run({ id: call.journey.id, params: { ...(call.params ?? {}) }, environment, decision }),
+  });
 }
