@@ -1266,7 +1266,7 @@
   withIdLock: function
   writeFileAtomic: function
 
-# @jevitate/interpreter (60 exports)
+# @jevitate/interpreter (61 exports)
   anchorLocator: other
   applyTextEdit: other
   attrOf: other
@@ -1299,6 +1299,7 @@
   readFlashes: other
   RecordingInterpreter: other
   RecordingSink: other
+  RedactedFillError: other
   ReplayActionGuard: other
   ReplayRefusal: other
   ReplayTargetError: other

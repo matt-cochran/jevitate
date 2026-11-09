@@ -802,12 +802,13 @@
   withIdLock: function
   writeFileAtomic: function
 
-# @jevitate/interpreter (38 exports)
+# @jevitate/interpreter (39 exports)
   BufferingSink: class
   DEFAULT_IN_VIEWPORT_MIN: const (number)
   PLAYWRIGHT_TEST_ID_ATTRIBUTE: const (string)
   PostconditionFailed: class
   RecordingInterpreter: class
+  RedactedFillError: class
   ReplayRefusal: class
   ReplayTargetError: class
   SelectAlternativeUnavailableError: class
