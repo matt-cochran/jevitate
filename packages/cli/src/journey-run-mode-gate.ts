@@ -137,6 +137,30 @@ export function resolveRunTarget(req: RunTargetRequest): RunTarget {
   return { origin, trust, mode: runModeFor(trust), ...(targetConfig === undefined ? {} : { targetConfig }) };
 }
 
+/**
+ * 0.30.0 §5.1: the origins the test-trusted target declares, where test mode lets a write go that
+ * automation mode refuses. The named environment's `baseUrl` and named `origins` when that environment
+ * is `trust: "test"` or `"harness"` (not its `allow`, as `resolveTargetTrust` reads it), and the run's
+ * origin when the operator's `targets.json` declares it so. Empty when the run is not in test mode or a
+ * file cannot be read. Reads only human-written files; nothing a caller passes adds an origin.
+ */
+export function testDeclaredOrigins(req: RunTargetRequest): string[] {
+  const target = resolveRunTarget(req);
+  if (target.mode !== "test") return [];
+  const out: string[] = [];
+  if (target.targetConfig?.trust === "test" || target.targetConfig?.trust === "harness") out.push(target.origin);
+  if (req.environment?.name !== undefined) {
+    try {
+      const file = environmentFileOf(req.environment) ?? (req.environmentsFile === undefined ? environmentsFilePath() : req.environmentsFile);
+      const def = file === null || file === undefined ? undefined : loadEnvironmentsFile(file)[req.environment.name];
+      if (def !== undefined && (def.trust === "test" || def.trust === "harness")) out.push(...ownOrigins(def).flatMap((o) => o ?? []));
+    } catch {
+      // An unreadable file declares nothing (resolveRunTarget already reads the target as at least unknown).
+    }
+  }
+  return [...new Set(out)];
+}
+
 /** The channel a Journey's approval was made over, if recorded. */
 export function approvalChannelOf(journey: Journey): ApprovalChannel | undefined {
   return journey.metadata.approval?.provenance?.channel;

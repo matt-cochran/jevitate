@@ -16,6 +16,7 @@ import { withRecordedFixtures, fixtureDriftFor, type FixtureDrift } from "../jou
 import { currentBuildTree, currentEngineInfo, withEngine } from "../engine.js";
 import { JourneyVerifyStalledError, loadJourneyToVerify, planJourneyVerification, proofInactivityMs, verifyAssertionLine, verifyExitCode, verifyJourneyMutations, verifyNoResetLine } from "../journey-verify.js";
 import { JourneyVerifyResumeRefusedError, browserBindingOf, checkpointKeyPath, hookBindingOf, readVerifyProgress, verifyCheckpointPath, verifyProgressLine } from "../journey-verify-checkpoint.js";
+import { ProofHoldRefusedError } from "../journey-run-hooks.js";
 import { VerifyReceiptPreflightError } from "../journey-review-store.js";
 import { EXIT_CODES } from "../exit-codes.js";
 import { artifactStamp } from "../mission-journal.js";
@@ -242,6 +243,10 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
       } catch (err) {
         if (err instanceof JourneyVerifyResumeRefusedError) {
           emitJson(program, { ...fail(err.code, err.message), data: { reason: err.reason, exitCode: EXIT_CODES.inconclusive } });
+          process.exitCode = EXIT_CODES.inconclusive;
+        } else if (err instanceof ProofHoldRefusedError) {
+          // 0.30.0 §5.4: a proof never holds; it reached a step only a person can do, and nothing was held.
+          emitJson(program, { ...fail(err.code, err.message), data: { outcome: "inconclusive", kind: err.kind, step: err.step, exitCode: EXIT_CODES.inconclusive } });
           process.exitCode = EXIT_CODES.inconclusive;
         } else if (err instanceof JourneyVerifyStalledError) {
           // Only where the terminal layer stays out (an MCP call) does this run: elsewhere it ended the process first.

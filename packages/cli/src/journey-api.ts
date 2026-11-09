@@ -765,8 +765,17 @@ async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutatio
   const replayed = mutation.mutateJourney === undefined || journey !== full ? journey : mutation.mutateJourney(journey);
 
   // #789: under an MCP invocation, this run's guard: a production target is refused here, before anything opens.
-  // 0.30.0 §5.4: the mode decides whether the Journey's own `allowedOrigins` join the write allowlist (test mode only).
-  const runGuard = prepareMcpRunGuard({ site: journey.recording.site, allowedOrigins, environment: opts.environment, targetsFile: opts.runGuardTargetsFile, ...(mode === undefined ? {} : { mode }), authoredOrigins: journey.metadata.allowedOrigins ?? [] });
+  // 0.30.0 §5.4: the mode decides whether the Journey's own `allowedOrigins` join the write allowlist (automation mode drops them).
+  // §5.1: test mode lets a destructive control act and a write reach the declared environment; each is noted in the evidence.
+  const runGuard = prepareMcpRunGuard({
+    site: journey.recording.site,
+    allowedOrigins,
+    environment: opts.environment,
+    targetsFile: opts.runGuardTargetsFile,
+    ...(mode === undefined ? {} : { mode }),
+    authoredOrigins: journey.metadata.allowedOrigins ?? [],
+    onRelaxed: (note) => evidence?.writer.note(note),
+  });
 
   const policy = opts.policy ?? safeRunPolicy();
   // #583 §3: a prepare-only boundary never self-heals — refused before any fixture or browser opens.

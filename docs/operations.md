@@ -280,6 +280,7 @@ stops being found once `.jevitate/` holds `db.sqlite` (which `site policy set` c
 | `baselines/`: `baseline tag` snapshots | `inbox/`, `missions/` (the queue), `trust/`, `sources/` (clones) |
 | `environments.json`: named environments for `--env` ([journeys](./journeys.md#environments---env)) | per-environment sessions and secret fields, in `targets.json` by origin |
 | `logs/<date>/`: run output (not committed) | `journeys/` and `logs/` when you are not in a repo |
+| `logs/holds/`: held runs (not committed): a signed record and a value-free checkpoint per hold | `verify-checkpoint.key`: the key that signs holds and checkpoints |
 | | `run/browser-slots/`: the machine-wide browser slots ([resource governance](#shared-machines-resource-governance)) |
 
 `.jevitate/.gitignore` (written by `init`, which only ever adds the lines it lacks) keeps `logs/`
@@ -291,6 +292,14 @@ Run output goes to `logs/<UTC date>/`, named by its artifact stem
 (`explore-2026-09-25T01-26-29-787Z.result.json`). `get_mission_result`, `verify_fix` and
 `report` find a result by its id in the project's logs, then in `~/.jevitate/logs`, then in the
 0.1.0 `~/.jevitate/recordings` and `~/.jevitate/ux-reports`.
+
+**Holds.** A run held for a person (see [run modes](./run-modes.md#holds-and-resume)) leaves
+`logs/holds/hold-<16 hex>.json` and `hold-<16 hex>.checkpoint.json` under the project's `.jevitate/` (under
+`~/.jevitate/` outside a project), and an inbox item with the same id. A hold lives 24 hours. After that,
+`jevitate inbox resume <id>` ends the run `inconclusive` with `E_HOLD_EXPIRED` (exit 2). The records hold no
+parameter value. They are signed with `~/.jevitate/verify-checkpoint.key`: a hold written without that key, or
+altered, is refused with `E_HOLD_INTEGRITY`. `jevitate inbox list` shows pending holds. A held run in CI
+never completes by itself: nothing but a person at a terminal answers it.
 
 Logs are pruned at the start of every command that writes them: a run older than 14 days is
 deleted, but the newest 50 runs are always kept. Change it in `~/.jevitate/config.json`:

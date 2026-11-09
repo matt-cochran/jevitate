@@ -2,6 +2,7 @@ import { queueExploration as facadeQueueExploration, aiGenerateText as facadeAiG
 import { FsMissionTargetStore, MissionTargetRegistry, FsMissionQueueStore, MISSION_STRATEGIES, QUEUED_SCREENSHOT_MODES } from "@jevitate/missions";
 import type { McpToolCtx, McpToolGroup } from "./shared.js";
 import { jsonResult, errorResult, redactCredentials } from "./shared.js";
+import { resolveSurfaceRunMode, runModeRecord } from "../run-surface-mode.js";
 
 /** `queue_exploration` and `ai_generate_text`. */
 export function exploreTools(ctx: McpToolCtx): McpToolGroup {
@@ -18,7 +19,18 @@ export function exploreTools(ctx: McpToolCtx): McpToolGroup {
       }
       const targets = new MissionTargetRegistry(new FsMissionTargetStore(deps.missionTargetsDir));
       const queue = new FsMissionQueueStore(deps.missionQueueDir);
-      return facadeQueueExploration(targets, queue, args);
+      const queued = await facadeQueueExploration(targets, queue, args);
+      // 0.30.0 §5: the mode the queued run will be in, from the person-written files for the promoted
+      // target's origin (the request names no trust). The run decides it again from the files when it
+      // starts (mission-queue-runner.ts), so a file changed in between is what counts.
+      const target = await targets.resolve(String((args as { target?: unknown }).target));
+      const decided = resolveSurfaceRunMode({
+        surface: "queue",
+        origin: target.baseUrl,
+        ...(deps.environmentsFile === undefined ? {} : { environmentsFile: deps.environmentsFile }),
+        ...(deps.targetsConfigPath === undefined ? {} : { targetsFile: deps.targetsConfigPath }),
+      });
+      return { ...queued, run: runModeRecord(decided) };
     });
 
   // ai_generate_text: preflight-gated generation. Wired only when a gateway (or

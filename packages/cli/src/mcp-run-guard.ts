@@ -10,6 +10,7 @@ import { environmentsFilePath, loadEnvironmentsFile, type ResolvedJourneyEnviron
 import { EXIT_CODES } from "./exit-codes.js";
 import { canonicalOrigin, loadTargetsFile, type McpRunAllowances, type TargetConfig } from "./target-config.js";
 import type { RunMode } from "./run-mode.js";
+import { resolveRunTarget, testDeclaredOrigins } from "./journey-run-mode-gate.js";
 
 /**
  * #789 — the floor under an MCP-driven replay, until run modes exist (#792). By default such a run:
@@ -102,12 +103,33 @@ export interface McpRunGuardRequest {
   readonly refuseProductionInAllowlist?: boolean;
   /**
    * 0.30.0 §5.4: the run's mode (journey-run-mode-gate.ts). With `authoredOrigins`, a Journey's own
-   * `allowedOrigins` join the write allowlist in test mode only; in automation mode a write there needs
-   * `mcpRun.allowOffAllowlistWrites`. Absent: as 0.29.0.
+   * `allowedOrigins` leave the write allowlist in automation mode (a write there needs
+   * `mcpRun.allowOffAllowlistWrites`). In test mode the guard's allowlist is automation mode's, and what
+   * test mode adds is bounded by the declared environment (§5.1, `TestModeRelaxation`): an authored
+   * origin the environment does not declare is refused there too. Absent: as 0.29.0.
    */
   readonly mode?: RunMode | undefined;
   /** The Journey's authored `metadata.allowedOrigins` (they are in `allowedOrigins` too). */
   readonly authoredOrigins?: readonly string[] | undefined;
+  /**
+   * 0.30.0 §5.1: told of each action test mode allowed that automation mode refuses (a destructive
+   * control, a write to a declared origin off the allowlist). Code-templated, never a value: for the
+   * run's evidence.
+   */
+  readonly onRelaxed?: ((note: string) => void) | undefined;
+}
+
+/**
+ * 0.30.0 §5.1, test mode: what loosens, and where. A destructive control (the built-in
+ * `builtin:destructive` rule only: session-ending and paid controls, and a target's own `safety.deny`,
+ * still refuse) and a write to an origin the test-trusted target declares (a test environment's
+ * `baseUrl` and named `origins`, or the origin a `targets.json` `trust: "test"` names). A write to any
+ * other origin is still refused, a Journey's own `allowedOrigins` included (an agent can author those),
+ * and a production origin refuses in every mode.
+ */
+export interface TestModeRelaxation {
+  readonly declaredOrigins: ReadonlySet<string>;
+  readonly onRelaxed: (note: string) => void;
 }
 
 /**
@@ -158,7 +180,26 @@ export function prepareMcpRunGuard(req: McpRunGuardRequest): McpRunGuard | undef
       if (heldBack.has(allowed)) throw refused(productionRefusal(allowed, `${allowed} is in this replay's allowlist and flagged production: true, and an MCP run does not replay with it by default.`));
     }
   }
-  return new McpRunGuard(origin, modeWriteAllowlist(req), allowances, target, heldBack, currentMcpInvocation());
+  return new McpRunGuard(origin, guardWriteAllowlist(req), allowances, target, heldBack, currentMcpInvocation(), testModeRelaxation(req));
+}
+
+/**
+ * The guard's own write allowlist. In test mode it is automation mode's (a Journey's authored origins
+ * left out): what test mode adds is bounded by the declared environment (`testModeRelaxation`).
+ */
+function guardWriteAllowlist(req: McpRunGuardRequest): readonly string[] {
+  return req.mode === "test" ? modeWriteAllowlist({ ...req, mode: "automation" }) : modeWriteAllowlist(req);
+}
+
+/**
+ * Test mode's relaxation, decided again from the same human-written files the run-mode gate read: a
+ * run the files do not put in test mode gets none, whatever `mode` says.
+ */
+function testModeRelaxation(req: McpRunGuardRequest): TestModeRelaxation | undefined {
+  if (req.mode !== "test") return undefined;
+  const at = { origin: req.environment?.baseUrl ?? req.site, environment: req.environment, targetsFile: req.targetsFile, ...(req.environmentsFile === undefined ? {} : { environmentsFile: req.environmentsFile }) };
+  if (resolveRunTarget(at).mode !== "test") return undefined;
+  return { declaredOrigins: allowedOriginSet(testDeclaredOrigins(at)), onRelaxed: req.onRelaxed ?? (() => undefined) };
 }
 
 function refused(err: RunGuardRefusedError): RunGuardRefusedError {
@@ -245,11 +286,24 @@ export class McpRunGuard implements ReplayActionGuard {
   readonly #heldBack: ReadonlySet<string>;
   /** The tool call this run is part of, from when it was prepared: a route's callback runs in the async context of whichever call launched a pooled browser. */
   readonly #invocation: McpInvocation | undefined;
+  /** 0.30.0 §5.1: test mode's relaxation, if this run is in test mode. */
+  readonly #relax: TestModeRelaxation | undefined;
+  /** What was relaxed already: one note per action. */
+  readonly #relaxedNoted = new Set<string>();
 
-  constructor(origin: string, allowedOrigins: readonly string[], allowances: McpRunAllowances, target: TargetConfig | undefined, heldBack: ReadonlySet<string> = new Set(), invocation?: McpInvocation) {
+  constructor(
+    origin: string,
+    allowedOrigins: readonly string[],
+    allowances: McpRunAllowances,
+    target: TargetConfig | undefined,
+    heldBack: ReadonlySet<string> = new Set(),
+    invocation?: McpInvocation,
+    relax?: TestModeRelaxation,
+  ) {
     this.#origin = origin;
     this.#heldBack = heldBack;
     this.#invocation = invocation;
+    this.#relax = relax;
     this.#allowed = allowedOriginSet([...allowedOrigins, ...(allowances.allowOffAllowlistWrites ?? [])]);
     // The target's own refusals hold; exploration's `safety.allowDestructive` is NOT this switch.
     const { deny, paid, allowControl } = target?.safety ?? {};
@@ -321,8 +375,25 @@ export class McpRunGuard implements ReplayActionGuard {
     return canonical !== undefined && this.#heldBack.has(canonical) ? canonical : undefined;
   }
 
+  /** The origin of a write off the allowlist that test mode allows (the declared environment's), else undefined. */
+  #relaxedWriteOrigin(method: string, url: string): string | undefined {
+    if (this.#relax === undefined) return undefined;
+    const off = offAllowlistWriteOrigin(method, url, this.#allowed);
+    if (off === undefined) return undefined;
+    const canonical = canonicalOrigin(url);
+    return canonical !== undefined && this.#relax.declaredOrigins.has(canonical) ? canonical : undefined;
+  }
+
   #writeIsRefused(method: string, url: string): boolean {
-    return this.#productionWriteOrigin(method, url) !== undefined || offAllowlistWriteOrigin(method, url, this.#allowed) !== undefined;
+    if (this.#productionWriteOrigin(method, url) !== undefined) return true;
+    return offAllowlistWriteOrigin(method, url, this.#allowed) !== undefined && this.#relaxedWriteOrigin(method, url) === undefined;
+  }
+
+  /** Tells the run's evidence, once per action, what test mode allowed. Code-templated: a rule or an origin, a step, never a value. */
+  #noteRelaxed(key: string, note: string): void {
+    if (this.#relax === undefined || this.#relaxedNoted.has(key)) return;
+    this.#relaxedNoted.add(key);
+    this.#relax.onRelaxed(note);
   }
 
   /** Ends the run if this write is one it refuses, and says whether it was. A production origin first: the allowlist has no say there. */
@@ -334,6 +405,12 @@ export class McpRunGuard implements ReplayActionGuard {
     }
     const off = offAllowlistWriteOrigin(method, url, this.#allowed);
     if (off === undefined) return false;
+    const relaxed = this.#relaxedWriteOrigin(method, url);
+    if (relaxed !== undefined) {
+      const shown = this.#mask(relaxed);
+      this.#noteRelaxed(`write ${this.#step ?? -1} ${relaxed}`, `test mode allowed a write${this.#stepPhrase()} to ${shown}, off the automation-mode allowlist and declared by the test environment`);
+      return false;
+    }
     this.#refuseWrite(off, note);
     return true;
   }
@@ -370,7 +447,18 @@ export class McpRunGuard implements ReplayActionGuard {
     );
   }
 
-  #refuseControl(verdict: SafetyVerdict, index: number): never {
+  /**
+   * Test mode lets a destructive control act (the built-in destructive rule only) and records it; true
+   * when it did. A session-ending or paid control, and the target's own `safety.deny`, still refuse.
+   */
+  #relaxControl(verdict: SafetyVerdict, index: number): boolean {
+    if (this.#relax === undefined || verdict.risk !== "destructive" || verdict.refusal.ruleId !== "builtin:destructive") return false;
+    this.#noteRelaxed(`control ${index}`, `test mode allowed step ${index + 1}'s destructive control (rule builtin:destructive), which automation mode refuses`);
+    return true;
+  }
+
+  #refuseControl(verdict: SafetyVerdict, index: number): void {
+    if (this.#relaxControl(verdict, index)) return;
     const { ruleId, pattern } = verdict.refusal;
     // A target's own `safety.deny` is what refuses it: nothing here lifts it. Its words are the operator's; the control's never appear.
     const denied = ruleId.startsWith("deny:") || ruleId === "builtin:nameless-control";

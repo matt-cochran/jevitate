@@ -141,6 +141,12 @@ export async function setUpUsabilityMission(opts: RunUsabilityMissionOptions) {
           if (value !== "") await runCapture.mask.addSecret(value);
           return out;
         };
+  // A credential the run typed that no --secret registered (a goal-stated password): a run secret
+  // from then on — screenshots' scan, result, evidence, report and the pixel mask.
+  const onRunSecret = (value: string): void => {
+    if (!secrets.includes(value)) secrets.push(value);
+    void runCapture.mask.addSecret(value).catch(() => undefined);
+  };
   // #208: the shared HTTP 5xx hard signal, listening from before the first navigation.
   const http5xx = new Http5xxOracle(session.page, { allowlist: opts.allowlist });
   const capture = new UsabilityCapture({
@@ -205,6 +211,7 @@ export async function setUpUsabilityMission(opts: RunUsabilityMissionOptions) {
     session,
     snapshotter,
     uxSecretCommand,
+    onRunSecret,
     http5xx,
     capture,
     journalListener,

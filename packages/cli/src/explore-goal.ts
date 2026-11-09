@@ -13,7 +13,7 @@ import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type Assertion, type InvariantSpec, type Recording } from "@jevitate/recording";
 import type { ActionDeltaStats, ActionableControlOutcome, HostHealthSampler, InvariantDefect, InvariantReport, MinEffortRequest, PartialReport, RunDepth, SafetyOverride, SideEffect } from "@jevitate/explore";
 import type { DefectOutcome, EnvironmentDegraded, GoalReason, HostHealthSummary, StartupAttempt } from "@jevitate/domain";
-import { runGoalBasedMission, assertAuthorizedExploreTarget, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type SecretCommandRunner, type TypeFixture, type UploadFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
+import { runGoalBasedMission, assertAuthorizedExploreTarget, type BoundaryEvidence, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type SecretCommandRunner, type TypeFixture, type UploadFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
 import { conversationConfig, type ConversationOptions } from "./conversation-options.js";
 import { GOAL_ONLY_OUTCOMES, defectOutcomeOf, goalMissionOutcome, goalReasonOf, startedOutcome, type FilingConfig, type IssueDraft, type IssueFilerPort, type MissionFailure, type MissionOutcome, clock } from "@jevitate/domain";
 import { draftForCrash, draftForHang, type HangFinding, type TimingSummary } from "@jevitate/explore";
@@ -218,6 +218,8 @@ export interface RunExplorationResult {
   readonly goalOutcome: GoalBasedOutcome;
   /** #423: why the goal was not achieved (absent when `succeeded`). */
   readonly goalReason?: GoalReason;
+  /** 0.30.0 (#807): the boundary the run stopped at (kind, signal, step, and the origin an off-allowlist or new-tab stop names), when goalOutcome is `boundary`. */
+  readonly boundary?: BoundaryEvidence;
   readonly outcome: GoalBasedOutcome;
   /** The writes the run's actions fired (#116), marked when the control was paid / destructive. */
   readonly sideEffects: SideEffect[];
@@ -430,8 +432,9 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
   const authTokenValues = [...(opts.invariantAuthTokens?.values() ?? [])];
   const bound = [...secretFieldSecrets(opts.secretFields), ...(opts.fixtures?.secrets() ?? []), ...authTokenValues];
   modelSecrets.add([...bound, ...(opts.secrets ?? [])]);
-  const hasCmdField = (opts.secretFields ?? []).some((f) => f.kind === "cmd");
-  const secrets = opts.secrets === undefined && bound.length === 0 && !hasCmdField ? undefined : [...(opts.secrets ?? []), ...bound];
+  // Always one shared list: a value the run learns mid-run (a cmd: binding's output, a goal-stated
+  // credential typed into a password field) joins it, and every artifact below reads it at write time.
+  const secrets: string[] = [...(opts.secrets ?? []), ...bound];
   // #324: a value a cmd: binding reads mid-run joins this run's secrets at once, so everything this
   // command writes (result, evidence, issue drafts) is scrubbed of it too, not only the loop's own.
   const runSecretCommand = opts.secretCommand;
@@ -441,7 +444,7 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
       : async (command) => {
           const out = await runSecretCommand(command);
           const value = out.trim();
-          if (value !== "" && secrets !== undefined && !secrets.includes(value)) secrets.push(value);
+          if (value !== "" && !secrets.includes(value)) secrets.push(value);
           // #360: masked in every screenshot and video frame from now on — before the value is typed.
           if (value !== "") await capture.mask.addSecret(value);
           return out;
@@ -452,7 +455,7 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
   // #399: what is persisted of the fixture never holds a run secret — e.g. a fixture output the
   // Journey prefix took as a secret param (`--param inviteToken=${setup.inviteToken}`). The raw
   // record stays in memory only, for the replays that rebind it.
-  const atRest = <T,>(v: T): T => redactSecretValues(v, secrets ?? []);
+  const atRest = <T,>(v: T): T => redactSecretValues(v, secrets);
 
   // #149: refused BEFORE any browser opens (an unknown --device, or --viewport + --device together).
   const resolvedEmulation = resolveEmulation(opts.emulation);
@@ -465,7 +468,7 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
   const capture = runCaptureFor({
     recordsVideo: opts.browser?.recordVideo !== undefined,
     screenshots: opts.screenshots,
-    secrets: secrets ?? [],
+    secrets,
     artifactPath: () => journal.recordingPath,
     title: `goal: ${opts.goal}`,
   });
@@ -520,7 +523,7 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
   // load too; a no-op (`undefined`) when `--log-source` was not given.
   const serverLog = openServerLogRuntime({
     ...serverLogRuntimeOptions(opts.serverLog),
-    secrets: secrets ?? [],
+    secrets,
     onTranscriptEntry: journal.onTranscriptEntry,
   });
   // #204: every request's correlation ids, from before the first navigation.
@@ -578,6 +581,13 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
       secrets,
       ...(opts.secretFields === undefined ? {} : { secretFields: opts.secretFields }),
       ...(secretCommand === undefined ? {} : { secretCommand }),
+      // A credential the run typed that no --secret registered (a goal-stated password): a run secret
+      // from then on — scrubbed from the result, evidence, issue drafts, screenshots and model calls.
+      onRunSecret: (value: string) => {
+        if (!secrets.includes(value)) secrets.push(value);
+        modelSecrets.add([value]);
+        void capture.mask.addSecret(value).catch(() => undefined);
+      },
       ...(opts.secretCommandAttempts === undefined ? {} : { secretCommandAttempts: opts.secretCommandAttempts }),
       ...(opts.typeFixtures === undefined ? {} : { typeFixtures: opts.typeFixtures }),
       ...(opts.uploadFixtures === undefined ? {} : { uploadFixtures: opts.uploadFixtures }),
@@ -653,7 +663,7 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
     journal.writeRecording(recording);
     journal.writeTranscript(serverLogRun?.transcript ?? mission.transcript);
     const engine = currentEngineInfo();
-    const ctx = draftContext(origin, journal, secrets ?? [], browserVersionOf(session.page), engine);
+    const ctx = draftContext(origin, journal, secrets, browserVersionOf(session.page), engine);
     const resultPath = resultPathFor(journal.recordingPath);
     const drafts: IssueDraft[] = [];
     if (mission.run.crash !== undefined) drafts.push(draftForCrash(mission.run.crash, mission.transcript, ctx));
@@ -688,6 +698,7 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
       runOutcome: mission.run.outcome,
       ...(mission.run.actionableControl === undefined ? {} : { actionableControl: mission.run.actionableControl }),
       ...(mission.run.answer === undefined ? {} : { answer: mission.run.answer }),
+      ...(mission.run.boundary === undefined ? {} : { boundary: mission.run.boundary }),
       ...(mission.run.partialReport === undefined ? {} : { partialReport: mission.run.partialReport }),
       depth: mission.run.depth,
       assertionPassed: mission.assertionPassed,
@@ -773,7 +784,7 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
     };
     // Persisted so `verify-fix` can replay a hang later (the typed result next to the Recording).
     writeMissionResult(journal.recordingPath, result.missionOutcome, result.exitCode, result, runUsage);
-    return await withRunEvidence(result, evidenceOf(opts, secrets ?? []), triageOf(opts, serverLogRun, secrets ?? []));
+    return await withRunEvidence(result, evidenceOf(opts, secrets), triageOf(opts, serverLogRun, secrets));
   } finally {
     disarmKillSwitch();
     health.stop();

@@ -58,7 +58,7 @@ import type { Control } from "./snapshot.js";
  * must never switch the guard off.
  */
 const CHANGE_VERBS =
-  /\b(?:create|add|save|submit|send|post|publish|update|edit|modify|rename|delete|remove|revoke|rotate|buy|purchase|upgrade|downgrade|subscribe|unsubscribe|invite|enable|disable|activate|deactivate|sign ?up|register|archive|restore|import|upload|transfer|assign|ask|reply|fill (?:in|out))\b/i;
+  /\b(?:create|add|save|submit|send|post|publish|update|edit|modify|rename|delete|remove|revoke|rotate|buy|purchase|upgrade|downgrade|subscribe|unsubscribe|invite|enable|disable|activate|deactivate|sign ?up|sign ?in|log ?in(?!\s+(?:page|form|screen|link|button|flow|url|error))|authenticate|register|archive|restore|import|upload|transfer|assign|ask|reply|fill (?:in|out))\b/i;
 
 /** A change verb that is only asked ABOUT ("how do I add…", "what happens if I cancel…"), not asked FOR. */
 const ASKED_ABOUT =

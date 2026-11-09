@@ -11,6 +11,7 @@ import { currentEngineInfo } from "./engine.js";
 import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags } from "./environments.js";
 import { journeyExitCode } from "@jevitate/domain";
 import { EXIT_CODES, exitCodeForError } from "./exit-codes.js";
+import { resolveCatalogDir } from "./catalog-api.js";
 import { approveHoldAtTerminal, holdApprovalInteractive, HoldError, isHoldId, resumeHold, type ResumeHoldResult } from "./journey-hold.js";
 import { callMcpTool, mcpErrorOf, mcpToolDeps, refusalFor } from "./mcp-cli-bridge.js";
 
@@ -302,6 +303,8 @@ export function registerInboxCommands(program: Command, deps: CliDeps): void {
           journeysDir: resolveJourneysDir(deps, o.journeysDir),
           params: o.param,
           inboxDir: resolveInboxDir(deps, o.inboxDir),
+          // #795: the job's done check is read before the pending write is repeated.
+          catalogDir: resolveCatalogDir(deps.catalogDir),
           ...(environment === undefined ? {} : { environment }),
           ...(o.holdsDir === undefined ? {} : { holdsDir: o.holdsDir }),
           ...(o.storageState === undefined ? {} : { storageState: o.storageState }),

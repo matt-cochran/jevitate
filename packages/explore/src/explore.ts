@@ -58,6 +58,7 @@ import {
   type RunOutcome,
 } from "./conversation.js";
 import type { ActionableControlOutcome } from "./goal-loop/context/types.js";
+import type { BoundaryEvidence, BoundarySignal } from "./goal-loop/boundary.js";
 
 export type { ActionableControlCandidate, ActionableControlOutcome } from "./goal-loop/context/types.js";
 import { ChromeTracker } from "./feature/relevance.js";
@@ -205,6 +206,12 @@ export interface ExploreConfig {
    * type step fails without spawning it again.
    */
   readonly secretCommandAttempts?: number;
+  /**
+   * Called with each value the run itself learns is a secret mid-run (a value typed into a
+   * credential field, `credential-input.ts`), right before it is typed — so a caller that persists
+   * or sends anything of its own (a result, evidence, screenshots, model calls) masks it too.
+   */
+  readonly onRunSecret?: (value: string) => void;
   readonly missionContext?: string;
   /** Recording.site label. Defaults to the start origin. */
   readonly site?: string;
@@ -409,7 +416,7 @@ export interface ExploreConfig {
 }
 
 /** #423: the structured cause of a goal miss code can name (see `ExploreRun.missCause`). */
-export type MissCause = "not-found" | "ungrounded" | "blocked-by-policy" | "no-controls";
+export type MissCause = "not-found" | "ungrounded" | "blocked-by-policy" | "no-controls" | BoundarySignal;
 
 export interface ExploreRun {
   readonly stop: StopReason;
@@ -453,6 +460,8 @@ export interface ExploreRun {
    * Absent for a completed run and for every other stop.
    */
   readonly missCause?: MissCause;
+  /** 0.30.0 (#807): the wall or session boundary the run stopped at; the goal ends `boundary` (exit 2), `missCause` names its signal. */
+  readonly boundary?: BoundaryEvidence;
   /**
    * #688 — the distinct, machine-readable terminal outcome when a blocked run stopped with an
    * actionable control: the candidate a manager resumes through (locator, label, visible/enabled

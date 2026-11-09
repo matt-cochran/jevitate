@@ -100,8 +100,12 @@ export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
     ctx.stop = "crashed";
   }
   // #423: the miss's structured cause, decided from the loop's own state — never from `reason` text.
+  // 0.30.0 (#807): a run that stopped at a boundary names its signal; `boundary` is returned beside it.
+  const boundary = finalOutcome.status !== "completed" && ctx.answer === undefined ? ctx.boundary : undefined;
   const missCause: MissCause | undefined =
-    finalOutcome.status === "completed" || ctx.answer !== undefined || (ctx.stop !== "blocked" && ctx.stop !== "no-progress")
+    boundary !== undefined
+      ? boundary.signal
+      : finalOutcome.status === "completed" || ctx.answer !== undefined || (ctx.stop !== "blocked" && ctx.stop !== "no-progress")
       ? undefined
       : ctx.lastReportNotFound
         ? "not-found"
@@ -151,6 +155,7 @@ export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
     ...(ctx.answer !== undefined && finalOutcome.status === "completed" ? { answer: ctx.answer } : {}),
     ...(cause === null ? {} : { blockingCause: cause }),
     ...(missCause === undefined ? {} : { missCause }),
+    ...(boundary === undefined ? {} : { boundary }),
     ...(ctx.actionableControl === null ? {} : { actionableControl: ctx.actionableControl }),
     ...(ctx.endedOnRejectedDone && ctx.stop === "done" ? { doneRejected: true as const } : {}),
     ...(ctx.stop === "crashed" && ctx.failure !== undefined

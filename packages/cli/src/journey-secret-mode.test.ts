@@ -122,6 +122,37 @@ describe("planSecretRun: the secret mode, per run, from human-written configurat
     expect(refusalOf(() => planSecretRun(req(journey("login-p", { secretParam: true })))).code).toBe(E_HUMAN_STEP_IN_TEST_MODE);
   });
 
+  it("§5.3 test mode over MCP: a secret parameter nobody supplied comes from the test target's own secretFields, bound to its origin", async () => {
+    await targets({ [SITE]: { trust: "test", secretFields: [`label=Password=env:${VAR}`] } });
+    // Any approval channel authorises a test-mode run, an MCP promotion included.
+    for (const channel of ["tty", "mcp"] as const) {
+      const plan = planSecretRun(req(journey("login-p", { secretParam: true, channel })));
+      expect(plan.secretMode).toBeUndefined();
+      expect(plan.heldSecretParams).toEqual([]);
+      expect(plan.params).toEqual({ password: VALUE });
+      expect(plan.bound).toEqual({ password: [SITE] });
+      expect(plan.values).toEqual([VALUE]);
+      expect(plan.trust).toBe("test");
+    }
+  });
+
+  it("§5.3 test mode: no binding, an unset variable, a draft over MCP or a binding on another origin only refuses before any browser, never holds", async () => {
+    const err = (j: Journey, over: Partial<SecretRunRequest> = {}): RunModeRefusedError => refusalOf(() => planSecretRun(req(j, over)));
+    await targets({ [SITE]: { trust: "test" } });
+    const none = err(journey("login-p", { secretParam: true }));
+    expect(none.code).toBe(E_HUMAN_STEP_IN_TEST_MODE);
+    expect(none.message).toContain("secret parameter password nobody supplied");
+    expect(none.setting).toBe(`targets.json["${SITE}"].secretFields`);
+    await targets({ [SITE]: { trust: "test", secretFields: [`label=Password=env:${VAR}`] } });
+    expect(err(journey("login-p", { secretParam: true }), { env: {} }).code).toBe(E_HUMAN_STEP_IN_TEST_MODE);
+    const draft = { ...journey("login-d", { secretParam: true }), metadata: { ...journey("login-d", { secretParam: true }).metadata, promoted: false } } as Journey;
+    expect(err(draft).code).toBe(E_HUMAN_STEP_IN_TEST_MODE);
+    await targets({ [SITE]: { trust: "test" }, [OTHER]: { secretFields: [`label=Password=env:${VAR}`] } });
+    const elsewhere = err(journey("login-p", { secretParam: true }));
+    expect(elsewhere.code).toBe(E_SECRET_ORIGIN_REFUSED);
+    for (const e of [none, elsewhere]) expect(e.message).not.toContain(VALUE);
+  });
+
   it("over MCP, a secret parameter nobody supplied is held as kind 'secret' at the step that types it, which becomes a handback", () => {
     const j = journey("login-p", { secretParam: true });
     const plan = planSecretRun(req(j));

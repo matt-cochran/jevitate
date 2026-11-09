@@ -5,7 +5,7 @@ import { HttpCheckOffAllowlistError } from "../http-probe.js";
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "../run-tags-cli.js";
 import { existsSync } from "node:fs";
 import { Command, Option } from "commander";
-import { ParamValidationError } from "@jevitate/journey";
+import { FsJourneyStore, ParamValidationError } from "@jevitate/journey";
 import { MissingCredentialError, UsageTracker, type GenerationPort } from "@jevitate/ai-core";
 import { DEFAULT_DONE_CHECK_POLICY, journeyExitCode, safeRunPolicy, type DoneCheckPolicy, type SelfHealMode } from "@jevitate/domain";
 import { makeEvidenceSelfHealer } from "../self-heal-adapter.js";
@@ -35,7 +35,8 @@ import { BoundaryNoHealError, handbackExitCode, handbackLine } from "../journey-
 import { type EmulationSpec } from "@jevitate/playwright";
 import { SecretFieldSpecError } from "@jevitate/explore";
 import { BoundSecretOutsideFieldError, SecretFieldAmbiguousError, withSecretParams, warnSecretParamsOnArgv, type BoundSecretParams } from "../secret-params.js";
-import { DoneCheckRun } from "../journey-done-check-hook.js";
+import { DoneCheckRun, PlaywrightDoneCheckPort } from "../journey-done-check-hook.js";
+import { reconcileLinkedJob } from "../journey-reconcile.js";
 import { DONE_CHECK_FAILED_MESSAGE, doneCheckExitInput } from "../journey-done-check.js";
 import { loadProjectConfig, ProjectConfigError } from "../project-config.js";
 import { environmentFromFlags, fixtureRebaseUrl, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
@@ -76,6 +77,7 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
     .option("--action-deltas", "opt-in (#303): record what each replayed step changed on the page (redacted, a code verdict per step) and compare it with the delta its Recording stored — returned as actionDeltas")
     .option("--no-done-check", "#800: skip the linked job's done check (two fresh-session readings, before step 1 and after the end state); the job reads unverified (basis no-check), which exits 2 unless project.json doneCheckPolicy is advisory")
     .option("--require-done-check", "#800: an unverified job (no done check, or one already true) exits 2 even when project.json doneCheckPolicy is advisory")
+    .option("--retry", "#795: this run retries an earlier attempt: the job's done check is read first, in a fresh session, and a job that already reads true is not run again (E_RECONCILE_ALREADY_DONE, exit 2; an unreadable check is E_RECONCILE_UNREADABLE, exit 2)")
     .option("--json", "emit a JSON envelope")
     .option(TAG_FLAG, TAG_HELP, collectTag, [])
     .action(taggedAction(program, "journey run", async function (this: Command, id: string) {
@@ -114,6 +116,7 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         json,
         doneCheck,
         requireDoneCheck,
+        retry,
         screenshots: _screenshots,
         actionDeltas,
         stepResponseTimeout,
@@ -146,6 +149,7 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         json?: boolean;
         doneCheck: boolean;
         requireDoneCheck?: boolean;
+        retry?: boolean;
       } & EmulationFlags & ScreenshotsFlags>();
       // A secret parameter from the environment (--secret-field, targets.json), before any browser opens.
       let param: Record<string, string>;
@@ -220,6 +224,27 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         skip: !doneCheck,
         ...(deps.explore?.browserPortFactory === undefined ? {} : { sessionPortFactory: deps.explore.browserPortFactory }),
       });
+      // #795: a retry reads the job's done check first (fresh session); a job already done is not run again.
+      // A job with no done check proceeds as before.
+      if (retry === true) {
+        const stored = await new FsJourneyStore(runJourneysDir).get(id);
+        if (stored !== null) {
+          const origin = environment?.baseUrl ?? stored.recording.site;
+          const reconciled = await reconcileLinkedJob({
+            catalogDir,
+            journeysDir: runJourneysDir,
+            journey: stored,
+            auth: storageState === undefined ? {} : { storageState },
+            origin,
+            params: param,
+            browserPort: new PlaywrightDoneCheckPort({ origin, ...(deps.explore?.browserPortFactory === undefined ? {} : { sessionPortFactory: deps.explore.browserPortFactory }) }),
+          });
+          if (!reconciled.proceed) {
+            emitJson(program, fail(reconciled.code, reconciled.message));
+            return;
+          }
+        }
+      }
       // #453 Q1: a heal needs a change context, and the change/budget flags need a heal — refused
       // (64) before any Journey lookup, git read, model gateway or browser.
       const healRequest: JourneyHealRequest = {

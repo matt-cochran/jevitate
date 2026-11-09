@@ -1,4 +1,6 @@
 import { prepareMcpRunGuard } from "./mcp-run-guard.js";
+import { guardRequestWithMode, resolveSurfaceRunMode, runModeRecord, type RunModeRecord } from "./run-surface-mode.js";
+import type { RunTarget } from "./journey-run-mode-gate.js";
 import { journeyParamSchema, secretParamNames, secretParamValues, validateParams } from "@jevitate/journey";
 import { createHttpProbe, httpCheckRefs } from "./http-probe.js";
 import type { SiteGateDeps } from "@jevitate/runtime";
@@ -50,6 +52,10 @@ export type RunResolvedJourney = (
   browser?: BrowserLaunchOptions,
   /** The site-policy gate (`jevitate site policy set`): pacing, throttles, budgets, quiet hours. */
   siteGate?: SiteGateDeps,
+  /** 0.30.0 §5: the run mode `runSourceJourney` decided for the Journey's site; the #789 guard is given it. */
+  runMode?: RunTarget,
+  /** Where test mode's relaxations are noted, for the result's `run.notes`. */
+  modeNotes?: string[],
 ) => Promise<JourneyRunResult>;
 
 /**
@@ -64,7 +70,7 @@ export type RunResolvedJourney = (
  * A `SharedJourneyFile` IS a `Journey` (+ `declaredOrigins`), so it runs
  * through the standard `JourneyRunner` unchanged.
  */
-export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params, policy, storageState, emulation, browser, siteGate) => {
+export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params, policy, storageState, emulation, browser, siteGate, runMode, modeNotes = []) => {
   // #118: a Journey that declares it needs auth refuses BEFORE any browser launch when no
   // storageState was given — a clear, typed failure instead of a deep `replay-target-not-found`.
   if (file.metadata.requiresAuth === true && storageState === undefined) {
@@ -80,7 +86,8 @@ export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params
   const allowedOrigins = [...new Set([file.recording.site, ...file.declaredOrigins])];
 
   // #789: under an MCP invocation (`sources run`), this run's guard: a production target is refused here.
-  const runGuard = prepareMcpRunGuard({ site: file.recording.site, allowedOrigins });
+  const guardReq = { site: file.recording.site, allowedOrigins };
+  const runGuard = prepareMcpRunGuard(runMode === undefined ? guardReq : guardRequestWithMode(guardReq, runMode, modeNotes));
 
   // The site policy for the Journey's origin, decided before the browser opens.
   const gate = await gateJourney(siteGate, file.recording, { enforceLimits: true });
@@ -176,6 +183,7 @@ async function requireEntry(lockPath: string, name: string): Promise<SourceEntry
  * so the content the gate hashes is the content at the pin — not a drifted
  * working tree (matches `trustJourney`).
  */
+/** The result carries `run` (`run.mode`, `run.target.trust`, 0.30.0 §5) beside the replay's own fields. */
 export async function runSourceJourney(
   deps: SourceRunApiDeps,
   req: RunSourceJourneyRequest,
@@ -211,12 +219,18 @@ export async function runSourceJourney(
     if (warning !== undefined) req.warn?.(warning);
   }
 
+  // 0.30.0 §5: the run mode of the Journey's site, from the person-written files only. The approval-channel
+  // rule does not apply: a source Journey runs only once a person trusted it (`source trust`, a CLI act no
+  // MCP tool has), which is the person's approval. The mode reaches the #789 guard and the result.
+  const decided = resolveSurfaceRunMode({ surface: "source", origin: file.recording.site });
+  const modeNotes: string[] = [];
   const run = deps.runJourney ?? realResolvedJourneyRunner;
   // #399: a secret parameter (e.g. a token in a navigate URL) never comes back — not in the
   // result, not in an escaping error — exactly as `journey run` redacts it.
   try {
-    const result = await run(file, req.params, req.policy ?? safeRunPolicy(), req.storageState, req.emulation, req.browser, req.siteGate);
-    return redactSecretParams(result, file, req.params);
+    const result = await run(file, req.params, req.policy ?? safeRunPolicy(), req.storageState, req.emulation, req.browser, req.siteGate, decided, modeNotes);
+    const withMode: JourneyRunResult & { readonly run: RunModeRecord } = { ...result, run: runModeRecord(decided, modeNotes) };
+    return redactSecretParams(withMode, file, req.params);
   } catch (err) {
     throw redactErrorSecrets(err, secretParamValues(file, req.params));
   }

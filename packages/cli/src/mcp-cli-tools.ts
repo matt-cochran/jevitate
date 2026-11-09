@@ -7,6 +7,7 @@ import type { McpCliRunner } from "./mcp-cli-runner.js";
 import { policyLoosenings, policyLoosenRefusalBody, RunGuardRefusedError, runGuardRefusalBody, targetPromoteRefusalBody } from "./mcp-run-guard.js";
 import { RunModeRefusedError, runModeRefusalBody } from "./journey-run-mode-gate.js";
 import { heldOutcomeOf } from "./journey-hold.js";
+import { ProofHoldRefusedError, proofHoldRefusalBody } from "./journey-run-hooks.js";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { SitePolicySchema, type SitePolicy } from "@jevitate/domain";
@@ -836,6 +837,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "#453 selfHeal hybrid|full (+ changes <git range> and/or changeNote[], and a gateway — real or fakeAi; healMax* budgets): a Journey that quarantines is re-run ONCE with a change-aware self-heal; a proposed revision is pending review (exit 5), never a pass. " +
       "#437 requireApprovals (+ allowChannels: a comma list of tty, non-interactive, mcp, ci, pr-review; default tty): also an `approval` finding for each promoted Journey or approved persona/job whose approval is missing, stale or made over a channel not allowed. " +
       "#469: pr-review is a channel you may ALLOW, never one a caller sets — jevitate records it only after verifying the merged PR's approving review through the forge API in CI. " +
+      "#799 requireTrust: also fails (exit 1, naming the environment) when an environment's trust in .jevitate/environments.json differs from the last commit — a trust change is PR-reviewed and committed first; it can only make the check stricter. " +
       "#470 maxBrittleSteps n: opt-in locator gate — a Journey item with more than n brittle steps (missing the project's testIdAttributes convention) is a gating finding; without it locator health is advisory.",
     command: {
       path: "check",
@@ -855,6 +857,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         evidenceDecisionOut: { kind: "project-path", flag: "--evidence-decision-out" },
         requireApprovals: b("--require-approvals"),
         allowChannels: s("--allow-channels"),
+        requireTrust: b("--require-trust"),
         maxBrittleSteps: n("--max-brittle-steps"),
         selfHeal: s("--self-heal", { enum: ["fail-closed", "hybrid", "full"] }),
         changes: s("--changes"),
@@ -1395,6 +1398,10 @@ export async function runCliTool(spec: CliToolSpec, args: McpArgs, deps: { runCl
   // #789: a refused replay is the answer, whatever the command made of it. What the command did report before it stays beside it.
   // 0.30.0 §5: so is a run the run mode refused.
   const refusedBody = refusal instanceof RunGuardRefusedError ? runGuardRefusalBody(refusal) : refusal instanceof RunModeRefusedError ? runModeRefusalBody(refusal) : undefined;
+  // 0.30.0 §5.4: a proof that reached a step only a person can do ends inconclusive; nothing was held.
+  if (refusal instanceof ProofHoldRefusedError) {
+    return { isError: true, body: { ...proofHoldRefusalBody(refusal), ...(envelope?.data === undefined || envelope.data === null ? {} : { partial: envelope.data }) } };
+  }
   // 0.30.0 §5.3: a run held at a step only a person can do; it proves nothing yet (`jevitate inbox resume <holdId>`).
   const held = heldOutcomeOf(refusal);
   if (held !== undefined) {

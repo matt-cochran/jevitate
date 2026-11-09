@@ -18,6 +18,8 @@ import { brittleStepGate, locatorHealth, renderLocatorHealth } from "./locator-h
 import { ChangesArgsError, ChangesInputError } from "./change-context.js";
 import { CLI_HEAL_NAMES, JourneyHealArgsError, validateJourneyHeal, type JourneyHealRequest } from "./journey-heal.js";
 import type { SelfHealMode } from "@jevitate/domain";
+import { environmentsFilePath } from "./environments.js";
+import { TrustCheckError, trustDrift, trustDriftMessage } from "./check-trust.js";
 import { createEvidenceManifest, evidenceArtifactsReason, parseEvidenceKeyInput, parseEvidenceManifest, reuseDecision, sha256 } from "./check-evidence.js";
 
 /**
@@ -127,6 +129,7 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
       "#437: also fail (an `approval` finding, exit 1, in JUnit + SARIF) when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed",
     )
     .option("--allow-channels <list>", ALLOW_CHANNELS_HELP)
+    .option("--require-trust", "#799: fail (exit 1, naming the environment) when an environment's `trust` in .jevitate/environments.json differs from the last commit; a change of trust is committed (PR-reviewed) first")
     .option(
       "--max-brittle-steps <n>",
       "#470: opt-in locator gate — a Journey item with more than n brittle steps (targets that miss the project's testIdAttributes convention) is a gating finding. Without it locator health is advisory only",
@@ -153,6 +156,7 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
         jevProvider?: string;
         json?: boolean;
         requireApprovals?: boolean;
+        requireTrust?: boolean;
         allowChannels?: string;
         selfHeal: string;
         changes?: string;
@@ -199,6 +203,14 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
           if (o.json === true) emit(program, ok(data), true, 0);
           else program.configureOutput().writeOut?.(`${decision.decision.toUpperCase()} ${decision.reasons.join(", ")} · ${o.evidenceDecisionOut}\n`);
           return;
+        }
+        // #799: a trust that is not the committed one fails before the suite is read or anything runs.
+        if (o.requireTrust === true) {
+          const drift = await trustDrift(deps.environmentsFile ?? environmentsFilePath());
+          if (drift.length > 0) {
+            emit(program, fail("E_TRUST_DRIFT", trustDriftMessage(drift)), o.json === true, 1);
+            return;
+          }
         }
         // #470: the opt-in brittle-step gate, resolved before the suite is read or anything runs.
         const gate = o.maxBrittleSteps === undefined ? undefined : brittleStepGate(o.maxBrittleSteps);
@@ -293,7 +305,8 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
           err instanceof ApprovalArgsError ||
           err instanceof CheckArgsError ||
           err instanceof ChangesArgsError ||
-          err instanceof ChangesInputError
+          err instanceof ChangesInputError ||
+          err instanceof TrustCheckError
         ) {
           emit(program, fail(err.code, err.message), o.json === true);
         } else if (err instanceof MissingCredentialError || (err instanceof Error && err.name === "GatewaySelectionError")) {

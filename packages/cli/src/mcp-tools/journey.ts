@@ -200,10 +200,11 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
 
   /**
    * 0.30.0 §5.3, owner decision 6: the secret parameters a run needs and the request leaves out, from
-   * the operator's `targets.json` `secretFields` for the run's origin, only when the run is in automation
-   * mode and its Journey carries a current approval a person made (decision 5). The values come from the
-   * server's environment and go to the browser, bound to that origin; never to the result or the evidence.
-   * Anything else answers as 0.29.0 did: `E_SECRET_PARAM_OVER_MCP` by name.
+   * the operator's `targets.json` `secretFields` for the run's origin: in automation mode only when the
+   * Journey carries a current approval a person made (decision 5); in test mode for any current approval
+   * (the test target's own credentials). The values come from the server's environment and go to the
+   * browser, bound to that origin; never to the result or the evidence. Anything else answers as 0.29.0
+   * did: `E_SECRET_PARAM_OVER_MCP` by name.
    */
   const secretsFromTargets = async (
     id: string,
@@ -217,16 +218,19 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
     } catch {
       return refuse;
     }
-    if (stored === null || !approvalAuthorisesAutomation(stored)) return refuse;
-    // Rule 5 holds only for an approval that still binds this content.
-    const state = await journeyApprovalState(stored, { journeysDir: deps.journeysDir, catalogDir: resolveCatalogDir(undefined) });
-    if (!state.promoted || state.approval !== "current") return refuse;
+    if (stored === null) return refuse;
     const environment = resolved.options.environment;
     const target = resolveRunTarget({ origin: environment?.baseUrl ?? stored.recording.site, environment, environmentsFile: deps.environmentsFile, targetsFile: deps.targetsConfigPath });
+    // Rule 5: automation mode reads the operator's file only for a Journey a person approved. In test mode any
+    // approval channel authorises the run (an MCP promotion included), and the file holds the test target's credentials.
+    if (target.mode === "automation" && !approvalAuthorisesAutomation(stored)) return refuse;
+    // Either way, only for an approval that still binds this content.
+    const state = await journeyApprovalState(stored, { journeysDir: deps.journeysDir, catalogDir: resolveCatalogDir(undefined) });
+    if (!state.promoted || state.approval !== "current") return refuse;
     const fields = target.targetConfig?.secretFields ?? [];
-    if (target.mode !== "automation") return refuse;
-    // 0.30.0 §5.3: no binding on this origin: the run goes on and holds at the secret step for a person
-    // (journey-secret-mode.ts), or refuses E_SECRET_ORIGIN_REFUSED when another origin binds it. Never a value here.
+    // 0.30.0 §5.3: no binding on this origin: in automation mode the run goes on and holds at the secret step
+    // for a person; in test mode it is refused E_HUMAN_STEP_IN_TEST_MODE before any browser (journey-secret-mode.ts).
+    // A binding on another origin refuses E_SECRET_ORIGIN_REFUSED. Never a value here.
     if (fields.length === 0) return { params: resolved.params, options: resolved.options };
     let bound: Awaited<ReturnType<typeof withSecretParams>>;
     try {
@@ -248,7 +252,7 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
     run_journey: {
       description:
         "Run a PUBLISHED Journey by id with string params (fail-closed policy) — `jevitate journey run`. Never accepts inline steps. " +
-        "A secret parameter's value in 'params' is always refused ({error: invalid_args, code: E_SECRET_PARAM_OVER_MCP, params}): never send a value. A Journey that needs one, or has a handback step, runs on an automation-mode target for a Journey a person approved (tty or pr-review): the target's operator file (~/.jevitate/targets.json secretFields) supplies it to the browser on that origin only (vault-autofill), a binding on another origin refuses ({code: E_SECRET_ORIGIN_REFUSED}), and otherwise the run holds at that step ({outcome: held, holdId, exitCode: 2}) until a person runs `jevitate inbox resume <holdId>` at a terminal and completes it in the browser; the value never reaches the result. A Journey promoted over MCP, or on a test-mode target, is refused as before. " +
+        "A secret parameter's value in 'params' is always refused ({error: invalid_args, code: E_SECRET_PARAM_OVER_MCP, params}): never send a value. A Journey that needs one, or has a handback step, runs on an automation-mode target for a Journey a person approved (tty or pr-review): the target's operator file (~/.jevitate/targets.json secretFields) supplies it to the browser on that origin only (vault-autofill), a binding on another origin refuses ({code: E_SECRET_ORIGIN_REFUSED}), and otherwise the run holds at that step ({outcome: held, holdId, exitCode: 2}) until a person runs `jevitate inbox resume <holdId>` at a terminal and completes it in the browser; the value never reaches the result. On a test-mode target the target's own targets.json secretFields supply it the same way (any current approval, an MCP promotion included); with no binding it is refused before any browser ({code: E_HUMAN_STEP_IN_TEST_MODE}), never held. A Journey promoted over MCP, on an automation-mode target, is refused as before. " +
         "0.30.0 run modes: the mode comes from the target's declared trust (environments.json / targets.json), never an argument; an undeclared origin is automation mode, which runs only a Journey a person approved ({error: refused, code: E_APPROVAL_CHANNEL_FOR_MODE}: an approval over MCP authorises test-mode runs only), and a test-mode target never waits for a person (a handback step: E_HUMAN_STEP_IN_TEST_MODE). " +
         "#788: an unpromoted Journey, or one changed since its approval, is refused before any browser ({error: refused, code: E_JOURNEY_NOT_PROMOTED | E_JOURNEY_APPROVAL_STALE | E_JOURNEY_APPROVAL_UNKNOWN, fix}): promote it with promote_journey, or try a draft on the CLI (`jevitate journey run`). " +
         "#789: a click on a session-ending, destructive or paid control, a write to an origin outside the run's allowlist and a production environment are refused before anything is sent ({error: refused, outcome: refused, code: E_RUN_REFUSED_DESTRUCTIVE | E_RUN_REFUSED_OFF_ALLOWLIST_WRITE | E_RUN_REFUSED_PRODUCTION, setting, retryable: false}): do not retry; only a person lifts it, in the target's mcpRun section of ~/.jevitate/targets.json. " +

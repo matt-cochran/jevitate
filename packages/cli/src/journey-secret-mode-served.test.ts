@@ -245,11 +245,21 @@ describe("0.30.0 §5.3 secrets in automation mode over MCP (real Chromium)", { t
     expect(filesWithSecret()).toEqual([]);
   });
 
-  it("verify_journey on the same Journey holds instead of refusing: the tool's answer is the hold", async () => {
+  it("§5.4 verify_journey on the same Journey never holds: the proof ends inconclusive E_HUMAN_STEP_IN_PROOF naming the step, before any browser, and nothing is held", async () => {
     await putApproved(journey("login-v"));
+    const holdsBefore = readdirSync(holdsDir).length;
     const r = await call(targetsFile("none", {}), "verify_journey", { id: "login-v", mutate: true });
-    expect(r.body, r.text).toMatchObject({ outcome: "held", code: "E_RUN_HELD", kind: "handback", exitCode: 2 });
+    expect(r.body, r.text).toMatchObject({ error: "inconclusive", outcome: "inconclusive", code: "E_HUMAN_STEP_IN_PROOF", kind: "handback", step: 2, retryable: false, exitCode: 2 });
+    expect(r.body["holdId"]).toBeUndefined();
+    expect(readdirSync(holdsDir)).toHaveLength(holdsBefore);
+    expect(launches.count).toBe(0);
     expect(logins).toEqual([]);
+    // A secret parameter nobody supplied: the same, kind 'secret'.
+    await putApproved(journey("login-vp", { secretParam: true }));
+    const p = await call(targetsFile("none", {}), "verify_journey", { id: "login-vp", mutate: true });
+    expect(p.body, p.text).toMatchObject({ outcome: "inconclusive", code: "E_HUMAN_STEP_IN_PROOF", kind: "secret", step: 2, exitCode: 2 });
+    expect(readdirSync(holdsDir)).toHaveLength(holdsBefore);
+    expect(filesWithSecret()).toEqual([]);
   });
 
   it("acceptance 2: targets.json binds the field on the run's origin: vault-autofill types it; MARKER_S is in no result, evidence, hold, checkpoint or log", async () => {
@@ -291,6 +301,37 @@ describe("0.30.0 §5.3 secrets in automation mode over MCP (real Chromium)", { t
       expect(r.body).toMatchObject({ error: "invalid_args", code: SECRET_PARAM_OVER_MCP, params: ["password"] });
     }
     expect(launches.count).toBe(0);
+  });
+
+  it("§5.3 test mode: a test target's bound secretField supplies the secret over MCP, even for an MCP promotion; MARKER_S is in no file", async () => {
+    const t = targetsFile("test-bound", { [bound]: { trust: "test", secretFields: [`label=Password=env:${VAR}`] } });
+    await new FsJourneyStore(journeysDir).put(journey("login-test", { secretParam: true }));
+    // An MCP promotion authorises test-mode runs (owner decision 5).
+    expect((await call(t, "promote_journey", { id: "login-test" })).isError).toBe(false);
+    const holdsBefore = readdirSync(holdsDir).length;
+    const r = await call(t, "run_journey", { id: "login-test", baseUrl: bound });
+    expect(r.body["outcome"], r.text).toBe("ok");
+    // The server checked it: the right value was typed, by code, on the test target.
+    expect(logins).toEqual(["ok"]);
+    expect(r.text).not.toContain("MARKER_S");
+    expect(readdirSync(holdsDir)).toHaveLength(holdsBefore);
+    expect(allFiles(logs).length).toBeGreaterThan(0);
+    expect(filesWithSecret()).toEqual([]);
+  });
+
+  it("§5.3 test mode: with no binding the run is refused E_HUMAN_STEP_IN_TEST_MODE before any browser, never held; a value in the arguments is still E_SECRET_PARAM_OVER_MCP", async () => {
+    await putApproved(journey("login-test-none", { secretParam: true }));
+    const t = targetsFile("test-none", { [bound]: { trust: "test" } });
+    const holdsBefore = readdirSync(holdsDir).length;
+    const r = await call(t, "run_journey", { id: "login-test-none", baseUrl: bound });
+    expect(r.body, r.text).toMatchObject({ error: "refused", outcome: "refused", code: "E_HUMAN_STEP_IN_TEST_MODE", mode: "test", trust: "test", retryable: false, exitCode: 2 });
+    expect(launches.count).toBe(0);
+    expect(readdirSync(holdsDir)).toHaveLength(holdsBefore);
+    const tb = targetsFile("test-bound-2", { [bound]: { trust: "test", secretFields: [`label=Password=env:${VAR}`] } });
+    const carried = await call(tb, "run_journey", { id: "login-test-none", baseUrl: bound, params: { password: "typed-by-model" } });
+    expect(carried.body).toMatchObject({ error: "invalid_args", code: SECRET_PARAM_OVER_MCP, params: ["password"] });
+    expect(launches.count).toBe(0);
+    expect(logins).toEqual([]);
   });
 
   it("serves exactly ALLOWED_TOOLS: no tool was added", () => {

@@ -246,6 +246,8 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       // 0.30.0 (#800): temporary until the done-check hooks are registered for MCP run_journey (d-run-hooks-register).
       "--no-done-check": "done checks are not yet read on MCP runs; the MCP argument lands with the hook registration",
       "--require-done-check": "done checks are not yet read on MCP runs; the MCP argument lands with the hook registration",
+      // 0.30.0 (#795): --retry IS a done-check reading (reconcile before the retry runs), so it waits on the same registration.
+      "--retry": "a retry is reconciled by reading the job's done check first, and done checks are not yet read on MCP runs; the MCP argument lands with the hook registration",
       "--ignore-host-load": OMIT.hostLoad,
       "--dir": OMIT.storeDir,
       "--project": OMIT.storeDir,

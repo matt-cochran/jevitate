@@ -8,7 +8,7 @@ import { Secret, SecretOriginMismatchError, SecretUnresolvableError, type Secret
 import { currentMcpInvocation, inMcpInvocation, noteMcpRefusal } from "./approval-provenance.js";
 import type { ResolvedJourneyEnvironment } from "./environments.js";
 import { takeApprovedHandback } from "./journey-hold.js";
-import { hasRunHooks, holdRunAt, RunHeldError, type RunHookContext, type RunHoldRequest } from "./journey-run-hooks.js";
+import { hasRunHooks, holdRunAt, inProof, ProofHoldRefusedError, RunHeldError, type RunHookContext, type RunHoldRequest } from "./journey-run-hooks.js";
 import { approvalAuthorisesAutomation, E_HUMAN_STEP_IN_TEST_MODE, E_SECRET_MODE_UNAVAILABLE, E_SECRET_ORIGIN_REFUSED, resolveRunTarget, RunModeRefusedError, type RunTarget } from "./journey-run-mode-gate.js";
 import type { RunMode } from "./run-mode.js";
 import { fieldMatchesTarget, missingSecretParams, secretParamTargets, withSecretParamsFor, type BoundSecretParams } from "./secret-params.js";
@@ -168,20 +168,19 @@ export function planSecretRun(req: SecretRunRequest): SecretRunPlan {
   const target = resolveRunTarget({ origin: req.origin, environment: req.environment, targetsFile: req.targetsFile });
   const mode = req.mode ?? target.mode;
   const id = req.stored.metadata.id;
-  if (mode === "test") {
-    const at = (human[0] ?? -1) + 1;
-    const what = at > 0 ? `a human step (a handback, step ${at})` : `secret parameter${missing.length === 1 ? "" : "s"} ${missing.join(", ")} nobody supplied`;
-    refuse(
-      new RunModeRefusedError(
-        E_HUMAN_STEP_IN_TEST_MODE,
-        `${E_HUMAN_STEP_IN_TEST_MODE}: journey '${id}' has ${what}, and ${target.origin} is a test-mode target (trust "${target.trust}"), where a run never waits for a person; nothing ran. ` +
-          `Run it on an automation-mode target, or give the test target the secretFields it needs. This is not a failed run to retry.`,
-        `journey '${id}'`,
-        mode,
-        target.trust,
-      ),
-      req.mcp,
+  const testStepRefusal = (what: string): RunModeRefusedError =>
+    new RunModeRefusedError(
+      E_HUMAN_STEP_IN_TEST_MODE,
+      `${E_HUMAN_STEP_IN_TEST_MODE}: journey '${id}' has ${what}, and ${target.origin} is a test-mode target (trust "${target.trust}"), where a run never waits for a person; nothing ran. ` +
+        `Run it on an automation-mode target, or give the test target the secretFields it needs (targets.json["${target.origin}"].secretFields). This is not a failed run to retry.`,
+      `targets.json["${target.origin}"].secretFields`,
+      mode,
+      target.trust,
     );
+  if (mode === "test") {
+    if (human.length > 0) refuse(testStepRefusal(`a human step (a handback, step ${human[0]! + 1})`), req.mcp);
+    // §5.3: a test target's own secretFields (test credentials a person wrote) supply what the request left out.
+    return testModeSecrets(req, target, missing, (names) => testStepRefusal(`secret parameter${names.length === 1 ? "" : "s"} ${names.join(", ")} nobody supplied`));
   }
   // Owner decision 6 holds only with decision 5: over MCP, only a Journey a person approved reads targets.json or holds
   // (the run-mode gate refuses the rest first; this keeps it so without the gate).
@@ -251,7 +250,45 @@ export function planSecretRun(req: SecretRunRequest): SecretRunPlan {
     return { ...common, secretMode: "vault-autofill", heldSecretParams: [], secretRefs: vault.refs, secretManager: new BoundFieldSecrets(vault.values), holdKinds: new Map() };
   }
   if (!canHold || (human.length === 0 && held.length === 0)) return { ...NO_PLAN, ...common };
+  // §5.4: a proof's replay never holds. It is refused here, before any browser, at the first step that would.
+  if (inProof()) {
+    const first = Math.min(...holdKinds.keys());
+    const err = new ProofHoldRefusedError(holdKinds.get(first) ?? "handback", first + 1);
+    if (req.mcp) noteMcpRefusal(err);
+    throw err;
+  }
   return { ...common, secretMode: "visible-handback", heldSecretParams: held, holdKinds };
+}
+
+/**
+ * 0.30.0 §5.3, test mode: the secret parameters a run needs and nobody supplied come from the test
+ * target's own `targets.json` `secretFields` (test credentials a person wrote), through the same binding
+ * vault-autofill uses: typed by code into the field the spec names, on that origin only, never put in the
+ * model, the result or the evidence. A run never waits in test mode, so one the bindings do not cover is
+ * refused `E_HUMAN_STEP_IN_TEST_MODE` before any browser opens; one bound on another origin only is
+ * refused `E_SECRET_ORIGIN_REFUSED`. Over MCP only a promoted Journey reads the file (an MCP promotion
+ * authorises test-mode runs, owner decision 5; a draft never does). A value in the arguments was refused
+ * before this (`E_SECRET_PARAM_OVER_MCP`).
+ */
+function testModeSecrets(req: SecretRunRequest, target: RunTarget, missing: readonly string[], refusal: (names: readonly string[]) => RunModeRefusedError): SecretRunPlan {
+  if (missing.length === 0) return { ...NO_PLAN, trust: target.trust };
+  if (req.flag === "visible-handback" || (req.mcp && req.stored.metadata.promoted !== true)) refuse(refusal(missing), req.mcp);
+  const fields = resolvedFields(target.targetConfig?.secretFields ?? [], req.env);
+  const id = req.stored.metadata.id;
+  const supplied = fields.length === 0 ? { params: {} as Record<string, string>, bound: undefined } : withSecretParamsFor(req.journey, { id, params: { ...req.params }, flags: [], targetFields: target.targetConfig?.secretFields, targetOrigin: target.origin, env: req.env });
+  const params = Object.fromEntries(missing.filter((n) => n in supplied.params).map((n) => [n, supplied.params[n]!] as const));
+  const left = missing.filter((n) => !(n in params));
+  if (left.length > 0) {
+    const others = otherOriginFields(req.targetsFile, target.origin);
+    const targets = secretParamTargets(req.journey);
+    for (const name of left) {
+      const elsewhere = others.find(({ field }) => targets.some((t) => t.name === name && fieldMatchesTarget(field, t.target)));
+      if (elsewhere !== undefined) refuse(originRefused(`secret parameter ${name}`, elsewhere.origin, target), req.mcp);
+    }
+    refuse(refusal(left), req.mcp);
+  }
+  const bound = Object.fromEntries(Object.keys(params).map((n) => [n, supplied.bound?.[n] ?? [target.origin]] as const));
+  return { ...NO_PLAN, params, bound, values: Object.values(params), trust: target.trust };
 }
 
 /** The 0-based flat indexes of the fill/select steps that type `name`. */
@@ -305,8 +342,8 @@ export function secretHandbackHandler(a: { readonly ctx: () => RunHookContext; r
       try {
         await holdRunAt(SECRET_MODE_OWNER, { ...base, step, kind: "handback", locator: a.page.locator(":root") }, { kind, reason });
       } catch (err) {
-        // The tool call's answer is the hold, whatever the command made of the error (mcp-cli-tools.ts).
-        if (err instanceof RunHeldError && inMcpInvocation()) noteMcpRefusal(err);
+        // The tool call's answer is the hold (or a proof's refusal to hold), whatever the command made of the error (mcp-cli-tools.ts).
+        if ((err instanceof RunHeldError || err instanceof ProofHoldRefusedError) && inMcpInvocation()) noteMcpRefusal(err);
         throw err;
       }
     },

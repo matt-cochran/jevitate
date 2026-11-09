@@ -16,6 +16,7 @@ import { runLoadTest, type CapacityReport, type LoadActorRunner } from "@jevitat
 import { JourneyRequiresAuthError, journeyFixtureBaseDir } from "./journey-api.js";
 import { JourneyOutcomeChecks } from "./journey-network-checks.js";
 import { applyJourneyEnvironment, type ResolvedJourneyEnvironment } from "./environments.js";
+import { guardRequestWithMode, resolveSurfaceRunMode, runModeRecord, type RunModeRecord } from "./run-surface-mode.js";
 
 /** Distinct from `@jevitate/journey`'s ParamValidationError-style "unknown id" cases elsewhere, so CLI callers can branch without string-matching. */
 export class UnknownLoadJourneyError extends Error {}
@@ -61,7 +62,14 @@ export interface RunJourneyLoadTestOptions {
    * allow is refused before any browser opens. Absent: the recorded site, as before.
    */
   environment?: ResolvedJourneyEnvironment;
+  /** 0.30.0 §5: `~/.jevitate/targets.json` (default), read for the target's trust and the #789 guard. */
+  targetsFile?: string;
+  /** 0.30.0 §5: `.jevitate/environments.json` (default: the named environment's file, else the project's). */
+  environmentsFile?: string;
 }
+
+/** A load test's report, with the run mode it ran in (0.30.0 §5): `run.mode`, `run.target.trust`. */
+export type LoadRunReport = CapacityReport & { readonly run: RunModeRecord };
 
 /**
  * The programmatic surface behind `jevitate load run` — resolves a published
@@ -78,7 +86,7 @@ export interface RunJourneyLoadTestOptions {
  * run is the operator's deliberate burst: the policy's throttles, budgets and quiet hours do not
  * refuse it; only its pacing applies.
  */
-export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promise<CapacityReport> {
+export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promise<LoadRunReport> {
   const store = new FsJourneyStore(opts.dir);
   const registry = new JourneyRegistry(store);
 
@@ -103,8 +111,18 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
 
   validateParams(journeyParamSchema(journey), opts.params);
 
+  // 0.30.0 §5: the mode, from the person-written files only, before any browser. A load test runs the
+  // Journey, so the mode's Journey refusals apply as on `journey run`: over MCP an automation-mode target
+  // needs a Journey a person approved; a test-mode target never runs one with a human step.
+  const seams = { ...(opts.targetsFile === undefined ? {} : { targetsFile: opts.targetsFile }), ...(opts.environmentsFile === undefined ? {} : { environmentsFile: opts.environmentsFile }) };
+  const decided = resolveSurfaceRunMode({ surface: "load", journey: stored, origin: opts.environment?.baseUrl ?? stored.recording.site, environment: opts.environment, ...seams });
+  const notes: string[] = [];
+
   // #789: under an MCP invocation, each actor's session is guarded; a refusal ends the whole test, below.
-  const guardFor = (): McpRunGuard | undefined => prepareMcpRunGuard({ site: journey.recording.site, allowedOrigins, environment: opts.environment });
+  // The mode decides whether the Journey's own `allowedOrigins` stay on the write allowlist (automation drops
+  // them) and gives test mode its relaxation inside the declared environment (each noted on the report).
+  const guardFor = (): McpRunGuard | undefined =>
+    prepareMcpRunGuard(guardRequestWithMode({ site: journey.recording.site, allowedOrigins, environment: opts.environment, authoredOrigins: stored.metadata.allowedOrigins ?? [], ...seams }, decided, notes));
   guardFor();
   let refusal: unknown;
   const policy = opts.policy ?? safeRunPolicy();
@@ -181,5 +199,5 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
   });
   // A refused run is not a data point: the report would read as ordinary failed iterations.
   if (refusal !== undefined) throw refusal;
-  return report;
+  return { ...report, run: runModeRecord(decided, notes) };
 }

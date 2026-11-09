@@ -55,6 +55,11 @@ import { runAdversarialStrategy } from "./adversarial-strategy.js";
 import { runUsabilityStrategy } from "./usability-strategy.js";
 import { runFeatureStrategy } from "./feature-strategy.js";
 import { runGoalStrategy } from "./goal-strategy.js";
+import { prepareMcpRunGuard, RunGuardRefusedError } from "../mcp-run-guard.js";
+import { RunModeRefusedError } from "../journey-run-mode-gate.js";
+import { inMcpInvocation } from "../approval-provenance.js";
+import { withRunMetadata } from "../run-metadata.js";
+import { exploreDestructiveRefusal, guardedPortFactory, guardRequestWithMode, resolveSurfaceRunMode, runModeRecord, type SurfaceRunMode } from "../run-surface-mode.js";
 import { AUTH_PREFLIGHT_TIMEOUT_MS, SWEEP_OWNED, fixtureBoundUrlRoot, serverLogOptionsFromFlags, type ExploreOpts, type ExploreRunContext } from "./shared.js";
 
 /**
@@ -633,6 +638,46 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
         return;
       }
 
+      // 0.30.0 §5: the run mode, from the person-written target files only (never an argument), decided
+      // before any browser. Over MCP the exploration's own writes go through the #789 guard every Journey
+      // run has (each session armed: a production target refused before anything opens, an off-allowlist
+      // write refused at the context), given the mode: test mode's relaxation inside the declared
+      // environment, automation mode's refusals otherwise. The mode is stamped on the result as `run`.
+      let runDeps: CliDeps = deps;
+      let decidedMode: SurfaceRunMode | undefined;
+      const runModeNotes: string[] = [];
+      const startOrigin = ((): string | undefined => {
+        try {
+          return o.url === undefined ? undefined : new URL(setupRefFreeUrl(o.url)).origin;
+        } catch {
+          return undefined; // an unparseable --url is refused by the authorized-target guard
+        }
+      })();
+      if (startOrigin !== undefined) {
+        try {
+          const environment = prefixRequest?.environment;
+          decidedMode = resolveSurfaceRunMode({ surface: "explore", origin: startOrigin, environment, ...environmentSeams(deps) });
+          const destructive = exploreDestructiveRefusal(decidedMode, o.allowDestructive === true, runModeNotes);
+          if (destructive !== undefined) {
+            emitExplore(fail(destructive.code, destructive.message));
+            return;
+          }
+          if (inMcpInvocation()) {
+            const allowedOrigins = resolveExploreAllowlist(setupRefFreeUrl(o.url!), o.allow);
+            const mode = decidedMode;
+            const guardFor = () => prepareMcpRunGuard(guardRequestWithMode({ site: startOrigin, allowedOrigins, environment, ...environmentSeams(deps) }, mode, runModeNotes));
+            guardFor();
+            runDeps = { ...deps, explore: { ...deps.explore, browserPortFactory: guardedPortFactory(deps.explore?.browserPortFactory ?? (() => new PlaywrightBrowserPort()), guardFor) } };
+          }
+        } catch (err) {
+          if (err instanceof RunGuardRefusedError) emitExplore(fail(err.code, err.message));
+          else if (err instanceof RunModeRefusedError) emitExplore(fail(err.refusalCode, err.message));
+          else emitExplore(fail("E_EXPLORE_ARGS", err instanceof Error ? err.message : String(err)));
+          return;
+        }
+      }
+      const modeMeta = decidedMode === undefined ? {} : { runMode: () => runModeRecord(decidedMode!, runModeNotes) };
+
       // #427 pre-flight auth check: a run that starts from a session first proves the session is alive
       // (re-minting it once from a persona's login parameters) — else it ends now, `auth-expired`.
       if (primaryStorageState !== undefined) {
@@ -652,25 +697,27 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
       }
 
       const ctx: ExploreRunContext = {
-        deps, o, emitExplore, strategy, target, browser, screenshotsOpt, emulation, overflow, withInvariants, serverLog, withServerLog, withPrefix, withScopeRegion, emitJourneyFailure, withEvidence, runFiling, issueFiler, conversation, secretFields, secretCommand, actors, primaryStorageState, invariants, journeyPrefix, prefixRequest, typeFixtures, uploadFixtures,
+        deps: runDeps, o, emitExplore, strategy, target, browser, screenshotsOpt, emulation, overflow, withInvariants, serverLog, withServerLog, withPrefix, withScopeRegion, emitJourneyFailure, withEvidence, runFiling, issueFiler, conversation, secretFields, secretCommand, actors, primaryStorageState, invariants, journeyPrefix, prefixRequest, typeFixtures, uploadFixtures,
       };
 
-      if (strategy === "coverage" || strategy === "exploratory") {
-        await runCoverageStrategy({ ...ctx, strategy });
-        return;
-      }
-      if (strategy === "adversarial") {
-        await runAdversarialStrategy(ctx);
-        return;
-      }
-      if (strategy === "usability") {
-        await runUsabilityStrategy(ctx);
-        return;
-      }
-      if (o.feature) {
-        await runFeatureStrategy(ctx);
-        return;
-      }
-      await runGoalStrategy(ctx);
+      await withRunMetadata(modeMeta, async () => {
+        if (strategy === "coverage" || strategy === "exploratory") {
+          await runCoverageStrategy({ ...ctx, strategy });
+          return;
+        }
+        if (strategy === "adversarial") {
+          await runAdversarialStrategy(ctx);
+          return;
+        }
+        if (strategy === "usability") {
+          await runUsabilityStrategy(ctx);
+          return;
+        }
+        if (o.feature) {
+          await runFeatureStrategy(ctx);
+          return;
+        }
+        await runGoalStrategy(ctx);
+      });
     }));
 }

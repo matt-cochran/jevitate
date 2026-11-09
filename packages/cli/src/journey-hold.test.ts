@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,7 +20,7 @@ import {
   type HoldRecord,
 } from "./journey-hold.js";
 import { maskCheckpointUrl, readRunCheckpoint, restoreCheckpointUrl, writeRunCheckpoint } from "./journey-run-checkpoint.js";
-import { RunHeldError, registerRunHooks, resetRunHooksForTests, runBeforeWriteHooks } from "./journey-run-hooks.js";
+import { asProof, E_HUMAN_STEP_IN_PROOF, ProofHoldRefusedError, RunHeldError, proofHoldRefusalBody, registerRunHooks, resetRunHooksForTests, runBeforeWriteHooks } from "./journey-run-hooks.js";
 import { createCheckpointKey } from "./journey-verify-checkpoint.js";
 import { callMcpTool, mcpToolDeps } from "./mcp-cli-bridge.js";
 import { buildProgram } from "./program.js";
@@ -171,6 +171,27 @@ describe("a held run is durable, signed and value-free", () => {
     expect(restoreCheckpointUrl(masked, { ref: "MARKER_ a/b", other: "param" })).toEqual({ url: `${SITE}/shop?ref=${encodeURIComponent("MARKER_ a/b")}&n=param` });
     expect(restoreCheckpointUrl(masked, { ref: "x" })).toEqual({ problem: "the page address needs the parameter(s) other" });
     expect(restoreCheckpointUrl(maskCheckpointUrl(`${SITE}/o/tok123`, {}, ["tok123"]), {})).toHaveProperty("problem");
+  });
+});
+
+describe("0.30.0 §5.4: a proof's replay never holds", () => {
+  it("the same pending action inside a proof ends E_HUMAN_STEP_IN_PROOF, inconclusive, and nothing is held: no record, checkpoint or inbox item", async () => {
+    const stored = (await new FsJourneyStore(journeysDir).get("checkout"))!;
+    const ctx = { journey: stored, params: { ref: MARKER }, channel: "mcp" as const, mode: "automation" as const, evidence: undefined, target: { origin: SITE }, step: 3, kind: "click", locator: locatorAt(`${SITE}/shop`) };
+    const err = await asProof(() => runBeforeWriteHooks(ctx)).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ProofHoldRefusedError);
+    expect(heldOutcomeOf(err)).toBeUndefined();
+    const refused = err as ProofHoldRefusedError;
+    expect(proofHoldRefusalBody(refused)).toMatchObject({ error: "inconclusive", outcome: "inconclusive", code: E_HUMAN_STEP_IN_PROOF, kind: "approval", step: 3, retryable: false, exitCode: 2 });
+    expect(refused.message).toContain("step 3 needs a person (an approval hold)");
+    expect(refused.message).not.toContain(MARKER);
+    expect(existsSync(holdsDir) ? readdirSync(holdsDir) : []).toEqual([]);
+    expect(await new FsInboxStore(inboxDir, { version: "t", commit: "c", builtAt: "b" }).getSummaries()).toEqual([]);
+    // Outside a proof the same action holds, as before.
+    expect(await holdAtStep3()).toMatch(/^hold-[0-9a-f]{16}$/);
   });
 });
 

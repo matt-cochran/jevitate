@@ -32,6 +32,7 @@ import {
   emitJson,
   GatewaySelectionError,
   buildExploreGateways,
+  environmentSeams,
 } from "./cli-shared.js";
 import { clock } from "@jevitate/domain";
 
@@ -260,6 +261,7 @@ export function registerMissionCommands(program: Command, deps: CliDeps): void {
           ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),
           ...(browserLaunchFromFlags(o) === undefined ? {} : { browser: browserLaunchFromFlags(o)! }),
           targets: targetConfigs,
+          ...environmentSeams(deps),
         });
       const drainOnce = () =>
         drainMissionQueue({

@@ -41,7 +41,10 @@ function stoodAfterWork(ctx: RunContext, workBudgetMs: number): string {
   const s = (ms: number): string => `${Math.round(ms / 1000)}s`;
   const now = clock.now();
   const since = ctx.hangWorkSince === null ? "" : `, ${s(now - ctx.hangWorkSince)} since the first deferral`;
-  const last = monitorFor(ctx.page).completedSince(ctx.hangWorkSince ?? 0).filter((r) => r.resourceType !== "document" && r.ignored !== true).at(-1);
+  // The monitor's last app request, never its pruned 60s history: a hang standing past a minute of
+  // job wait would otherwise read "no app request completed" for requests that did.
+  const lastSeen = monitorFor(ctx.page).lastAppRequest();
+  const last = lastSeen !== null && lastSeen.endedAt >= (ctx.hangWorkSince ?? 0) ? lastSeen : undefined;
   const activity = last === undefined ? "no app request completed since" : `the app's last request completed ${s(now - last.endedAt)} ago`;
   if (ctx.hangWorkWaitedMs >= workBudgetMs) {
     return `still so after ${s(ctx.hangWorkWaitedMs)} of the page showing work${since} — past the ${s(workBudgetMs)} job-wait budget; raise --job-wait-ms for longer jobs; ${activity}`;
