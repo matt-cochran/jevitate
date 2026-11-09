@@ -18,6 +18,13 @@ behaviour changes).
   bind it. If you have Recordings or Journeys made from goals that stated a credential, check them for the
   plaintext value, delete or re-record them, and rotate that credential.
 
+### Known limits
+
+- **A goal without a success check can pass falsely.** A goal run without `--success` ends on the
+  model's judgment, and on the navigation lab 8 of 20 such passes were false. Give a goal that matters
+  a `--success` check; see docs/exploration.md. The fix (job done checks, `explore --job`) is in 0.30.0.
+  This warning was due in the 0.29.0 notes and was missed there.
+
 ## [0.29.0] – 2026-11-07
 
 ### Behaviour changes
