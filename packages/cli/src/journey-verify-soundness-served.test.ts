@@ -815,6 +815,7 @@ const streamJourney = (assertion: ReturnType<typeof text>) => (site: string): Jo
 /**
  * A Save answered with 200 whose body stays open. The site does not depend on it: the app reads BUSY only while a mutated
  * replay runs and that body is open, so a replay that closes on the open write is all that keeps this from reading proven.
+ * The body stays open, and the server keeps working, for the whole proof: until the row's server closes.
  */
 const heldSave = (opts: { readonly headers?: Record<string, string>; readonly first?: (res: ServerResponse) => void; readonly redirect?: true; readonly click?: string }) => (ctx: RowContext) => {
   let first = true;
@@ -834,10 +835,9 @@ const heldSave = (opts: { readonly headers?: Record<string, string>; readonly fi
       first = false;
       held = true;
       opts.first?.(res);
-      return after(60_000, () => {
-        held = false;
-        res.end();
-      });
+      // Held until the row's server closes, not for a fixed time: a 60 s hold ended inside the proof on a slow runner, so the
+      // mutated replays met a server that had finished its work and read the limit rows insensitive.
+      return;
     }
     html(res, `<button id="save">Save</button><p id="said"></p><p id="health">?</p><script>const said=()=>{document.getElementById('said').textContent='Saved'};document.getElementById('save').onclick=()=>{${opts.click ?? "fetch('/api/save',{method:'POST'}).then(said)"}};setInterval(async()=>{try{document.getElementById('health').textContent=(await (await fetch('/api/health')).json()).s}catch{}},250)</script>`);
   };
