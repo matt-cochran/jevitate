@@ -335,6 +335,10 @@ it("refuses a Journey changed after annotation apply before demo promotion", asy
   expect(after.metadata.approval).toBeUndefined();
 });
 
+// Each case re-imports demo-aspect-api cold (vi.resetModules), re-evaluating its whole module graph:
+// ~0.6s on an idle machine, CPU-bound, so it scales with suite load past the 5s default. The budget
+// is for that cold import, not for any wait: nothing here sleeps or polls.
+const COLD_IMPORT_TIMEOUT_MS = 30_000;
 it.each(["before-journey", "after-journey", "after-annotations", "after-promotion", "tty-before-journey"])("cold native demo resumes %s without an old capability or another confirmation", async (boundary) => {
   const current = (await new FsJourneyStore(dir).get("sample"))!;
   await writeFile(demoDraftPath(dir, "sample"), JSON.stringify({ kind: "jevitate.demo.draft", version: 1, id: "sample", aspect: "Inspect sample", env: "test", journeyHash: journeyContentHash(current), createdAtIso: "2026-11-07T00:00:00Z", draft: {} }));
@@ -377,7 +381,7 @@ it.each(["before-journey", "after-journey", "after-annotations", "after-promotio
     expect((await new FsJourneyStore(dir).get("sample"))!.metadata.approval?.provenance?.channel).toBe(tty ? "tty" : "non-interactive");
     await expect(readFile(demoDraftPath(dir, "sample"))).rejects.toMatchObject({ code: "ENOENT" });
   } finally { vi.doUnmock("./journey-demo-api.js"); vi.resetModules(); }
-});
+}, COLD_IMPORT_TIMEOUT_MS);
 
 it.each(["unchanged", "changed"])("binds the final %s catalog waiver request to the original demo confirmation", async (mode) => {
   const catalogDir = join(dir, "catalog"); await mkdir(catalogDir);
