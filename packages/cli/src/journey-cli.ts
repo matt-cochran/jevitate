@@ -18,14 +18,17 @@ import { registerJourneyLinkCommand } from "./journey-link-cli.js";
 import { registerJourneyAnnotateCommand } from "./journey-annotate-cli.js";
 import { registerJourneyDemoCommand } from "./journey-demo-cli.js";
 import { registerJourneyProofWaiver } from "./journey-proof-waiver-cli.js";
+import { registerJourneyQueueCommand } from "./mission-queue-cli.js";
 
-/** Registers `jevitate journey`: `list|find|run|chain|promote|lint|verify|anchors|anchor|link|annotate|demo|publish`. */
+/** Registers `jevitate journey`: `list|find|run|queue|chain|promote|lint|verify|anchors|anchor|link|annotate|demo|publish`. */
 export function registerJourneyCommands(program: Command, deps: CliDeps): void {
   const journey = program.command("journey").description("manage and run promoted Journeys (regression-test replays)");
 
   registerJourneyList(journey, program, deps);
   registerJourneyFind(journey, program, deps);
   registerJourneyRun(journey, program, deps);
+  // 0.30.0 #797 — queue a promoted Journey call; `mission run` drains it (MCP queue_journey).
+  registerJourneyQueueCommand(journey, program, deps);
 
   // #580 — run a discover Journey once, then a prepare-only reply Journey per matched request.
   registerJourneyChain(journey, program, deps);

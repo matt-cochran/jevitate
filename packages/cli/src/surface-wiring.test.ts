@@ -97,6 +97,7 @@ const HOLD_RESUME = {
   heldSecretParams: "set only by `jevitate inbox resume` for a secret hold (journey-hold.ts resumeHold)",
 } as const;
 const SECRET_MODE_AUTO = "the secret mode is `auto` (journey-secret-mode.ts); only `journey run --secret-mode` narrows it";
+const QUEUED_JOURNEY_CALL = "#797: a queued Journey call carries only id, hash, non-secret params and env (QueuedJourneyCall, a closed schema): no emulation, fixtures or self-heal; run_journey takes those directly";
 const SECRET_ENV_PROCESS = "a target's secretFields `env:` sources are read from this process's environment (the default)";
 
 const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
@@ -257,6 +258,26 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     session: WHOLE_JOURNEY,
     stopAfterStep: WHOLE_JOURNEY,
   },
+  // #797: a queued Journey call (queue_journey / `journey queue`), drained by `mission run` as run_journey runs it.
+  "mission-queue-runner.ts runJourneyProgrammatically": {
+    ...HOLD_RESUME, secretMode: SECRET_MODE_AUTO,
+    onRawOutput: "only `journey chain` hands a run's output on to a page",
+    allow: REPLAY_ALLOW,
+    fixtureBaseDir: FIXTURE_BASE_DIR,
+    mask: MASK_INTERNAL,
+    observer: OBSERVER_INTERNAL,
+    account: SITE_ACCOUNT,
+    interpreter: ANNOTATE_OBSERVER,
+    session: WHOLE_JOURNEY,
+    stopAfterStep: WHOLE_JOURNEY,
+    stepResponseTimeoutMs: STEP_RESPONSE_DEFAULT,
+    actionDeltas: NO_DELTAS_HERE,
+    screenshots: NO_SCREENSHOTS_HERE,
+    emulation: QUEUED_JOURNEY_CALL,
+    fixtures: QUEUED_JOURNEY_CALL,
+    heal: QUEUED_JOURNEY_CALL,
+    selfHealer: QUEUED_JOURNEY_CALL,
+  },
   "check-execute.ts runJourneyProgrammatically": {
     ...HOLD_RESUME, secretMode: SECRET_MODE_AUTO, secretEnv: SECRET_ENV_PROCESS,
     onRawOutput: "only `journey chain` hands a run's output on to a page",
@@ -278,10 +299,6 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
 
   // ── mission run queue (MCP queue_exploration) ───────────────────────────────────────────────
   "mission-queue-runner.ts runExploration": {
-    doneCheck: "#800 0.30.0 GAPS item 12: queue_exploration does not carry a job yet; closed in wave E",
-    doneCheckBasis: "#800 0.30.0 GAPS item 12: queue_exploration does not carry a job yet; closed in wave E",
-    doneCheckPolicy: "#800 0.30.0 GAPS item 12: queue_exploration does not carry a job yet; closed in wave E",
-    requireDoneCheck: "#800 0.30.0 GAPS item 12: queue_exploration does not carry a job yet; closed in wave E",
     blockOffAllowlistNavigation: QUEUE_NARROW,
     secretCommand: "#324: a cmd: secret source runs an operator command — explore --allow-secret-cmd only, never a queued or suite mission",
     secretCommandAttempts: "#359: the bound on a cmd: secret source's command runs — goes with secretCommand (explore --allow-secret-cmd only)",

@@ -961,10 +961,12 @@ check naming a parameter the narrower rule below refuses, such as `password`: `E
 A secret-bound Journey can't self-heal or be annotated in 0.29.0, because nothing secret-bound goes to a
 model. The step fails as it would without a heal, saying the heal was skipped, and annotate refuses with
 `E_MODEL_REFUSED_SECRET`. That covers a secret parameter, a fixture secret or credential-named output,
-and any step that can extract a credential, decided from the Journey before it runs. A name that only
-reads as a credential, such as `passengers` or `token_count`, counts too. To lift it, declare a parameter
-of that name `"secret": false` and have a person approve the Journey (a typed `journey promote` or a
-verified PR review).
+and any step that can extract a credential, decided from the Journey before it runs. A parameter name
+that only reads as a credential, such as `passengers` or `token_count`, counts too. To lift it, declare
+the parameter `"secret": false` and have a person approve the Journey (a typed `journey promote` or a
+verified PR review). An `extract as` name is judged by a narrower rule, by its words: `apiKey`,
+`authToken`, `session_id` and `otp` count, while `passengers`, `footprint`, `token_count` and
+`cookie_banner` don't ([safety](./safety.md) has the exact rule).
 
 A value is never guessed. If two secret parameters match one binding, or one parameter matches two,
 nothing runs (`E_JOURNEY_RUN_ARGS`). Bind each by a

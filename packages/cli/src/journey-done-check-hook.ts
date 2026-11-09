@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { DEFAULT_DONE_CHECK_POLICY, JOURNEY_RUN_OUTCOMES, journeyExitCode, type DoneCheckPolicy, type JourneyRunOutcome } from "@jevitate/domain";
 import { randomUUID } from "node:crypto";
 import { judgeDoneCheck, type DoneCheckEvidence, type DoneReading, type JobVerdict } from "@jevitate/adjudicator";
 import { evaluateOutcomeChecks } from "@jevitate/explore";
@@ -9,9 +10,10 @@ import { loadCatalog } from "./catalog-api.js";
 import { linkedJobDone } from "./catalog-refs.js";
 import { parseSuccessSpec } from "./explore-specs.js";
 import { createHttpProbe } from "./http-probe.js";
-import { readDoneCheck, type BrowserPort, type DoneCheckSession } from "./journey-done-check.js";
+import { DONE_CHECK_FAILED_MESSAGE, doneCheckExitInput, readDoneCheck, type BrowserPort, type DoneCheckSession } from "./journey-done-check.js";
+import { loadProjectConfig } from "./project-config.js";
 import { trustOfRunContext } from "./journey-run-mode-gate.js";
-import { registerRunHooks } from "./journey-run-hooks.js";
+import { hasRunHookOwner, registerRunHooks } from "./journey-run-hooks.js";
 
 /**
  * #800 (design 0.30.0 §3.1, owner exit-code decisions 2/3): `journey run` reads the linked job's done
@@ -122,6 +124,8 @@ function unreadable(at: "pre" | "post"): DoneReading {
 
 /** Registers the done check's `validateParams` (before) and `readDoneCheck` (after) hooks. Returns the unregistration. */
 export function registerDoneCheckHooks(): () => void {
+  // GAPS 21: a second registration (a test after the central one) would read every check twice.
+  if (hasRunHookOwner(DONE_CHECK_HOOK_OWNER)) return () => undefined;
   return registerRunHooks(DONE_CHECK_HOOK_OWNER, {
     validateParams: async (ctx) => {
       const run = scope.getStore();
@@ -173,6 +177,43 @@ export function registerDoneCheckHooks(): () => void {
       run.decide(trustOfRunContext(ctx) === "harness" ? { attainment: "unverified", basis: "harness" } : judgeDoneCheck(evidence));
     },
   });
+}
+
+/**
+ * GAPS 21: the central registration `buildProgram` and `buildMcpTools` make, once per process by owner, so a
+ * test that registered the hooks itself (before or after) does not get them twice. Undefined when already registered.
+ */
+export function registerDoneCheckHooksOnce(): (() => void) | undefined {
+  return hasRunHookOwner(DONE_CHECK_HOOK_OWNER) ? undefined : registerDoneCheckHooks();
+}
+
+/** The project's done-check policy (`project.json doneCheckPolicy`); the default when it is unset or unreadable. */
+export function doneCheckPolicyOf(catalogDir: string | null): DoneCheckPolicy {
+  try {
+    return loadProjectConfig(catalogDir).doneCheckPolicy ?? DEFAULT_DONE_CHECK_POLICY;
+  } catch {
+    return DEFAULT_DONE_CHECK_POLICY;
+  }
+}
+
+/**
+ * GAPS 21: a run result with the job verdict, as `journey run --json` reports it: `job`, a `done-check-failed`
+ * failure when the job was not achieved and the steps passed, and the exit code the outcome and the job give
+ * under `policy`. Anything else (no verdict, a result with no run outcome) is returned unchanged.
+ */
+export function withJobVerdict(result: unknown, job: JobVerdict | undefined, policy: DoneCheckPolicy): unknown {
+  if (job === undefined || result === null || typeof result !== "object") return result;
+  const outcome = (result as { outcome?: unknown }).outcome;
+  const failed = job.attainment === "not-achieved" && !("failure" in result);
+  const exit = typeof outcome === "string" && (JOURNEY_RUN_OUTCOMES as readonly string[]).includes(outcome) ? { exitCode: journeyExitCode(outcome as JourneyRunOutcome, doneCheckExitInput(job, policy)) } : {};
+  return { ...result, job, ...(failed ? { failure: { kind: "done-check-failed", message: DONE_CHECK_FAILED_MESSAGE } } : {}), ...exit };
+}
+
+/** GAPS 21: `fn` (one Journey run) inside a done-check scope, its result carrying the job verdict (`withJobVerdict`). */
+export async function runWithDoneCheck(request: DoneCheckRunRequest, fn: () => Promise<unknown>): Promise<unknown> {
+  const run = new DoneCheckRun(request);
+  const result = await run.run(fn);
+  return withJobVerdict(result, run.job, doneCheckPolicyOf(request.catalogDir));
 }
 
 // --- The real browser: a new Playwright context per reading -------------------------------------------

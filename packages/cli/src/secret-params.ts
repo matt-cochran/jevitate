@@ -26,6 +26,68 @@ function refusalMessage(names: readonly string[]): string {
 }
 
 /**
+ * Extract naming (0.30.0): terms that are a credential wherever they appear in an `extract as` name,
+ * separators ignored. None of them occurs inside an ordinary English word.
+ */
+const EXTRACT_CREDENTIAL_ANYWHERE_RE =
+  /passw|pwd|ssword|p4ss|passphrase|passcode|s3cret|t0ken|credential|bearer|jwt|csrf|xsrf|hmac|sessid|saml|twofactor|apikey|privatekey|accesskey|secretkey|sshkey|signingkey|encryptionkey|sharedkey|licensekey|pincode|pinnumber|smscode|verificationcode|recoverycode|backupcode|invitecode|securitycode|securityanswer|cardnumber|ccnumber|creditcard|webhookurl|connectionstring|magiclink|resetlink|kennwort|wachtwoord|contrase|senha|пароль|密码|暗号|パスワード/;
+
+/** Terms that are a credential as a word of the name, or at the start or end of one (`authToken`, `sessionid`, `csrftoken`). */
+const EXTRACT_CREDENTIAL_EDGE_TERMS = ["secret", "token", "session", "cookie", "otp", "auth", "mfa", "2fa", "cvv", "cvc", "nonce", "signature", "assertion", "iban", "dsn", "clave", "parola"] as const;
+
+/** Terms that are a credential only as a whole word of the name (`pass` but not `passengers`, `pin` but not `spin`). */
+const EXTRACT_CREDENTIAL_WORD_RE = /^(?:pass|pins?|pw|sess|sid|ssn|creds?|key|tfa|mdp)\d*$/;
+
+/** A last word that says the name is ABOUT a credential, not one: `token_count`, `session_name`, `cookie_banner`. */
+const DESCRIBING_LAST_WORDS: ReadonlySet<string> = new Set(["count", "total", "type", "kind", "length", "len", "name", "label", "title", "channel", "banner", "enabled", "required", "expiry", "expires", "ttl"]);
+
+/** The words of a name: separators and camelCase boundaries split it, lower-cased (`authToken` → auth, token). */
+function nameWords(name: string): string[] {
+  return name
+    .replace(/(\p{Ll}|\p{N})(\p{Lu})/gu, "$1_$2")
+    .replace(/(\p{Lu}+)(\p{Lu}\p{Ll})/gu, "$1_$2")
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((w) => w !== "");
+}
+
+function edgeTermIn(word: string): boolean {
+  return EXTRACT_CREDENTIAL_EDGE_TERMS.some((t) => {
+    if (word !== t && !word.startsWith(t) && !word.endsWith(t)) return false;
+    // `author` and `authority` are not `auth`; `authorization` and `authorize` are.
+    if (t === "auth" && word.startsWith("author") && !word.startsWith("authoriz") && !word.endsWith("auth")) return false;
+    return true;
+  });
+}
+
+/**
+ * Extract naming (0.29.0 accepted limit, narrowed in 0.30.0): is an `extract as` name a credential's?
+ * Such an extract makes the Journey secret-bound, so it loses self-heal and annotate, and its value is
+ * masked as it binds. Narrower than {@link isSecretName}, and never wider: a name matches only if
+ * `isSecretName` does too and, by its words (separators and camelCase split it):
+ *  - the name, separators removed, holds an unambiguous credential term (`password`, `pwd`, `apikey`,
+ *    `jwt`, `csrf`, `pincode`, …), or
+ *  - a word is, starts with or ends with `secret`, `token`, `session`, `cookie`, `otp`, `auth` (not
+ *    `author`), `mfa`, `2fa`, `cvv`, `cvc`, `nonce`, `signature`, `assertion`, `iban`, `dsn`, or
+ *  - a word is exactly `pass`, `pin`, `pins`, `pw`, `sess`, `sid`, `ssn`, `cred`, `creds`, `key`, `tfa`
+ *    or `mdp` (a trailing number allowed: `pin2`);
+ *  - unless the name has two or more words and its last one describes rather than holds a value
+ *    (`count`, `total`, `type`, `kind`, `length`, `len`, `name`, `label`, `title`, `channel`, `banner`,
+ *    `enabled`, `required`, `expiry`, `expires`, `ttl`).
+ * So `apiKey`, `authToken`, `session_id`, `user_pass` and `otp` refuse; `passengers`, `footprint`,
+ * `bypass_cache`, `token_count` and `cookie_banner` don't. A parameter's name still uses the broad rule
+ * (it has its way out: `secret: false` with a person's approval).
+ */
+export function isCredentialExtractName(name: string): boolean {
+  if (!isSecretName(name)) return false;
+  const words = nameWords(name);
+  const last = words[words.length - 1];
+  if (words.length >= 2 && last !== undefined && DESCRIBING_LAST_WORDS.has(last)) return false;
+  if (EXTRACT_CREDENTIAL_ANYWHERE_RE.test(words.join(""))) return true;
+  return words.some((w) => edgeTermIn(w) || EXTRACT_CREDENTIAL_WORD_RE.test(w));
+}
+
+/**
  * What makes a Journey secret-bound, by name and from the Journey alone, so before it runs: its secret
  * parameters and any step, `forEach` children included, that can extract a credential. Nothing
  * secret-bound goes to a model, so self-heal and annotate both decide with this.
@@ -34,7 +96,7 @@ export function secretBoundNeeds(journey: Journey, params: Readonly<Record<strin
   const nonSecret = declaredNonSecretParams(journey);
   const extracted = flatJourneySteps(journey)
     .flatMap(({ recorded: { step } }) => (step.kind === "forEach" ? step.steps : [step]))
-    .flatMap((step) => (step.kind === "extract" && isSecretName(step.as) && !nonSecret.has(step.as) ? [`extracted credential ${step.as}`] : []));
+    .flatMap((step) => (step.kind === "extract" && isCredentialExtractName(step.as) && !nonSecret.has(step.as) ? [`extracted credential ${step.as}`] : []));
   return [...secretParamNames(journey, params).map((n) => `secret parameter ${n}`), ...new Set(extracted)];
 }
 

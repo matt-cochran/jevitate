@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect } from "vitest";
 import { FsJourneyStore, JourneyRegistry, type Journey } from "@jevitate/journey";
-import { listNamedJourneyTools } from "./index.js";
+import { ALLOWED_TOOLS, listNamedJourneyTools } from "./index.js";
 
 function makeJourney(id: string, promoted: boolean, params: string[] = ["qty"]): Journey {
   return {
@@ -68,5 +68,16 @@ describe("listNamedJourneyTools", () => {
     const result = await listNamedJourneyTools(reg);
     const names = result.map((t) => t.name);
     expect(names).not.toContain("login");
+  });
+});
+
+describe("0.30.0 #797: queue_journey and the named Journey tools", () => {
+  it("a promoted Journey's named tool never shadows an allowlisted tool; queue_journey is a domain tool, not a Journey", async () => {
+    const reg = await buildRegistry();
+    await reg.put(makeJourney("queue_journey", true, []));
+    const names = (await listNamedJourneyTools(reg)).map((t) => t.name);
+    expect(ALLOWED_TOOLS as readonly string[]).toContain("queue_journey");
+    // The named tools are the promoted Journeys, by id; they are not what the server serves.
+    expect(names.sort()).toEqual(["checkout", "queue_journey"]);
   });
 });

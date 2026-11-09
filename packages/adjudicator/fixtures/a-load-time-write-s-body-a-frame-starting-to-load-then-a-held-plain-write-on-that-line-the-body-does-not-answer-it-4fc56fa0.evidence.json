@@ -1,0 +1,136 @@
+{
+  "schema": "jevitate.evidence",
+  "version": 1,
+  "producedAt": "2026-11-09T12:52:37.363Z",
+  "producer": {
+    "jevitate": "0.29.0-source-e71fb65e",
+    "commit": "e71fb65e"
+  },
+  "subject": {
+    "kind": "mutation-proof",
+    "journey": {
+      "id": "probe",
+      "hash": "73ccaa8cf0188f3865376244c44298489b4d4b78ba08c6864501ceaade412e16"
+    }
+  },
+  "run": {
+    "mode": "automation",
+    "channel": "cli",
+    "target": {
+      "origin": "http://127.0.0.1:43077",
+      "trust": "unknown"
+    },
+    "paramsDigest": "unkeyed",
+    "secretParamNames": []
+  },
+  "steps": [],
+  "writes": {
+    "sent": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "answered": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "aborted": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "openAtClose": {
+      "known": true,
+      "value": 1
+    },
+    "shapes": []
+  },
+  "mutation": {
+    "plan": {
+      "mutations": [
+        {
+          "id": "skip:2",
+          "kind": "skip",
+          "step": 2
+        },
+        {
+          "id": "skip:3",
+          "kind": "skip",
+          "step": 3
+        },
+        {
+          "id": "block-write:3",
+          "kind": "block-write",
+          "step": 3
+        }
+      ],
+      "pairs": [
+        {
+          "site": "step:2",
+          "mutation": "skip:2"
+        },
+        {
+          "site": "end-state:0",
+          "mutation": "skip:3"
+        },
+        {
+          "site": "end-state:0",
+          "mutation": "block-write:3"
+        }
+      ],
+      "sites": [
+        {
+          "site": "step:1",
+          "check": "page visible"
+        },
+        {
+          "site": "step:2",
+          "check": "page visible"
+        },
+        {
+          "site": "step:3",
+          "check": "page urlIncludes"
+        },
+        {
+          "site": "end-state:0",
+          "check": "page textIncludes"
+        }
+      ]
+    },
+    "replays": [
+      {
+        "ordinal": 0,
+        "role": "base",
+        "outcome": "passed",
+        "failedSites": [],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 1
+          },
+          "shapes": []
+        }
+      }
+    ],
+    "restore": "none",
+    "isolation": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "taint": {
+      "note": "base-write-open"
+    }
+  },
+  "judgments": [],
+  "notes": []
+}

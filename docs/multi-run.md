@@ -312,3 +312,56 @@ create call, proxied through the dev server like every other API request). Once 
 only if the observer's document response is 404 **or** its own `/api/items/*` call comes back 404
 — a 200 page with neither is a violation; an observer bounced to a login page is "session lost,"
 never counted as "denied."
+
+## Queued Journey calls: `journey queue` / MCP `queue_journey`
+
+A promoted Journey can be queued and run later by the same drain that runs queued missions. This
+is how an agent asks for a Journey run that a person's queue runner performs:
+
+```bash
+jevitate journey queue notes --param note=hello --env staging   # MCP: queue_journey {id, params, env}
+jevitate mission run                                             # drains queued missions, then queued Journey calls
+```
+
+A queued call holds four things: the Journey's id, the content hash it was queued against, its
+non-secret `--param` values, and `--env` or `--base-url`. Each call is a file in
+`~/.jevitate/missions/queue/journeys/`. It has the same lifecycle as a queued mission (`queued`,
+`running`, then `done` or `failed`), and a drain claims each call exclusively, so a call never
+runs twice.
+
+**What is checked when.** Before anything is written, `journey queue` and `queue_journey` apply
+the same checks as `run_journey`, in this order:
+
+1. **Secret params.** A param whose name reads as a credential (`password`, `apiToken`, …), or one
+   the Journey declares `"secret": true`, is refused by name: `E_SECRET_PARAM_IN_QUEUE` (exit 64)
+   on the CLI, and `E_SECRET_PARAM_OVER_MCP` over MCP. A queued call never stores a secret value.
+2. **Promotion.** The Journey must be promoted, with an approval that still matches its content.
+   Otherwise the call is refused with `E_JOURNEY_NOT_PROMOTED`, `E_JOURNEY_APPROVAL_STALE` or
+   `E_JOURNEY_APPROVAL_UNKNOWN`.
+3. **Run mode and guard.** The run-mode rules and the guard apply as on an MCP run. An
+   automation-mode target runs only a Journey a person approved (`E_APPROVAL_CHANNEL_FOR_MODE`).
+   A test-mode target never waits for a person (`E_HUMAN_STEP_IN_TEST_MODE`). A production
+   target is refused by default (`E_RUN_REFUSED_PRODUCTION`).
+
+`mission run` checks all of this again from the files as they are at drain time. If the Journey
+changed after the call was queued, the call is recorded `failed` with `E_JOURNEY_APPROVAL_STALE`
+and nothing runs: review the Journey, then queue the call again. The drain runs every call as an
+MCP run, whoever queued it. The call's run record and `evidence.json` say `run.channel: "queue"`.
+
+**Secrets at run time.** A secret the Journey needs comes from its secret mode, never from the
+call. On the run's own origin, the target's `~/.jevitate/targets.json` `secretFields` supply it.
+Without a binding, an automation-mode run stops at that step (`outcome: held`, exit 2) until a
+person runs `jevitate inbox resume <holdId>`.
+
+**The drain report.** `mission run --json` lists drained calls under `journeys`, each with
+`callId`, `journey`, `status`, and `outcome`/`exitCode` or a refusal `code`. A failed call makes
+`mission run` exit 2.
+
+A queued call carries no emulation, fixtures, self-heal or done-check flags. If a run needs one of
+those, run it directly with `journey run` or `run_journey`.
+
+**Queued goal missions and jobs.** `mission queue --strategy goal-based --goal … --job <id>` (MCP
+`queue_exploration {job}`) takes a catalog job, as `explore --job` does. When the mission runs, the
+job's done check is read from the drain's catalog in fresh contexts: once before the run, and
+again after each proposed `done`. An unknown job fails the mission. `--require-done-check`
+(`requireDoneCheck`) makes an unverified job exit 2, as on `explore`.

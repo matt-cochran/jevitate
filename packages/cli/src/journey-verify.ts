@@ -907,6 +907,8 @@ export interface JourneyVerifyReport {
   readonly base: { readonly outcome: string; readonly reason?: string };
   readonly verdict: MutationProofVerdict;
   readonly reason?: string;
+  /** GAPS 21 (design 5.1, rules-v1 `countsForGate`): whether this proof's target trust lets it count for a strict gate. */
+  readonly countsForGate: boolean;
   readonly mutations: readonly JourneyVerifyMutation[];
   readonly assertions: readonly JourneyVerifyAssertion[];
   readonly summary: Readonly<Record<"sensitive" | "insensitive" | "cascade" | "notApplied" | "error" | "unpaired" | "targeted", number>>;
@@ -1705,6 +1707,7 @@ async function concludeProof(c: ConcludeContext): Promise<JourneyVerifyReport> {
     base: baseFields,
     verdict,
     ...(reason === undefined ? {} : { reason }),
+    countsForGate: checks.countsForGate,
     mutations,
     assertions,
     summary: {

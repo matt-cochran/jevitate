@@ -1,0 +1,4738 @@
+{
+  "Cache-Control-no-cache-first-bytes-sent-and-unread-reported-bytes-do-not-answer-it-f40ebd17.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "error"
+        }
+      ],
+      "reason": "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "F1-a-skip-with-an-answered-write-and-a-pending-effect-end-state-independent-05a846ee.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "step-request:2:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "step:3",
+          "verdict": "sensitive",
+          "provedBy": "skip:3"
+        },
+        {
+          "site": "step-request:3:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:3"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "F1-the-same-with-no-claim-to-wait-on-only-the-settling-after-the-last-step-322bb1e3.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "step-request:2:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "step:3",
+          "verdict": "insensitive"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "F2-a-first-replay-of-a-skipped-no-expect-step-with-a-write-in-flight-2f5562e5.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "cascade",
+          "targetedRefusal": "step:3 action failed (not a postcondition)"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "F3-a-slow-correct-app-with-a-real-claim-its-job-past-the-cap-eb3421be.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "F4-a-claim-that-holds-without-the-click-the-click-waiting-on-the-job-2fcf84ce.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "step-request:2:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "step:3",
+          "verdict": "cascade",
+          "targetedRefusal": "step-request:3:0 is not before the target step:3: both are step 3, and its postcondition fails before the request check is judged; move the request check to a later step or the end state"
+        },
+        {
+          "site": "step-request:3:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:3"
+        }
+      ],
+      "reason": "some paired assertions were neither proven nor shown vacuous (cascade, not-applied or error); a targeted proof was refused: step-request:3:0 is not before the target step:3: both are step 3, and its postcondition fails before the request check is judged; move the request check to a later step or the end state",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "some paired assertions were neither proven nor shown vacuous (cascade, not-applied or error); a targeted proof was refused: step-request:3:0 is not before the target step:3: both are step 3, and its postcondition fails before the request check is judged; move the request check to a later step or the end state",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "F4-no-waitFor-the-same-claim-at-the-plain-postcondition-bound-6893e0f7.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "step-request:2:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "step:3",
+          "verdict": "cascade",
+          "targetedRefusal": "step-request:3:0 is not before the target step:3: both are step 3, and its postcondition fails before the request check is judged; move the request check to a later step or the end state"
+        },
+        {
+          "site": "step-request:3:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:3"
+        }
+      ],
+      "reason": "some paired assertions were neither proven nor shown vacuous (cascade, not-applied or error); a targeted proof was refused: step-request:3:0 is not before the target step:3: both are step 3, and its postcondition fails before the request check is judged; move the request check to a later step or the end state",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "some paired assertions were neither proven nor shown vacuous (cascade, not-applied or error); a targeted proof was refused: step-request:3:0 is not before the target step:3: both are step 3, and its postcondition fails before the request check is judged; move the request check to a later step or the end state",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "F5-a-kept-wait-on-an-extract-output-which-cannot-resolve-16e10ae9.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "step-request:2:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "step-request:4:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "F5-a-progress-signal-only-the-click-brings-the-claim-on-an-earlier-job-e224fa94.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "step-request:2:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "step:3",
+          "verdict": "cascade",
+          "targetedRefusal": "step-request:3:0 is not before the target step:3: both are step 3, and its postcondition fails before the request check is judged; move the request check to a later step or the end state"
+        },
+        {
+          "site": "step-request:3:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:3"
+        }
+      ],
+      "reason": "some paired assertions were neither proven nor shown vacuous (cascade, not-applied or error); a targeted proof was refused: step-request:3:0 is not before the target step:3: both are step 3, and its postcondition fails before the request check is judged; move the request check to a later step or the end state",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "some paired assertions were neither proven nor shown vacuous (cascade, not-applied or error); a targeted proof was refused: step-request:3:0 is not before the target step:3: both are step 3, and its postcondition fails before the request check is judged; move the request check to a later step or the end state",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "F5-the-same-under-block-write-reading-an-end-state-on-the-earlier-job-2808c4ff.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "step-request:2:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "step:3",
+          "verdict": "cascade",
+          "targetedRefusal": "step-request:3:0 is not before the target step:3: both are step 3, and its postcondition fails before the request check is judged; move the request check to a later step or the end state"
+        },
+        {
+          "site": "step-request:3:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:3"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "H1-the-base-s-job-lands-in-the-next-replay-and-a-fixture-restore-clears-it-695da72f.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "error"
+        }
+      ],
+      "reason": "the Journey as recorded failed straight after the base replay and passed after a quiet gap, so state from one replay may cross into the next (a job it started, by any route, still running); isolate the replays or let the job end, and run the proof again",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "the Journey as recorded failed straight after the base replay and passed after a quiet gap, so state from one replay may cross into the next (a job it started, by any route, still running); isolate the replays or let the job end, and run the proof again",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "H1-the-base-s-job-opens-a-time-limited-window-over-the-replay-after-it-no-fixture-7b8797a9.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "error"
+        }
+      ],
+      "reason": "the Journey as recorded failed straight after the base replay and passed after a quiet gap, so state from one replay may cross into the next (a job it started, by any route, still running); isolate the replays or let the job end, and run the proof again",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "the Journey as recorded failed straight after the base replay and passed after a quiet gap, so state from one replay may cross into the next (a job it started, by any route, still running); isolate the replays or let the job end, and run the proof again",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "H2-the-pacing-hold-outlasts-a-toast-an-earlier-step-showed-943acdc6.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "H3-one-replay-s-job-runs-slow-and-the-sibling-mutation-passes-the-site-fdb7b85b.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "step:3",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "H4-a-client-s-retry-after-the-block-window-with-no-claim-on-the-step-635b6b25.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "block-write:2"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "H4-a-client-s-retry-during-a-relaxed-replay-s-kept-wait-9eeb040a.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "H4-a-client-s-retry-during-a-targeted-replay-c78858bf.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "step:3",
+          "verdict": "sensitive",
+          "provedBy": "block-write:2"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "block-write:2",
+          "relaxedSites": [
+            "step:3"
+          ]
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "M1-a-repeating-POST-the-Journey-never-recorded-open-as-a-longer-replay-closes-36e15ece.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "M2-a-claim-on-optimistic-text-with-a-short-wait-on-a-step-with-a-slow-request-check-b7384cf5.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "step-request:2:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "M3-a-write-the-end-state-s-reload-drops-as-the-base-closes-its-effect-landing-in-the-next-replay-337a22b0.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "M4-the-same-job-started-by-a-GET-with-no-write-to-see-8111e5d6.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "a-307-then-no-Cache-Control-and-first-bytes-sent-reported-bytes-do-not-answer-it-636c8846.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "error"
+        }
+      ],
+      "reason": "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "a-body-still-open-past-the-bound-its-effect-still-to-land-in-a-later-replay-the-proof-stops-at-the-base-aa264546.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "error"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "error"
+        }
+      ],
+      "reason": "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "a-body-that-ends-a-moment-after-its-headers-is-waited-for-so-the-end-state-reads-its-effect-b39c5779.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "a-check-naming-the-first-of-two-recorded-writes-pairs-with-the-step-that-recorded-it-811-whose-block-breaks-it-4c3c4975.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "a-click-navigates-and-the-new-page-s-no-store-write-is-reported-before-its-DOMContentLoaded-that-document-s-body-still-a-dd3ea8be.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "a-job-that-outlasts-the-whole-base-replay-and-lands-in-a-later-one-ab74e531.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "error"
+        },
+        {
+          "site": "step-request:2:0",
+          "verdict": "error"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "error"
+        }
+      ],
+      "reason": "the Journey as recorded no longer passes after the base replay, so state from one replay may cross into the next (a job it started, by any route, still running); isolate the replays or let the job end, and run the proof again",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "the Journey as recorded no longer passes after the base replay, so state from one replay may cross into the next (a job it started, by any route, still running); isolate the replays or let the job end, and run the proof again",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "a-job-that-runs-slower-after-the-base-replay-than-in-it-efb87a1e.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "step-request:2:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "step:3",
+          "verdict": "sensitive",
+          "provedBy": "skip:3"
+        },
+        {
+          "site": "step-request:3:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:3"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "a-load-time-no-store-write-held-a-frame-starts-loading-before-DOMContentLoaded-the-write-stays-open-833b131b.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "error"
+        }
+      ],
+      "reason": "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "a-load-time-no-store-write-held-a-popup-opens-before-DOMContentLoaded-the-write-stays-open-59b2cdfe.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "error"
+        }
+      ],
+      "reason": "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "a-load-time-write-held-with-no-Cache-Control-a-frame-starts-loading-before-DOMContentLoaded-the-write-stays-open-26b6a6bf.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "error"
+        }
+      ],
+      "reason": "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "a-load-time-write-s-body-a-frame-starting-to-load-then-a-held-no-store-write-on-that-line-the-body-does-not-answer-it-c7c6813e.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "error"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "error"
+        }
+      ],
+      "reason": "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "a-load-time-write-s-body-a-frame-starting-to-load-then-a-held-plain-write-on-that-line-the-body-does-not-answer-it-4fc56fa0.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "error"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "error"
+        }
+      ],
+      "reason": "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "a-load-time-write-with-no-response-at-all-a-frame-starts-loading-before-DOMContentLoaded-the-write-stays-open-560e1a20.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "error"
+        }
+      ],
+      "reason": "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "a-new-page-s-own-complete-unread-no-store-write-a-frame-starting-to-load-before-DOMContentLoaded-still-answered-b84c10a9.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "a-no-store-200-whose-body-the-page-never-reads-the-write-was-answered-71189ca3.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "a-no-store-401-whose-body-the-page-never-reads-the-write-was-answered-ee738b09.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "a-read-RPC-a-delta-records-and-a-check-names-by-glob-no-pair-and-the-reason-does-not-say-no-step-records-it-6680f3d6.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "unpaired"
+        }
+      ],
+      "reason": "no assertion is paired with a mutation (no write step, no checked fill, no checked parameter, no mutationPairs). A parameter treated as secret gets no mutation, and a name that reads as a credential counts as one unless it declares secret: false and a person approved the Journey",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "no assertion is paired with a mutation (no write step, no checked fill, no checked parameter, no mutationPairs). A parameter treated as secret gets no mutation, and a name that reads as a credential counts as one unless it declares secret: false and a person approved the Journey",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "a-write-the-server-never-answers-stays-open-its-effect-may-land-in-a-later-replay-1295d529.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "error"
+        }
+      ],
+      "reason": "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "an-empty-no-store-200-Chromium-aborts-it-after-the-response-and-that-is-an-answer-ded9e508.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "answered-with-no-store-then-keeps-working-with-nothing-sent-the-write-stays-open-ddca0dcf.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "error"
+        }
+      ],
+      "reason": "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "attaching-to-the-page-s-network-events-hangs-the-proof-carries-on-and-a-no-store-write-reads-as-open-ae5d5c49.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "error"
+        }
+      ],
+      "reason": "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "click-earlier-fast-e03de00e.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "click-earlier-job202Long-752f4752.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "click-earlier-job202Short-b86834c9.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "click-earlier-pastCap-356353e8.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "click-earlier-slowPost-3e7eecbc.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "click-earlier-then-answer-fast-b62a47a1.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "click-earlier-then-answer-job202Long-5bd94d26.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "click-earlier-then-answer-job202Short-9179e4c5.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "click-earlier-then-answer-pastCap-1e337566.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "click-earlier-then-answer-slowPost-079ce324.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "click-own-job-fast-c1744632.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "click-own-job-job202Long-5f9a5afa.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "click-own-job-job202Short-15cefcf8.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "click-own-job-pastCap-96cfb442.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "click-own-job-slowPost-78dc4a93.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-body-reported-under-Cache-Control-NO-STORE-max-age-0-answers-the-wr-a86efa1a.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-body-reported-under-Cache-Control-answers-nothing-only-a-no-store-b-ef97f7aa.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-body-reported-under-Cache-Control-max-age-60-answers-nothing-only-a-bc5eb941.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-body-reported-under-Cache-Control-no-cache-answers-nothing-only-a-n-dc86b5bf.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-body-reported-under-Cache-Control-no-store-answers-the-write-9db532bd.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-body-reported-under-Cache-Control-no-storey-answers-nothing-only-a--c3b8ccfb.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-body-reported-under-Cache-Control-private-no-store-answers-the-writ-89d2d276.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-body-that-ended-earlier-says-nothing-about-the-next-write-on-that-l-c435f532.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-held-write-and-a-body-on-the-same-line-that-ends-the-browser-says-t-8833884a.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-held-write-and-a-body-on-the-same-line-that-ends-the-browser-says-t-b6a016bf.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-navigation-that-replaces-no-document-of-the-opened-page-a-frame-sta-d681a85e.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-navigation-that-replaces-no-document-of-the-opened-page-a-popup-s-f-05010e93.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-navigation-that-replaces-no-document-of-the-opened-page-a-request-t-4b17f4c0.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-new-document-s-DOMContentLoaded-and-the-bodies-it-keeps-a-body-with-08fb7317.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-new-document-s-DOMContentLoaded-and-the-bodies-it-keeps-a-frame-s-d-202d6cde.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-new-document-s-DOMContentLoaded-and-the-bodies-it-keeps-another-doc-a4a56918.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-new-document-s-DOMContentLoaded-and-the-bodies-it-keeps-its-own-wri-0c5a9b09.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-read-s-response-answers-no-write-16e0323f.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-redirect-that-turns-the-write-into-a-read-leaves-no-body-to-claim-de36f287.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-replay-that-stalls-with-a-write-open-taints-its-checkpoint-the-resu-93e1c65f.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "error"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-replay-that-throws-is-held-to-the-same-check-what-it-left-open-may--104664c3.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "error"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-replay-that-throws-with-nothing-open-is-only-an-error-4a005580.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "not-applied"
+        }
+      ],
+      "reason": "1 of 2 mutated replays errored, so the proof has a gap; retry it",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "1 of 2 mutated replays errored, so the proof has a gap; retry it",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-request-failing-after-its-response-is-no-abort-it-was-answered-787a00e5.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-response-whose-body-has-not-arrived-keeps-the-write-open-the-server-05b1eed5.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-write-still-open-with-no-new-document-taints-the-proof-be8e9d1f.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-write-the-new-document-sent-itself-is-not-dropped-with-the-old-one-6145aba2.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-a-write-whose-body-arrived-is-answered-though-the-browser-never-says--af549fe9.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-attaching-to-the-page-s-network-events-hangs-the-replay-carries-on-an-435faae3.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-attaching-to-the-page-s-network-events-hangs-the-same-when-Network.en-ec7a180e.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-many-reports-of-one-body-count-once-993eb16e.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-reads-as-aborted-the-proof-is-not-tainted-by-it-ddc4ebb1.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-the-2-s-a-replay-stays-open-after-a-body-that-arrived-it-can-be-a-bod-79f4238b.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-the-2-s-a-replay-stays-open-after-a-write-answered-then-aborted-the-s-af8f1251.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-the-2-s-a-replay-stays-open-after-a-write-answered-then-dropped-with--dc9ccabf.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-the-2-s-a-replay-stays-open-after-a-write-the-browser-gave-up-on-a326b153.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-the-2-s-a-replay-stays-open-not-after-a-write-that-finished-c2825f90.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-the-browser-can-report-the-body-before-Playwright-reports-the-respons-28f992a4.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-the-same-write-answered-later-counts-once-however-its-body-ends-f11815a3.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-two-writes-on-one-line-and-one-body-one-is-still-open-30cde862.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-waiting-on-an-open-write-never-asks-for-a-negative-sleep-time-passes--e3dd9ea4.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "dropped-write-a-write-a-new-document-dropped-with-no-CDP-session-nothing-says-a-body-arrived-so-a-response-alone-k-15f1b8a1.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "insensitive"
+        }
+      ],
+      "reason": "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a replay of skip:1 closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "fill-earlier-fast-4bcaf4c5.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "fill-earlier-job202Long-9d59ad1d.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "fill-earlier-job202Short-1a98e408.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "fill-earlier-pastCap-255fb80c.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "fill-earlier-slowPost-613e3375.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "fill-earlier-then-answer-fast-d8af798b.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "stale-value:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "fill-earlier-then-answer-job202Long-407d376c.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "stale-value:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "fill-earlier-then-answer-job202Short-ca6ef54e.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "stale-value:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "fill-earlier-then-answer-pastCap-ad165dd0.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "stale-value:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "fill-earlier-then-answer-slowPost-00e406c3.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "stale-value:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "fill-own-job-fast-c003bffb.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "stale-value:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "stale-value:4"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "fill-own-job-job202Long-503f7406.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "stale-value:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "stale-value:4"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "fill-own-job-job202Short-83b18c62.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "stale-value:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "stale-value:4"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "fill-own-job-pastCap-2cffbca9.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "stale-value:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "stale-value:4"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "fill-own-job-slowPost-7db7884c.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "stale-value:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "stale-value:4"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "no-Cache-Control-a-gzip-block-flushed-and-unread-reported-bytes-do-not-answer-it-70007704.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "error"
+        }
+      ],
+      "reason": "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "no-Cache-Control-first-bytes-sent-and-unread-reported-bytes-do-not-answer-it-668fe76a.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "error"
+        }
+      ],
+      "reason": "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "no-delta-a-networkCheck-names-a-POST-and-page-timing-shows-it-no-pair-comes-of-that-and-the-reason-says-what-to-add-5942f9da.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "unpaired"
+        }
+      ],
+      "reason": "no assertion is paired with a mutation (no write step, no checked fill, no checked parameter, no mutationPairs). A parameter treated as secret gets no mutation, and a name that reads as a credential counts as one unless it declares secret: false and a person approved the Journey",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "no assertion is paired with a mutation (no write step, no checked fill, no checked parameter, no mutationPairs). A parameter treated as secret gets no mutation, and a name that reads as a credential counts as one unless it declares secret: false and a person approved the Journey",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "no-delta-and-no-network-check-the-reason-says-what-to-add-6bcc615d.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        }
+      ],
+      "reason": "no assertion is paired with a mutation (no write step, no checked fill, no checked parameter, no mutationPairs). A parameter treated as secret gets no mutation, and a name that reads as a credential counts as one unless it declares secret: false and a person approved the Journey",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "no assertion is paired with a mutation (no write step, no checked fill, no checked parameter, no mutationPairs). A parameter treated as secret gets no mutation, and a name that reads as a credential counts as one unless it declares secret: false and a person approved the Journey",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "stated-limit-today-s-reading-a-body-the-page-reads-and-the-server-holds-open-reports-its-first-bytes-so-past-2-s-it-read-0de2bce1.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "stated-limit-today-s-reading-a-claim-that-really-depends-on-the-write-but-decays-inside-the-hold-cannot-be-told-from-one-bdf1da85.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "cascade",
+          "targetedRefusal": "the unmutated control replay did not pass (failed), so the failure at end-state:0 is not evidence"
+        }
+      ],
+      "reason": "some paired assertions were neither proven nor shown vacuous (cascade, not-applied or error); a targeted proof was refused: the unmutated control replay did not pass (failed), so the failure at end-state:0 is not evidence",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "some paired assertions were neither proven nor shown vacuous (cascade, not-applied or error); a targeted proof was refused: the unmutated control replay did not pass (failed), so the failure at end-state:0 is not evidence",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "stated-limit-today-s-reading-a-client-s-retry-on-a-line-the-step-never-recorded-gets-through-so-the-end-state-reads-inse-bd8ee631.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "stated-limit-today-s-reading-a-one-off-slow-job-no-sibling-to-disagree-plenty-of-room-reads-proven-though-the-claim-is-i-06143d5d.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        },
+        {
+          "site": "step:3",
+          "verdict": "sensitive",
+          "provedBy": "skip:3"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "stated-limit-today-s-reading-a-timer-s-write-recorded-under-the-next-step-pairs-with-that-step-whose-block-cannot-break--5ef4bf8a.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "stated-limit-today-s-reading-no-store-first-bytes-sent-and-held-sent-with-sendBeacon-it-reads-as-answered-after-2-s-so-a-ee40c2d5.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "stated-limit-today-s-reading-no-store-first-bytes-sent-and-held-the-page-keeps-an-unread-clone-it-reads-as-answered-afte-0b8fe92c.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "stated-limit-today-s-reading-state-landing-later-than-the-independence-replay-only-inside-one-mutated-replay-reads-prove-50d6fa76.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "targeted-automatic-earlier-then-answer-fast-8c84de61.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "step:5",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "targeted-automatic-earlier-then-answer-job202Long-50b54134.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "step:5",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "targeted-automatic-earlier-then-answer-job202Short-f01ce552.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "step:5",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "targeted-automatic-earlier-then-answer-pastCap-c0497c8f.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "step:5",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "targeted-automatic-earlier-then-answer-slowPost-0586d85e.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "step:5",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "targeted-automatic-own-job-fast-a05caf4b.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "step:5",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:4",
+          "relaxedSites": [
+            "step:5"
+          ]
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "targeted-automatic-own-job-job202Long-819576ce.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "step:5",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:4",
+          "relaxedSites": [
+            "step:5"
+          ]
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "targeted-automatic-own-job-job202Short-f98855ef.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "step:5",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:4",
+          "relaxedSites": [
+            "step:5"
+          ]
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "targeted-automatic-own-job-pastCap-3cf71d2c.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "step:5",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:4",
+          "relaxedSites": [
+            "step:5"
+          ]
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "targeted-automatic-own-job-slowPost-c02f5342.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "step:5",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:4",
+          "relaxedSites": [
+            "step:5"
+          ]
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "targeted-declared-earlier-then-answer-fast-9cf2ea3c.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "step:5",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "targeted-declared-earlier-then-answer-job202Long-c8e60292.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "step:5",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "targeted-declared-earlier-then-answer-job202Short-dc88640d.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "step:5",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "targeted-declared-earlier-then-answer-pastCap-574ccd0a.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "step:5",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "targeted-declared-earlier-then-answer-slowPost-f48a8f3c.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "insensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "step:5",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "insensitive"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "targeted-declared-own-job-fast-42f7790d.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "step:5",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:4",
+          "relaxedSites": [
+            "step:5"
+          ]
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "targeted-declared-own-job-job202Long-a85fb8d7.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "step:5",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:4",
+          "relaxedSites": [
+            "step:5"
+          ]
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "targeted-declared-own-job-job202Short-00e2e190.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "step:5",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:4",
+          "relaxedSites": [
+            "step:5"
+          ]
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "targeted-declared-own-job-pastCap-5b4d471d.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "step:5",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:4",
+          "relaxedSites": [
+            "step:5"
+          ]
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "targeted-declared-own-job-slowPost-db41c0fb.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:3",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:4",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "step:5",
+          "verdict": "sensitive",
+          "provedBy": "skip:4"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "sensitive",
+          "provedBy": "skip:4",
+          "relaxedSites": [
+            "step:5"
+          ]
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "two-no-store-writes-on-one-line-both-complete-and-unread-both-are-answered-1144c652.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "sensitive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "sensitive",
+          "provedBy": "skip:2"
+        }
+      ],
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  },
+  "two-writes-on-one-line-the-first-held-and-the-second-read-the-second-s-body-does-not-answer-the-first-dd91d9cb.evidence.json": {
+    "rules": "v1",
+    "job": {
+      "attainment": "unverified",
+      "basis": "no-check"
+    },
+    "checks": {
+      "verdict": "inconclusive",
+      "assertions": [
+        {
+          "site": "step:1",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "step:2",
+          "verdict": "unpaired"
+        },
+        {
+          "site": "end-state:0",
+          "verdict": "error"
+        }
+      ],
+      "reason": "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "countsForGate": false
+    },
+    "reasons": [
+      "no done check is declared for this job, so the job is unverified",
+      "the base replay closed with a write still unanswered, which may land inside a later replay; the proof cannot say which replay it decided",
+      "a proof's strength depends on a target you can reset, so this one does not count for a strict gate"
+    ]
+  }
+}

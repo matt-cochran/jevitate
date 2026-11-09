@@ -15,8 +15,9 @@ import {
   UnknownMissionTargetError,
   type MissionTargetAuthFlags,
 } from "./mission-api.js";
-import { FsMissionQueueStore } from "@jevitate/missions";
-import { drainMissionQueue, needsModel, realQueuedMissionExecutor, type DrainReport } from "./mission-queue-runner.js";
+import { FsJourneyCallQueueStore, FsMissionQueueStore } from "@jevitate/missions";
+import { drainExitCode, drainMissionQueue, needsModel, realQueuedJourneyExecutor, realQueuedMissionExecutor, type DrainReport } from "./mission-queue-runner.js";
+import { resolveCatalogDir } from "./catalog-api.js";
 import { loadTargetsFile } from "./target-config.js";
 import { withEngine } from "./engine.js";
 import { EXIT_CODES } from "./exit-codes.js";
@@ -33,6 +34,8 @@ import {
   GatewaySelectionError,
   buildExploreGateways,
   environmentSeams,
+  resolveDbPath,
+  resolveJourneysDir,
 } from "./cli-shared.js";
 import { clock } from "@jevitate/domain";
 
@@ -200,7 +203,7 @@ export function registerMissionCommands(program: Command, deps: CliDeps): void {
   withBrowserLaunchFlags(
     mission
       .command("run")
-      .description("run queued missions (queue_exploration) through their strategy's runner; get_mission_result {id: missionId} then reads the result"),
+      .description("run queued missions (queue_exploration) through their strategy's runner, then queued Journey calls (queue_journey / journey queue) as run_journey runs them; get_mission_result {id: missionId} then reads a mission's result"),
   )
     .option("--once", "drain the missions queued now, then exit (default)")
     .option("--watch", "keep draining: poll the queue every --interval ms until interrupted")
@@ -246,7 +249,8 @@ export function registerMissionCommands(program: Command, deps: CliDeps): void {
         if (!(err instanceof MissingCredentialError || err instanceof GatewaySelectionError)) throw err;
         gatewayRefusal = err.message;
       }
-      const queue = new FsMissionQueueStore(o.dir ?? deps.missions?.queueDir ?? resolveDataDir(["missions", "queue"]));
+      const queueDir = o.dir ?? deps.missions?.queueDir ?? resolveDataDir(["missions", "queue"]);
+      const queue = new FsMissionQueueStore(queueDir);
       const targets = missionTargetContext(resolveMissionTargetsDir(deps, o.targetsDir)).registry;
       // #142 follow-up: ~/.jevitate/targets.json's per-origin logSources/logDefect/allowLogCmd — a
       // queued mission never carries its own (never an MCP argument); this is the operator's only
@@ -262,12 +266,30 @@ export function registerMissionCommands(program: Command, deps: CliDeps): void {
           ...(browserLaunchFromFlags(o) === undefined ? {} : { browser: browserLaunchFromFlags(o)! }),
           targets: targetConfigs,
           ...environmentSeams(deps),
+          // #800 (GAPS 12): where a queued goal mission's `job` is read from.
+          catalogDir: resolveCatalogDir(deps.catalogDir),
+          journeysDir: resolveJourneysDir(deps),
         });
+      // #797: the queued Journey calls (queue_journey / `journey queue`), run as run_journey runs them.
+      const journeyCalls = {
+        store: new FsJourneyCallQueueStore(queueDir),
+        execute: realQueuedJourneyExecutor({
+          journeysDir: resolveJourneysDir(deps),
+          // GAPS 23: the job done check reads the project this invocation resolved (a non-default one too).
+          catalogDir: resolveCatalogDir(deps.catalogDir) ?? undefined,
+          ...environmentSeams(deps),
+          sitePolicyDbPath: resolveDbPath(deps),
+          logsRoot: deps.logs?.logsRoot,
+          ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),
+          ...(browserLaunchFromFlags(o) === undefined ? {} : { browser: browserLaunchFromFlags(o)! }),
+        }),
+      };
       const drainOnce = () =>
         drainMissionQueue({
           queue,
           targets,
           execute,
+          journeyCalls,
           accepts: (m) => (gatewayRefusal !== undefined && needsModel(m) ? `needs a model gateway: ${gatewayRefusal}` : true),
         });
       const emit = (report: DrainReport) => {
@@ -277,9 +299,10 @@ export function registerMissionCommands(program: Command, deps: CliDeps): void {
         } else {
           program.configureOutput().writeOut?.(`${JSON.stringify(data)}\n`);
         }
-        // Every claimed mission ran (whatever its own outcome); 2 only when one could not run at all —
-        // it proves nothing, so never 1 (defects) — exit-codes.ts.
-        process.exitCode = report.ran.some((m) => m.status === "failed") ? EXIT_CODES.inconclusive : EXIT_CODES.ok;
+        // Every claimed mission ran (whatever its own outcome); 2 when one could not run at all — it proves
+        // nothing, so never 1 (defects) — exit-codes.ts. GAPS 23: a drained Journey call counts its own exit
+        // code, the worst by the missions' severity order (drainExitCode).
+        process.exitCode = drainExitCode(report);
       };
       try {
         if (!o.watch) {
@@ -290,7 +313,7 @@ export function registerMissionCommands(program: Command, deps: CliDeps): void {
         // switch still writes a killed mission's partial result).
         for (;;) {
           const report = await drainOnce();
-          if (report.ran.length > 0) emit(report);
+          if (report.ran.length > 0 || (report.journeys ?? []).length > 0) emit(report);
           await clock.sleep(intervalMs);
         }
       } catch (err) {

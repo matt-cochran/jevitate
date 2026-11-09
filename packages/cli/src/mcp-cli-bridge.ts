@@ -26,6 +26,8 @@ export function mcpToolDeps(deps: CliDeps, over: Partial<McpApiDeps> = {}): McpA
     // #255: run_journey's environment / self-heal options resolve exactly as `journey run`'s flags do.
     ...(deps.environmentsFile === undefined ? {} : { environmentsFile: deps.environmentsFile }),
     ...(deps.explore?.targetsConfigPath === undefined ? {} : { targetsConfigPath: deps.explore.targetsConfigPath }),
+    // GAPS 23: run_journey's job done check reads the same project as the CLI (a non-default one too).
+    ...(deps.catalogDir === undefined ? {} : { catalogDir: deps.catalogDir }),
     selfHealGateways: (sel) => buildExploreGateways(deps, sel),
     ...over,
   };

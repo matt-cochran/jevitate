@@ -8,9 +8,9 @@ import { RunEvidenceSchema } from "@jevitate/adjudicator";
 import { ProfileManager } from "@jevitate/daemon";
 import { FsJourneyStore, JourneyRegistry, type Journey } from "@jevitate/journey";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
-import { registerDoneCheckHooks } from "./journey-done-check-hook.js";
+import { DONE_CHECK_HOOK_OWNER, registerDoneCheckHooks, registerDoneCheckHooksOnce } from "./journey-done-check-hook.js";
 import { EVIDENCE_FILE } from "./journey-run-evidence.js";
-import { resetRunHooksForTests } from "./journey-run-hooks.js";
+import { hasRunHookOwner, resetRunHooksForTests } from "./journey-run-hooks.js";
 import { buildProgram } from "./program.js";
 import { useSkippingTime } from "../../explore/src/testkit.js";
 
@@ -253,4 +253,18 @@ describe("#800 journey run reads the job's done check in fresh sessions (real Ch
     expect(r.code).toBe(64);
     expect(evidenceFiles()).toEqual([]);
   }, 30_000);
+});
+
+describe("GAPS 21: the real entry registers the done check (real Chromium)", () => {
+  it("buildProgram registers it once, with no manual registration, and `journey run --json` returns job {attainment, basis}", async () => {
+    resetRunHooksForTests(); // undo this file's beforeEach registration: only buildProgram registers now
+    expect(hasRunHookOwner(DONE_CHECK_HOOK_OWNER)).toBe(false);
+    app.broken = false;
+    const r = await run("save-item");
+    expect(hasRunHookOwner(DONE_CHECK_HOOK_OWNER)).toBe(true);
+    expect(registerDoneCheckHooksOnce()).toBeUndefined();
+    expect(r.data.job, r.text).toEqual({ attainment: "achieved", basis: "done-check" });
+    expect(r.code).toBe(0);
+    noMarker(r);
+  }, 120_000);
 });

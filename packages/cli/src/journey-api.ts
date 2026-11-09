@@ -1,9 +1,9 @@
-import { NOT_A_CREDENTIAL_WAY_OUT, fixtureSecretNeeds, secretBoundNeeds, type BoundSecretParams } from "./secret-params.js";
+import { NOT_A_CREDENTIAL_WAY_OUT, fixtureSecretNeeds, isCredentialExtractName, secretBoundNeeds, type BoundSecretParams } from "./secret-params.js";
 import type { JourneyRunRecorder } from "./journey-run-record.js";
 import { JourneyRunEvidenceWriter, type WriteReceipt } from "./journey-run-evidence.js";
 import { hasRunHooks, resolveRunMode, runReadDoneCheckHooks, runValidateParamsHooks, withRunHookGuard, type RunHookContext, type RunMode } from "./journey-run-hooks.js";
 import { allowedOriginSet, offAllowlistWriteOrigin, prepareMcpRunGuard } from "./mcp-run-guard.js";
-import { FsJourneyStore, JourneyRegistry, ParamValidationError, declaredNonSecretParams, describeStep, isSecretName, loadRefusedParamNames, flatJourneySteps, journeyEndState, journeyParamSchema, journeyPrefix, lintJourney, lintUploadFixtures, secretNamedValues, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError, declaredNonSecretParams, describeStep, loadRefusedParamNames, flatJourneySteps, journeyEndState, journeyParamSchema, journeyPrefix, lintJourney, lintUploadFixtures, secretNamedValues, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
 import { assertHttpChecksAllowed, createHttpProbe, httpCheckRefs } from "./http-probe.js";
 import { inMcpInvocation, programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
 import { planSecretRun, secretHandbackHandler, secretOriginRefusalOf, withSecretHandbacks, type SecretModeFlag } from "./journey-secret-mode.js";
@@ -905,7 +905,7 @@ async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutatio
       const onExtracted = async (value: string, name?: string): Promise<void> => {
         opts.runRecorder?.noteValue(value);
         evidence?.writer.noteValue(value);
-        if (name === undefined || !isSecretName(name) || nonSecretParams.has(name) || value.trim() === "") return;
+        if (name === undefined || !isCredentialExtractName(name) || nonSecretParams.has(name) || value.trim() === "") return;
         extractedCredentials.add(value);
         await mask.addSecret(value);
       };

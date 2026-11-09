@@ -12,6 +12,9 @@ import type { EmulationSpec } from "@jevitate/playwright";
 import { safeRunPolicy as defaultRunPolicy, type RunPolicy } from "@jevitate/domain";
 import { runJourneyProgrammatically } from "./journey-api.js";
 import { registerRunSurfaceHooks } from "./run-surface-hooks.js";
+import { sentinelShadowGateway } from "./sentinel-hook.js";
+import { registerDoneCheckHooksOnce, runWithDoneCheck } from "./journey-done-check-hook.js";
+import { resolveCatalogDir } from "./catalog-api.js";
 import type { BrowserPort } from "@jevitate/playwright";
 import type { BoundSecretParams } from "./secret-params.js";
 import { runGuardedJourney } from "./journey-run-mode-gate.js";
@@ -33,6 +36,7 @@ import { findingTools } from "./mcp-tools/findings.js";
 import { journeyTools } from "./mcp-tools/journey.js";
 import { exploreTools } from "./mcp-tools/explore.js";
 import { inboxTools } from "./mcp-tools/inbox.js";
+import { queueJourneyTools } from "./mcp-tools/queue-journey.js";
 import { cliTools } from "./mcp-tools/cli.js";
 
 
@@ -113,6 +117,8 @@ export interface McpApiDeps {
    * an MCP result, or a log.
    */
   runJourney?: (id: string, params: Record<string, string>, storageState?: string, options?: McpJourneyRunOptions) => Promise<unknown>;
+  /** GAPS 21: the catalog dir a run's job done check is read from (default: the project's `.jevitate/`). */
+  catalogDir?: string;
   /**
    * #255: the directories MCP path arguments (storage states, fixtures, invariants, output dirs)
    * must resolve inside — default: the project and `~/.jevitate` (mcp-paths.ts).
@@ -246,7 +252,10 @@ function assertAllowlisted(name: string): void {
  */
 export function buildMcpTools(deps: McpApiDeps): McpTool[] {
   // 0.30.0: the run-mode and typed-parameter run hooks (once per process; cli-shared.ts).
-  registerRunSurfaceHooks({ inboxDir: deps.inboxDir });
+  // GAPS 17: Jev's write sentinel, only with JEVITATE_WRITE_SENTINEL=shadow and a Jev key (advisory, never a hold).
+  registerRunSurfaceHooks({ inboxDir: deps.inboxDir, sentinelGateway: sentinelShadowGateway() });
+  // GAPS 21 (#800): the job done check (it reads only inside a `DoneCheckRun` scope).
+  registerDoneCheckHooksOnce();
   const runJourney =
     deps.runJourney ??
     ((id: string, params: Record<string, string>, storageState?: string, o?: McpJourneyRunOptions) =>
@@ -254,7 +263,14 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
       runAsMcpInvocation(() => withJourneyRunRecord({ channel: "mcp", id, params, logsRoot: deps.runRecordLogsRoot }, (runRecorder) => withSiteGate(deps.sitePolicyDbPath, (siteGate) =>
         // #797: the one guarded run (promotion check, mode gate, #789 guard) a queued Journey call goes through too.
         runGuardedJourney({ journeysDir: deps.journeysDir, id, environment: o?.environment, targetsFile: deps.targetsConfigPath, run: () =>
-        runJourneyProgrammatically({
+        // GAPS 21 (#800): the linked job's done check, read as `journey run` reads it; the result carries `job`.
+        runWithDoneCheck({
+          catalogDir: resolveCatalogDir(deps.catalogDir),
+          journeysDir: deps.journeysDir,
+          ...(o?.environment?.baseUrl === undefined ? {} : { origin: o.environment.baseUrl }),
+          ...(storageState === undefined ? {} : { storageState }),
+          ...(deps.browserPortFactory === undefined ? {} : { sessionPortFactory: deps.browserPortFactory }),
+        }, () => runJourneyProgrammatically({
           dir: deps.journeysDir,
           id,
           params,
@@ -278,7 +294,7 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           // §5.3: a target's secretFields `env:` sources are read from the server's environment (a test seam).
           ...(deps.secretEnv === undefined ? {} : { secretEnv: deps.secretEnv }),
           ...(deps.browserPortFactory === undefined ? {} : { browserPortFactory: deps.browserPortFactory }),
-        }) }),
+        })) }),
       ))));
   const pathRoots = deps.pathRoots ?? defaultMcpPathRoots();
   const credentialStore = deps.credentialStore ?? envCredentialStore();
@@ -323,6 +339,8 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     ...journeyTools(ctx),
     ...exploreTools(ctx),
     ...inboxTools(ctx),
+    // 0.30.0 #797: queue a promoted Journey call (`mission run` drains it).
+    ...queueJourneyTools(ctx),
   };
 
   cliTools(ctx, wired);

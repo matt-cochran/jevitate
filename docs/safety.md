@@ -414,12 +414,21 @@ built-in verb (`Preview*`, `Recalculate*`, …).
   before it runs, so it holds at step 1, before the extract and when the extract itself is what broke:
   the step fails as it would without a heal, and says so. `journey annotate`, `annotate_journey` and
   `create_demo` refuse such a Journey (`E_MODEL_REFUSED_SECRET`). **The cost: a secret-bound Journey
-  can't self-heal or be annotated in 0.29.0.**
-- That includes a working Journey whose only secret is a name, because the name list is broad on
-  purpose: a parameter `passengers` or `key`, or an `extract as: "token_count"`, loses self-heal and
-  annotate. Both refusals name the way out: declare a parameter of that name `"secret": false` and have
-  a person approve the Journey (a typed `journey promote` or a verified PR review). For an `extract`
-  name that means declaring a parameter it doesn't otherwise take. An approval over MCP lifts nothing.
+  can't self-heal or be annotated.**
+- That includes a working Journey whose only secret is a parameter's name, because the parameter name
+  list is broad on purpose: a parameter `passengers` or `key` loses self-heal and annotate. Both
+  refusals name the way out: declare the parameter `"secret": false` and have a person approve the
+  Journey (a typed `journey promote` or a verified PR review). An approval over MCP lifts nothing.
+- An `extract as` name is a credential's by a narrower rule, taken by its words (separators and
+  camelCase split it): it holds an unambiguous term once separators are removed (`password`, `pwd`,
+  `apikey`, `jwt`, `csrf`, `pincode`, …); or a word is, starts with or ends with `secret`, `token`,
+  `session`, `cookie`, `otp`, `auth` (not `author`), `mfa`, `cvv`, `nonce` or `signature`; or a word is
+  exactly `pass`, `pin`, `pw`, `sid`, `ssn`, `creds` or `key`. A last word that describes rather than
+  holds a value (`count`, `type`, `length`, `name`, `label`, `channel`, `banner`, `expires`, …) lifts
+  it. So `apiKey`, `authToken`, `session_id`, `user_pass` and `otp` still refuse, and `passengers`,
+  `footprint`, `bypass_cache`, `token_count` and `cookie_banner` heal and annotate. The rule is by name:
+  a credential extracted under a plain name (`note`) is not recognised. The same `"secret": false` way
+  out applies to an extract name the rule still takes (`issueKey`, `secretary`).
 - `explore --strategy coverage|exploratory` refuse `--secret`
   (`E_EXPLORE_SECRET_UNSUPPORTED`), since they can't keep it out. `--feature` makes no model call and
   masks it in its transcript, Recordings and result.
@@ -431,8 +440,14 @@ built-in verb (`Preview*`, `Recalculate*`, …).
   value still there stops the call, and gone when the run ends. Past 2000 live values a model call
   fails. A secret under 8 characters isn't masked there. A replay holding one makes no model call at
   all. Goal, adversarial and usability still make them, and a short secret is masked by their own set,
-  not by the backstop. That masks it as a whole token only: a short secret inside a longer one, such as
-  `abcPw12xdef`, still reaches the prompt.
+  not by the backstop. A secret of 6 characters or more is masked wherever it occurs. A shorter one:
+  - 3 to 5 characters mixing letters and digits (`Pw12x`) is masked wherever it occurs, inside a
+    longer token too (`abcPw12xdef` reads `abc«redacted»def`).
+  - 3 to 5 characters of one kind (`1234`, `abc`, `a-b`) is masked where it doesn't continue a run of
+    its own kind: `1234` in `pin1234x` but not in `12345`, `bag` not in `cabbage`. So a letters-only
+    or digits-only short secret inside a longer word or number of the same kind still reaches the
+    prompt.
+  - 1 or 2 characters is masked as a whole token only, never inside a word or number.
 - Redaction is for what a person or a model reads, never for what a page gets: a run that would type or
   navigate with masked text fails (`E_REDACTED_VALUE`), which includes a value that really does contain
   `«redacted»`. `journey chain` hands on what the producer extracted, except a value under a name the

@@ -34,7 +34,8 @@ import { logDateOf, logsRoot } from "./project-dir.js";
  * what the evidence writer saw (`deriveFrom`), so the two never disagree about what was sent.
  */
 
-export type RunChannel = "mcp" | "cli";
+/** #797: `queue` — a queued Journey call drained by `jevitate mission run`. */
+export type RunChannel = "mcp" | "cli" | "queue";
 
 const READS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
 /** What a record names a method by. A method is the page's own text, so anything else is `OTHER`, never stored. */

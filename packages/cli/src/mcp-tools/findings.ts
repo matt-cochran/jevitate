@@ -1,5 +1,5 @@
-import { isMissionResultId, isQueuedMissionId, missionResultFileName, missionStatus, parseResultOutcome } from "@jevitate/mcp-facade";
-import { FsMissionQueueStore } from "@jevitate/missions";
+import { isMissionResultId, isQueuedJourneyCallId, isQueuedMissionId, missionResultFileName, missionStatus, parseResultOutcome } from "@jevitate/mcp-facade";
+import { FsJourneyCallQueueStore, FsMissionQueueStore } from "@jevitate/missions";
 import { existsSync } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -36,7 +36,7 @@ export function findingTools(ctx: McpToolCtx): McpToolGroup {
       return {
         response: errorResult({
           error: "invalid_args",
-          message: `${tool} requires a mission result 'id' (explore-|coverage-|exploratory-|adversarial-|feature-|usability-<stamp>) or a queue_exploration missionId`,
+          message: `${tool} requires a mission result 'id' (explore-|coverage-|exploratory-|adversarial-|feature-|usability-<stamp>), a queue_exploration missionId or a queue_journey callId`,
         }),
       };
     }
@@ -76,7 +76,32 @@ export function findingTools(ctx: McpToolCtx): McpToolGroup {
     return dirs.filter((d): d is string => d !== undefined).map((d) => join(d, file));
   };
 
+  /**
+   * GAPS 19 (#797): a `queue_journey` callId answers with its stored queue record, never a path: `queued` /
+   * `running` is pending (poll again), `failed` (it could not run: a refusal `code`) is an error, and a
+   * finished call reports its run's `outcome`, `exitCode` and `runId` (its `journey-evidence-<runId>`
+   * directory). Held or inconclusive (exit 2) proves nothing yet, so it is an error result, never a pass.
+   */
+  const getJourneyCallResult = async (id: string): Promise<McpToolResult> => {
+    if (!deps.missionQueueDir) return errorResult({ error: "not_configured", message: "get_mission_result requires missionQueueDir to resolve a queue_journey callId" });
+    let record;
+    try {
+      record = await new FsJourneyCallQueueStore(deps.missionQueueDir).get(id);
+    } catch {
+      return errorResult({ error: "corrupt_mission", id });
+    }
+    if (record === null) return errorResult({ error: "not_found", id });
+    const base = { id, callId: id, kind: "journey", journey: record.call.journey, enqueuedAtIso: record.enqueuedAtIso, ...(record.startedAtIso === undefined ? {} : { startedAtIso: record.startedAtIso }) };
+    if (record.status === "queued" || record.status === "running") return jsonResult({ ...base, status: record.status, pending: true });
+    const ended = { ...(record.finishedAtIso === undefined ? {} : { finishedAtIso: record.finishedAtIso }), ...(record.code === undefined ? {} : { code: record.code }) };
+    if (record.status === "failed") return errorResult({ ...base, ...ended, status: "failed", isError: true, error: record.error ?? "the queued Journey call could not run" });
+    const exitCode = record.exitCode ?? 2;
+    const body = { ...base, ...ended, status: record.outcome ?? "inconclusive", outcome: record.outcome ?? "inconclusive", exitCode, isError: exitCode === 2, ...(record.runId === undefined ? {} : { runId: record.runId }), ...(record.job === undefined ? {} : { job: record.job }) };
+    return body.isError ? errorResult(body) : jsonResult(body);
+  };
+
   const getMissionResult = async (args: Record<string, unknown>): Promise<McpToolResult> => {
+    if (isQueuedJourneyCallId(args.id)) return getJourneyCallResult(args.id);
     if (!deps.recordingsDir) {
       return errorResult({ error: "not_configured", message: "get_mission_result requires recordingsDir" });
     }
@@ -281,7 +306,7 @@ export function findingTools(ctx: McpToolCtx): McpToolGroup {
     },
     get_mission_result: {
       description:
-        "Read a mission's TYPED result by id: a result stem (explore-|coverage-|exploratory-|adversarial-|feature-|usability-<stamp>, e.g. adversarial-2026-09-23T00-00-00-000Z) or a queue_exploration missionId. A queued mission reports status queued | running (pending: true — poll again; `jevitate mission run` drains the queue) or failed (an error: it could not run). A finished one: status is clean | defects-found | hang | intermittent | inconclusive | crashed, with the matching CLI exit code. A broken run (inconclusive/crashed) is returned as an error result — never a pass. An adversarial result carries `coverage` (target controls exercised/total, forms submitted, strategies applied vs found nothing, out-of-scope steps): a run below its coverage thresholds is inconclusive, never clean.",
+        "Read a mission's TYPED result by id: a result stem (explore-|coverage-|exploratory-|adversarial-|feature-|usability-<stamp>, e.g. adversarial-2026-09-23T00-00-00-000Z) or a queue_exploration missionId, or a queue_journey callId (journey-<uuid>: its stored record — status queued | running (pending), failed (an error with the refusal `code`, e.g. E_JOURNEY_APPROVAL_STALE), else the run's outcome (ok | failed | held | …) with exitCode and runId, the run's journey-evidence-<runId> directory; exit 2 is an error result). A queued mission reports status queued | running (pending: true — poll again; `jevitate mission run` drains the queue) or failed (an error: it could not run). A finished one: status is clean | defects-found | hang | intermittent | inconclusive | crashed, with the matching CLI exit code. A broken run (inconclusive/crashed) is returned as an error result — never a pass. An adversarial result carries `coverage` (target controls exercised/total, forms submitted, strategies applied vs found nothing, out-of-scope steps): a run below its coverage thresholds is inconclusive, never clean.",
       inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
       handler: getMissionResult,
     },

@@ -35,6 +35,7 @@ const NATIVE_MCP_TO_CLI: Readonly<Record<string, readonly string[]>> = {
   run_journey: ["journey run"],
   ai_generate_text: ["ai generate"],
   queue_exploration: ["mission queue"],
+  queue_journey: ["journey queue"], // 0.30.0 #797
   get_mission_result: ["mission result"],
   verify_fix: ["verify-fix"],
 };
@@ -324,8 +325,17 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       evidenceVideo: "--evidence-video",
       persona: "--persona",
       minEffort: "--min-actions --min-distinct-states",
+      // #800 (GAPS 12): the job's done check, resolved when the mission runs.
+      job: "--job",
+      requireDoneCheck: "--require-done-check",
     },
     omitted: { "--dir": OMIT.storeDir, "--targets-dir": OMIT.storeDir, "--json": OMIT.json },
+  },
+  // 0.30.0 #797
+  queue_journey: {
+    path: "journey queue",
+    args: { id: "<id>", params: "--param", env: "--env", baseUrl: "--base-url" },
+    omitted: { "--dir": OMIT.storeDir, "--json": OMIT.json },
   },
 };
 

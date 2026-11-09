@@ -1,0 +1,15 @@
+{
+  "jobs": [
+    {
+      "id": "triager-files-issue",
+      "trigger": "When a cluster of reports shows a real defect",
+      "motivation": "I want to file it as a GitHub issue",
+      "outcome": "the engineers can track the fix",
+      "done": {
+        "version": 1,
+        "at": "/triage/cl_checkout",
+        "check": "textIncludes:testId=issue-status|Issue #"
+      }
+    }
+  ]
+}

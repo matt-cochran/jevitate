@@ -147,6 +147,42 @@ describe("short secrets (#454) — matched as whole tokens, never inside ordinar
   });
 });
 
+describe("F5 — a short secret inside a longer token", () => {
+  it("masks a 3-5 character secret of letters and digits wherever it occurs, inside a longer token too", () => {
+    expect(redactText("Code abcPw12xdef here", ["Pw12x"])).toBe(`Code abc${REDACTION_MASK}def here`);
+    expect(redactText("ref=x9q7z", ["9q7"])).toBe(`ref=x${REDACTION_MASK}z`);
+    expect(() => assertNoSecretInPayload({ text: "abcPw12xdef" }, ["Pw12x"])).toThrow(SecretLeakError);
+  });
+
+  it("masks a single-kind 3-5 character secret where it does not continue a run of its own kind", () => {
+    // Digits next to letters, letters next to digits or punctuation: a token boundary of its own kind.
+    expect(redactText("pin1234x", ["1234"])).toBe(`pin${REDACTION_MASK}x`);
+    expect(redactText("abc123 and x_abc", ["abc"])).toBe(`${REDACTION_MASK}123 and x_${REDACTION_MASK}`);
+    expect(() => assertNoSecretInPayload({ text: "pin1234x" }, ["1234"])).toThrow(SecretLeakError);
+  });
+
+  it("never masks a single-kind short secret inside a longer run of its own kind", () => {
+    expect(redactText("12345 and 01234", ["1234"])).toBe("12345 and 01234");
+    expect(redactText("the cabbage and abcdef", ["abc", "bag"])).toBe("the cabbage and abcdef");
+    expect(redactText("data-base", ["a-b"])).toBe("data-base");
+    expect(() => assertNoSecretInPayload({ text: "12345 cabbage" }, ["1234", "bag"])).not.toThrow();
+  });
+
+  it("a one- or two-character secret stays whole-token only", () => {
+    expect(redactText("Timeout me2 a1b step7", ["me", "a1", "7"])).toBe("Timeout me2 a1b step7");
+    expect(redactText("user me, room 7", ["me", "7"])).toBe(`user ${REDACTION_MASK}, room ${REDACTION_MASK}`);
+  });
+
+  it("masks at least everything the whole-token rule masked (a symbol edge is never narrower)", () => {
+    expect(redactText("##ab and a#ab", ["#ab"])).toBe(`#${REDACTION_MASK} and a${REDACTION_MASK}`);
+    expect(redactText("pass=abc&x", ["abc"])).toBe(`pass=${REDACTION_MASK}&x`);
+  });
+
+  it("masks the encoded form of an embedded short secret", () => {
+    expect(redactText("/x?q=zzP%40w1zz", ["P@w1"])).toBe(`/x?q=zz${REDACTION_MASK}zz`);
+  });
+});
+
 describe("the gateways' backstop", () => {
   const store = envCredentialStore({ OPENROUTER_API_KEY: "sk-or-test", TYPESAFE_API_KEY: "ts-test" }, {});
   const genSent = async (input: unknown): Promise<string> => {

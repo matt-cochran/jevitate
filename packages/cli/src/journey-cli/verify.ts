@@ -21,6 +21,7 @@ import { VerifyReceiptPreflightError } from "../journey-review-store.js";
 import { EXIT_CODES } from "../exit-codes.js";
 import { artifactStamp } from "../mission-journal.js";
 import { homeDataRoot, logsDirFor } from "../project-dir.js";
+import { writeVerifyEvidence } from "../journey-verify-evidence-file.js";
 import { registerTerminalResult, type TerminalResultDeps, type TerminalResultHandle } from "../terminal-result.js";
 import { environmentFromFlags, fixtureRebaseUrl, isEnvironmentError, withEnvironmentFlags, withReplayAllowFlag, replayAllowFromFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "../environments.js";
 import {
@@ -162,12 +163,15 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
         // Before any browser opens: from here on, every way of not finishing still ends with a result.
         const proved = await loadJourneyToVerify(verifyJourneysDir, id);
         const readRequests = journeyTargetSafety(proved, targetsOpts(deps).targetsFile)?.readRequests;
+        // The proof's result and its evidence folder share one stem, so retention prunes them together.
+        const runStem = `journey-verify-${id.replace(/[^A-Za-z0-9._-]/g, "_")}-${artifactStamp(clock.nowIso())}`;
+        const logsDir = logsDirFor();
         terminal = registerTerminalResult(
           {
             command: "journey verify",
             json: json === true,
             secrets: secretParamValues(proved, param),
-            artifactPath: join(logsDirFor(), `journey-verify-${id.replace(/[^A-Za-z0-9._-]/g, "_")}-${artifactStamp(clock.nowIso())}.json`),
+            artifactPath: join(logsDir, `${runStem}.json`),
             inactivityMs: proofInactivityMs(proved),
           },
           seams.terminal,
@@ -183,6 +187,10 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
               dir: verifyJourneysDir,
               id,
               params: param,
+              onEvidence: (evidence) => {
+                const problem = writeVerifyEvidence(join(logsDir, runStem), evidence);
+                if (problem !== undefined) program.configureOutput().writeErr?.(`${problem}\n`);
+              },
               ...(readRequests === undefined ? {} : { readRequests }),
               onProgress: ({ replay, mutation }) => progress.progress({ phase: mutation === undefined ? "as recorded" : undefined, replay, mutation }),
               browserPortFactory: deps.explore?.browserPortFactory,

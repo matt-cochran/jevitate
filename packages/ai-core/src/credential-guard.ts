@@ -98,31 +98,65 @@ export function assertNoSecretInPayload(
 /**
  * #454 — the length at which a secret is matched as a plain substring, everywhere. A secret this
  * long is very unlikely to occur by chance inside an ordinary word, so every occurrence is the
- * secret. A SHORTER secret (a username such as `me`) is matched only as a whole token — not
- * adjacent to a letter or digit on either side — so it does not mangle "Timeout" or trip the
- * payload guard on every word that happens to contain those letters. Shared by `redactText` and
- * `assertNoSecretInPayload` (via `secretPattern`) so the scrub and its proof agree.
+ * secret. A SHORTER secret is matched by {@link secretPattern}'s narrower rule, so a username such
+ * as `me` does not mangle "Timeout" or trip the payload guard on every word holding those letters.
+ * Shared by `redactText` and `assertNoSecretInPayload` (via `secretPattern`) so the scrub and its
+ * proof agree.
  */
 export const MIN_SUBSTRING_SECRET_LENGTH = 6;
 
-/** True when `secret` is shorter than {@link MIN_SUBSTRING_SECRET_LENGTH} — matched as a token only. */
+/** F5: from this length a short secret is also found inside a longer token (see {@link secretPattern}). */
+const MIN_EMBEDDED_SECRET_LENGTH = 3;
+
+/** True when `secret` is shorter than {@link MIN_SUBSTRING_SECRET_LENGTH} — matched by the short-secret rule. */
 export function isWeakSecret(secret: string): boolean {
   return secret.length < MIN_SUBSTRING_SECRET_LENGTH;
 }
 
 const REGEX_SYNTAX = /[\\^$.*+?()[\]{}|/]/g;
+const LETTER = /\p{L}/u;
+const DIGIT = /\p{N}/u;
+
+/** A guard keeping `ch` (a form's edge character) from continuing a run of its own kind on `side`. */
+function sameKindGuard(ch: string | undefined, side: "before" | "after"): string {
+  const kind = ch === undefined ? null : LETTER.test(ch) ? "\\p{L}" : DIGIT.test(ch) ? "\\p{N}" : null;
+  if (kind === null) return "";
+  return side === "before" ? `(?<!${kind})` : `(?!${kind})`;
+}
 
 /**
- * A global regex matching every form (`secretForms`) of a secret: as a plain substring when the
- * secret is at least {@link MIN_SUBSTRING_SECRET_LENGTH} long, otherwise only where the occurrence
- * is not adjacent to a Unicode letter or digit. Longer forms are tried first.
+ * A global regex matching every form (`secretForms`) of a secret. Longer forms are tried first.
+ *
+ * - {@link MIN_SUBSTRING_SECRET_LENGTH} characters or more: a plain substring.
+ * - 3 to 5 characters holding both a letter and a digit (`Pw12x`): a plain substring too (F5), so
+ *   `abcPw12xdef` is masked. Such a mix almost never occurs by chance in prose or a number.
+ * - 3 to 5 characters otherwise (all letters, all digits, letters and punctuation): wherever the
+ *   occurrence does not continue a run of its own kind — a letter edge not touching another letter,
+ *   a digit edge not touching another digit; a punctuation edge has no condition. So `1234` is masked
+ *   in `pin1234x` and not in `12345`, and `bag` is not masked in `cabbage`.
+ * - 1 or 2 characters: a whole token only, not touching a letter or digit on either side (#454).
+ *
+ * Each case masks at least what the whole-token rule did, so the rule is never narrower than #454's.
  */
 export function secretPattern(secret: string): RegExp {
-  const alts = [...secretForms(secret)]
-    .sort((a, b) => b.length - a.length)
-    .map((f) => f.replace(REGEX_SYNTAX, "\\$&"))
-    .join("|");
-  return isWeakSecret(secret) ? new RegExp(`(?<![\\p{L}\\p{N}])(?:${alts})(?![\\p{L}\\p{N}])`, "gu") : new RegExp(alts, "gu");
+  const forms = [...secretForms(secret)].sort((a, b) => b.length - a.length);
+  const esc = (f: string): string => f.replace(REGEX_SYNTAX, "\\$&");
+  const plain = (): RegExp => new RegExp(forms.map(esc).join("|"), "gu");
+  if (!isWeakSecret(secret)) return plain();
+  const chars = [...secret];
+  if (chars.length < MIN_EMBEDDED_SECRET_LENGTH) {
+    return new RegExp(`(?<![\\p{L}\\p{N}])(?:${forms.map(esc).join("|")})(?![\\p{L}\\p{N}])`, "gu");
+  }
+  if (chars.some((c) => LETTER.test(c)) && chars.some((c) => DIGIT.test(c))) return plain();
+  return new RegExp(
+    forms
+      .map((f) => {
+        const cs = [...f];
+        return `${sameKindGuard(cs[0], "before")}${esc(f)}${sameKindGuard(cs[cs.length - 1], "after")}`;
+      })
+      .join("|"),
+    "gu",
+  );
 }
 
 /** Whether `text` contains `secret` in any of its forms, by the {@link secretPattern} rule. */
