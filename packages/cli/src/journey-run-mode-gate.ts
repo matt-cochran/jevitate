@@ -5,7 +5,7 @@ import { EXIT_CODES } from "./exit-codes.js";
 import { hasRunHookOwner, registerRunHooks, RunHookError, type RunHookContext } from "./journey-run-hooks.js";
 import { JourneyRunRefusedError } from "@jevitate/mcp-facade";
 import { journeyReviewHash } from "./journey-review.js";
-import { assertMcpRunnable } from "./journey-stale-api.js";
+import { assertMcpRunnable, journeyApprovalState, type StaleJourneysRequest } from "./journey-stale-api.js";
 import { prepareMcpRunGuard, type McpRunGuard, type McpRunGuardRequest } from "./mcp-run-guard.js";
 import { resolveTargetTrust, runModeFor, stricterTrust, type RunMode, type TargetTrust } from "./run-mode.js";
 import { canonicalOrigin, loadTargetsFile, type TargetConfig } from "./target-config.js";
@@ -38,7 +38,9 @@ export const E_HUMAN_STEP_IN_TEST_MODE = "E_HUMAN_STEP_IN_TEST_MODE" as const;
 export const E_SECRET_ORIGIN_REFUSED = "E_SECRET_ORIGIN_REFUSED" as const;
 /** §5.3 (journey-secret-mode.ts): `--secret-mode` asked for a mode this run's target cannot give. */
 export const E_SECRET_MODE_UNAVAILABLE = "E_SECRET_MODE_UNAVAILABLE" as const;
-export type RunModeRefusalCode = typeof E_APPROVAL_CHANNEL_FOR_MODE | typeof E_HUMAN_STEP_IN_TEST_MODE | typeof E_SECRET_ORIGIN_REFUSED | typeof E_SECRET_MODE_UNAVAILABLE;
+/** H7: over MCP a secret the call left out, for a Journey `mcpMayBindTargetSecrets` does not let read targets.json (a stale approval). */
+export const E_SECRET_PARAM_OVER_MCP = "E_SECRET_PARAM_OVER_MCP" as const;
+export type RunModeRefusalCode = typeof E_APPROVAL_CHANNEL_FOR_MODE | typeof E_HUMAN_STEP_IN_TEST_MODE | typeof E_SECRET_ORIGIN_REFUSED | typeof E_SECRET_MODE_UNAVAILABLE | typeof E_SECRET_PARAM_OVER_MCP;
 
 /** The approval channels that authorise an automation-mode run: a person made them. */
 export const AUTOMATION_APPROVAL_CHANNELS: readonly ApprovalChannel[] = Object.freeze(["tty", "pr-review"]);
@@ -174,6 +176,21 @@ export function approvalChannelOf(journey: Journey): ApprovalChannel | undefined
 export function approvalAuthorisesAutomation(journey: Journey): boolean {
   const channel = approvalChannelOf(journey);
   return channel !== undefined && AUTOMATION_APPROVAL_CHANNELS.includes(channel);
+}
+
+/**
+ * 0.30.0 §5.3 (owner decisions 5 and 6), the one rule for every MCP surface (run_journey and the shared
+ * binding step of verify, readiness, demo, chain, shorten, explore --from-journey and load, and the run's
+ * own secret plan): over MCP the operator's `targets.json` `secretFields` supply a Journey's secrets only
+ * when it is promoted, its approval still binds its content (`current`: never stale, unrecorded or
+ * undetermined), and, on an automation-mode target, a person made that approval (tty or pr-review). On a
+ * test-mode target any current approval does (an MCP promotion included). Fails closed.
+ */
+export async function mcpMayBindTargetSecrets(journey: Journey, mode: RunMode, where: StaleJourneysRequest): Promise<boolean> {
+  if (journey.metadata.promoted !== true) return false;
+  if (mode === "automation" && !approvalAuthorisesAutomation(journey)) return false;
+  const state = await journeyApprovalState(journey, where);
+  return state.promoted && state.approval === "current";
 }
 
 /** The 1-based index of the first step that waits for a person, if any. */

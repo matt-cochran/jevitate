@@ -10,6 +10,7 @@ import {
   emitJson,
   type EmulationFlags,
   emulationFromFlags,
+  commandSecretSeams,
   environmentSeams,
   resolveDbPath,
   withBrowserLaunchFlags,
@@ -87,7 +88,7 @@ export function registerJourneyChain(journey: Command, program: Command, deps: C
       let param: Record<string, string>;
       let bound: BoundSecretParams | undefined;
       try {
-        ({ params: param, bound } = await withCommandSecretParams({ dir: chainJourneysDir, ids: [from], params: paramFlags, flags: secretField, environment, env: deps.explore?.env ?? process.env, seams: environmentSeams(deps) }));
+        ({ params: param, bound } = await withCommandSecretParams({ dir: chainJourneysDir, ids: [from], params: paramFlags, flags: secretField, environment, env: deps.explore?.env ?? process.env, seams: commandSecretSeams(deps, chainJourneysDir) }));
       } catch (err) {
         const e = secretFieldErrorOf(err, "E_CHAIN_ARGS");
         if (e === undefined) throw err;

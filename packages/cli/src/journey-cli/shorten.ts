@@ -13,6 +13,7 @@ import {
   collectParam,
   emitJson,
   emulationFromFlags,
+  commandSecretSeams,
   environmentSeams,
   resolveDbPath,
   withBrowserLaunchFlags,
@@ -103,7 +104,7 @@ export function registerJourneyShorten(journey: Command, program: Command, deps:
       let params: Record<string, string>;
       let bound: BoundSecretParams | undefined;
       try {
-        ({ params, bound } = await withCommandSecretParams({ dir, ids: [id], params: flags.param, flags: flags.secretField, environment, env: deps.explore?.env ?? process.env, seams: environmentSeams(deps) }));
+        ({ params, bound } = await withCommandSecretParams({ dir, ids: [id], params: flags.param, flags: flags.secretField, environment, env: deps.explore?.env ?? process.env, seams: commandSecretSeams(deps, dir) }));
       } catch (err) {
         const e = secretFieldErrorOf(err, "E_JOURNEY_SHORTEN_ARGS");
         if (e === undefined) throw err;

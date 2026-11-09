@@ -6,6 +6,7 @@ import { allowedOriginSet, offAllowlistWriteOrigin, prepareMcpRunGuard } from ".
 import { FsJourneyStore, JourneyRegistry, ParamValidationError, declaredNonSecretParams, describeStep, loadRefusedParamNames, flatJourneySteps, journeyEndState, journeyParamSchema, journeyPrefix, lintJourney, lintJourneyDoneCheck, lintUploadFixtures, secretNamedValues, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
 import { assertHttpChecksAllowed, createHttpProbe, httpCheckRefs } from "./http-probe.js";
 import { inMcpInvocation, programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
+import { mcpMayBindTargetSecrets, resolveRunTarget } from "./journey-run-mode-gate.js";
 import { planSecretRun, secretHandbackHandler, secretOriginRefusalOf, withSecretHandbacks, type SecretModeFlag } from "./journey-secret-mode.js";
 import { journeyEntry } from "./forge-verify.js";
 import { checkProposal, deleteJourneyProposal, proposedJourney, rejectJourneyProposal, requireJourneyProposal } from "./journey-proposal-store.js";
@@ -792,7 +793,12 @@ async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutatio
   // #827: a command's bound secrets (verify, chain, demo, an exploration's prefix) reach each of its replays.
   const givenBound = opts.boundSecretParams ?? currentBoundSecretParams();
   // 0.30.0 §5.3: a human step or a secret nobody supplied — vault-autofill, a hold, or a refusal, before anything opens.
+  // H7: over MCP, the one rule run_journey applies before the operator's targets.json supplies a secret (journey-run-mode-gate.ts).
+  const mayBindTargetSecrets = inMcpInvocation()
+    ? await mcpMayBindTargetSecrets(stored, mode ?? resolveRunTarget(target).mode, { journeysDir: opts.dir, catalogDir: resolveCatalogDir(undefined) })
+    : undefined;
   const secretPlan = planSecretRun({
+    mayBindTargetSecrets,
     stored,
     journey,
     params: inputParams,

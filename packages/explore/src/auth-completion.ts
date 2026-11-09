@@ -1,5 +1,6 @@
 import type { Control, Snapshot } from "./snapshot.js";
 import { isLoginLikeUrl } from "./seed-redirect.js";
+import type { PageStatus } from "./status.js";
 
 /**
  * Code-observed sign-in completion (#188 item 4).
@@ -15,7 +16,10 @@ import { isLoginLikeUrl } from "./seed-redirect.js";
  * shows no credential field and no sign-in control, and shows signed-in chrome (a sign-out or
  * account/profile control) — or (0.30.0 nav lab `sign-in-goal`) it is a page that offered a sign-in
  * control before the run typed credentials and no longer does (a home page whose "Sign in" link gave
- * way to the signed-in app, with no sign-out shown). That is evidence — shown to the goal judgment as a code-observed fact and
+ * way to the signed-in app, with no sign-out shown), unless the page shows a sign-in error: an alert
+ * (`role=alert`, `aria-live=assertive`), an invalid field, or a notice or line of text that says the
+ * sign-in failed ("Incorrect email or password", "try again"). An app whose home page drops its Sign-in
+ * link and shows an error banner after a wrong password has not signed anyone in. That is evidence — shown to the goal judgment as a code-observed fact and
  * weighed by `groundDone` — never a verdict about a goal that asks for more than signing in.
  */
 
@@ -31,6 +35,29 @@ const SIGNED_IN_CONTROL =
   /\b(?:sign|log)[- ]?out\b|\blogout\b|\bsignout\b|^\s*(?:my\s+)?account\b|\buser\s+menu\b|^\s*(?:my\s+)?profile\b|\baccount\s+(?:menu|settings)\b/i;
 
 const TEXT_ENTRY_ROLES = new Set(["textbox", "searchbox", "spinbutton"]);
+
+/** Words a failed sign-in's message uses. */
+const LOGIN_ERROR = /\b(?:invalid|incorrect|wrong\s+(?:password|email|username|credentials?)|try\s+again|failed|unsuccessful|not\s+recogni[sz]ed|(?:does|did)\s*n[o']?t\s+match|locked)\b/i;
+/** What a failed sign-in's message is about: a line of page text says so only when it names one. */
+const LOGIN_NOUN = /\b(?:password|passcode|e-?mail|user\s?name|credentials?|account|(?:sign|log)[- ]?in|login|code)\b/i;
+
+/** What the page shows besides its controls, read where the run perceives it: its status, and its text. */
+export interface AuthPageEvidence {
+  /** The page's live-region and invalid-field status (`readPageStatus`). */
+  readonly status?: PageStatus | undefined;
+  /** The page's visible text (`readPageText`), one line per block. */
+  readonly text?: string | undefined;
+}
+
+/**
+ * True when the page shows a sign-in error: any alert or invalid field, a notice with a failure's
+ * words, or a line of text with a failure's words about a credential ("Incorrect email or password.").
+ */
+export function showsLoginError(evidence: AuthPageEvidence): boolean {
+  const status = evidence.status;
+  if (status !== undefined && (status.alerts.length > 0 || status.invalid.length > 0 || status.notices.some((n) => LOGIN_ERROR.test(n)))) return true;
+  return (evidence.text ?? "").split(/\n+/).some((line) => LOGIN_ERROR.test(line) && LOGIN_NOUN.test(line));
+}
 
 /** True for a password field or a one-time/verification-code field. */
 export function isCredentialField(c: Control): boolean {
@@ -88,9 +115,10 @@ export class AuthProgress {
    * `completed` needs ALL of: the page is not login-like and is not a page the run typed credentials
    * on; no credential field (`isBound` included) and no sign-in control is shown; signed-in chrome is,
    * or this page offered a sign-in control before the run's first credential and now offers none.
-   * Called on every page state: before the first credential it only notes which pages offer sign-in.
+   * The sign-in control having gone never counts while the page shows a sign-in error (`showsLoginError`
+   * on `evidence`). Called on every page state: before the first credential it only notes which pages offer sign-in.
    */
-  signal(snap: Snapshot, isBound: (c: Control) => boolean = () => false): AuthSignal | null {
+  signal(snap: Snapshot, isBound: (c: Control) => boolean = () => false, evidence: AuthPageEvidence = {}): AuthSignal | null {
     const path = pathOf(snap.url);
     const signIn = snap.controls.find((c) => c.role !== "textbox" && SIGN_IN_CONTROL.test(c.name)) ?? null;
     if (!this.attempted) {
@@ -101,7 +129,10 @@ export class AuthProgress {
     const credential = snap.controls.find((c) => isCredentialField(c) || isBound(c)) ?? null;
     const chrome = signedInChrome(snap.controls);
     // The same page, signed out before and now without its sign-in control: the app changed it for this session.
-    const signInGone = signIn === null && this.#offeredSignInOn.has(path);
+    // ...unless the page says the sign-in failed (an error banner where the Sign-in link was).
+    const offeredBefore = signIn === null && this.#offeredSignInOn.has(path);
+    const loginError = offeredBefore && showsLoginError(evidence);
+    const signInGone = offeredBefore && !loginError;
     const completed = leftLogin && credential === null && signIn === null && (chrome !== null || signInGone);
     const where = this.#typedOn.join(", ");
     const facts = [
@@ -111,6 +142,7 @@ export class AuthProgress {
       signIn === null ? null : `a sign-in control is shown ("${signIn.name}")`,
       chrome === null ? "no signed-in control (sign out, account, profile) is shown" : `a signed-in control is shown ("${chrome.name}")`,
       signInGone ? `this page showed a sign-in control before the run signed in and shows none now` : null,
+      loginError ? "this page shows a sign-in error (an alert, an invalid field, or a message that the sign-in failed)" : null,
     ]
       .filter((f): f is string => f !== null)
       .join("; ");

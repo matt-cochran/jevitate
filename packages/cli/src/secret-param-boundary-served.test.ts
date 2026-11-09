@@ -23,6 +23,7 @@ import { refusalOf } from "./demo-aspect-cli.js";
 import { OpenRouterGenerationGateway, envCredentialStore, type GenerationPort } from "@jevitate/ai-core";
 import { readJourneyChangeScope } from "./journey-heal.js";
 import { MissionFixtures } from "./mission-fixtures.js";
+import { advisoryCatalogDir } from "./done-check-policy.testkit.js";
 
 /**
  * The boundary: a secret parameter's value never travels through an MCP request (it would pass
@@ -106,10 +107,14 @@ function filesHoldingValue(value = VALUE): string[] {
   return allFiles(root).filter((f) => readFileSync(f).includes(value));
 }
 
+/** A describe about something other than exits sets this (`advisoryCatalogDir`): a passing run then exits 0 with no done check. */
+let catalogDir: string | undefined;
+
 const cliDeps = (): CliDeps =>
   ({
     profiles: new ProfileManager(join(root, "profiles")),
     journeysDir,
+    ...(catalogDir === undefined ? {} : { catalogDir }),
     dbPath: join(root, "site.sqlite"),
     environmentsFile: join(root, "environments.json"),
     logs: { logsRoot: logs },
@@ -1080,8 +1085,14 @@ describe("masked text never goes into a field (D5)", { timeout: 120_000 }, () =>
     for (const j of [approved(producer), approved(consumer)]) writeFileSync(join(journeysDir, `${j.metadata.id}.json`), JSON.stringify(j));
     writeFileSync(join(root, "chain-requests.jsonl"), `${JSON.stringify({ recordId: "r1" })}\n`);
   };
+  // These are about masking, not exits: 0.30.0 decision 3 (#800) exits 2 for a passing run with no done
+  // check under the default `doneCheckPolicy: "require"`, so the chain's project reads advisory here.
+  beforeAll(() => {
+    catalogDir = advisoryCatalogDir(root);
+  });
   afterAll(() => {
     showsSecrets = "";
+    catalogDir = undefined;
   });
 
   it("issueKey: the consumer's field gets the value as extracted, as in 0.28", async () => {

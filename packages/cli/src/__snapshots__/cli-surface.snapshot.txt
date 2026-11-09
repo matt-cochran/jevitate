@@ -1031,7 +1031,9 @@
   arguments:
     - name=id required=false variadic=false default=null
   options:
+    - flags=--base-url <url> required=true mandatory=false negate=false variadic=false default=null description=M5: judge the mutation proof's freshness for this origin, as `journey verify --base-url` ran it; default: the Journey's recorded site
     - flags=--dir <path> required=true mandatory=false negate=false variadic=false default=null description=deprecated: use --journeys-dir <path> (same meaning); default: the repo's .jevitate/journeys, outside a repo ~/.jevitate/journeys
+    - flags=--env <name> required=true mandatory=false negate=false variadic=false default=null description=M5: judge the mutation proof's freshness for this environment's target (environments.json), as `journey verify --env` ran it; default: the Journey's recorded site
     - flags=--full required=false mandatory=false negate=false variadic=false default=null description=#496: show every detail section: catalog analysis, the full lint list, locator health, provenance, the full change diff
     - flags=--jev-provider <provider> required=true mandatory=false negate=false variadic=false default=null description=with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set
     - flags=--journeys-dir <path> required=true mandatory=false negate=false variadic=false default=null description=the Journey store only; wins over --project for journeys, while the catalog still comes from --project

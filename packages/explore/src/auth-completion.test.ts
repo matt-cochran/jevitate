@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AuthProgress } from "./auth-completion.js";
+import { EMPTY_STATUS } from "./status.js";
 import type { Control, Snapshot } from "./snapshot.js";
 
 /**
@@ -43,5 +44,33 @@ describe("sign-in completion without signed-in chrome", () => {
 
   it("still on the sign-in page after submitting (a rejected password): not completed", () => {
     expect(signedInVia(SIGNED_OUT_HOME).signal(LOGIN)?.completed).toBe(false);
+  });
+});
+
+describe("independent re-check: a dropped Sign-in link beside a login error is not a sign-in", () => {
+  const banner = { ...EMPTY_STATUS, alerts: ["Incorrect email or password."] };
+  it("an alert (role=alert) on the home page that dropped its Sign-in link: not completed", () => {
+    const s = signedInVia(SIGNED_OUT_HOME).signal(SIGNED_IN_HOME, () => false, { status: banner, text: "Pinecrest Books\nIncorrect email or password.\nNeed help?" });
+    expect(s?.completed).toBe(false);
+    expect(s?.facts).toMatch(/shows a sign-in error/);
+    expect(s?.facts).not.toMatch(/shows none now/);
+  });
+
+  it.each(["Incorrect email or password.", "Wrong password, try again", "Sign-in failed", "Invalid credentials"])("error text with no live region (%s): not completed", (line) => {
+    expect(signedInVia(SIGNED_OUT_HOME).signal(SIGNED_IN_HOME, () => false, { status: EMPTY_STATUS, text: `Pinecrest Books\n${line}` })?.completed).toBe(false);
+  });
+
+  it("an invalid field, or an aria-live polite notice saying it failed: not completed", () => {
+    expect(signedInVia(SIGNED_OUT_HOME).signal(SIGNED_IN_HOME, () => false, { status: { ...EMPTY_STATUS, invalid: [{ name: "Email", message: "x" }] } })?.completed).toBe(false);
+    expect(signedInVia(SIGNED_OUT_HOME).signal(SIGNED_IN_HOME, () => false, { status: { ...EMPTY_STATUS, notices: ["Login failed"] } })?.completed).toBe(false);
+  });
+
+  it("the signed-in home page's own text (Welcome back, Invoices) still completes", () => {
+    expect(signedInVia(SIGNED_OUT_HOME).signal(SIGNED_IN_HOME, () => false, { status: EMPTY_STATUS, text: "Welcome back, Morgan\nInvoices" })?.completed).toBe(true);
+  });
+
+  it("signed-in chrome (a sign-out control) still completes beside an alert", () => {
+    const chrome = snap("/", [control("button", "Sign out")]);
+    expect(signedInVia(SIGNED_OUT_HOME).signal(chrome, () => false, { status: banner })?.completed).toBe(true);
   });
 });

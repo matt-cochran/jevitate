@@ -1,4 +1,5 @@
-import { type CliDeps, JEV_PROVIDER_FLAG_HELP, emitUsageLine, jevProviderArg, emitJson, GatewaySelectionError } from "../cli-shared.js";
+import { type CliDeps, JEV_PROVIDER_FLAG_HELP, emitUsageLine, environmentSeams, jevProviderArg, emitJson, GatewaySelectionError } from "../cli-shared.js";
+import { environmentFromFlags, isEnvironmentError } from "../environments.js";
 import { withProjectFlags } from "../project-layout.js";
 import { READINESS_FLAG_HELP, REAL_JEV_FLAG_HELP, jevSetupFor } from "../catalog-cli.js";
 import { readFile, writeFile } from "node:fs/promises";
@@ -55,6 +56,8 @@ export function registerJourneyReview(journey: Command, program: Command, deps: 
     .option("--pre-approval", "read-only native candidate and pending owner actions; requires --json; never grants approval")
     .option("--strict", "#523: exit 1 (defects) when the sheet has any ⚠ attention item, and run the code-only readiness link checks (missing job / persona) even without --readiness; advisory ○ items and Jev never fail it. With --json the envelope also carries strict: { passed, warnings }")
     .option("--stale", "#467: instead of one sheet, list every promoted Journey whose approval is stale (needs re-approval), labelling the ones whose only change is minted step ids")
+    .option("--env <name>", "M5: judge the mutation proof's freshness for this environment's target (environments.json), as `journey verify --env` ran it; default: the Journey's recorded site")
+    .option("--base-url <url>", "M5: judge the mutation proof's freshness for this origin, as `journey verify --base-url` ran it; default: the Journey's recorded site")
     .option("--json", "emit a JSON envelope (the schema-checked sheet)")
     .action(async function (this: Command, id: string | undefined) {
       const locationFlags = this.opts<{ dir?: string; project?: string; journeysDir?: string }>();
@@ -100,9 +103,22 @@ export function registerJourneyReview(journey: Command, program: Command, deps: 
         emitJson(program, fail("E_JOURNEY_REVIEW_ARGS", "journey review needs a Journey <id> (or --stale for the list of Journeys needing re-approval)"));
         return;
       }
+      // M5: the target the proof's freshness is judged for, resolved as verify and readiness resolve it.
+      const { env: envName, baseUrl } = this.opts<{ env?: string; baseUrl?: string }>();
+      let proofOrigin: string | undefined;
+      if (envName !== undefined || baseUrl !== undefined) {
+        try {
+          proofOrigin = environmentFromFlags({ ...(envName === undefined ? {} : { env: envName }), ...(baseUrl === undefined ? {} : { baseUrl }) }, environmentSeams(deps))?.baseUrl;
+        } catch (err) {
+          if (!isEnvironmentError(err)) throw err;
+          emitJson(program, fail(err.code, err.message));
+          process.exitCode = EXIT_CODES.usage;
+          return;
+        }
+      }
       try {
         const jev = await jevSetupFor(deps, resolveCatalogDir(deps.catalogDir, flaggedCatalogDir(layout)), { real, jevProvider });
-        const { review } = await reviewJourneyById(reviewJourneysDir, id, { ...targetsOpts(deps), catalogDir: resolveCatalogDir(deps.catalogDir, flaggedCatalogDir(layout)), readiness: readiness === true, strict: strict === true, jev });
+        const { review } = await reviewJourneyById(reviewJourneysDir, id, { ...targetsOpts(deps), catalogDir: resolveCatalogDir(deps.catalogDir, flaggedCatalogDir(layout)), readiness: readiness === true, strict: strict === true, jev, ...(proofOrigin === undefined ? {} : { proofOrigin }) });
         const warnings = (review.attention ?? []).filter((a) => a.severity === "warn").length;
         const strictVerdict = { passed: warnings === 0, warnings };
         const renderOpts = reviewRenderOptions({ full: full === true, toFile: outFile !== undefined });

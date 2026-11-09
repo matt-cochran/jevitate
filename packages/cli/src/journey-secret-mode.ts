@@ -9,7 +9,7 @@ import { currentMcpInvocation, inMcpInvocation, noteMcpRefusal } from "./approva
 import type { ResolvedJourneyEnvironment } from "./environments.js";
 import { takeApprovedHandback } from "./journey-hold.js";
 import { hasRunHooks, holdRunAt, inProof, ProofHoldRefusedError, RunHeldError, type RunHookContext, type RunHoldRequest } from "./journey-run-hooks.js";
-import { approvalAuthorisesAutomation, E_HUMAN_STEP_IN_TEST_MODE, E_SECRET_MODE_UNAVAILABLE, E_SECRET_ORIGIN_REFUSED, resolveRunTarget, RunModeRefusedError, type RunTarget } from "./journey-run-mode-gate.js";
+import { approvalAuthorisesAutomation, E_HUMAN_STEP_IN_TEST_MODE, E_SECRET_PARAM_OVER_MCP, E_SECRET_MODE_UNAVAILABLE, E_SECRET_ORIGIN_REFUSED, resolveRunTarget, RunModeRefusedError, type RunTarget } from "./journey-run-mode-gate.js";
 import type { RunMode } from "./run-mode.js";
 import { fieldMatchesTarget, missingSecretParams, secretParamTargets, withSecretParamsFor, type BoundSecretParams } from "./secret-params.js";
 import { canonicalOrigin, loadTargetsFile, type TargetConfig } from "./target-config.js";
@@ -59,6 +59,12 @@ export interface SecretRunRequest {
   readonly env: Readonly<Record<string, string | undefined>>;
   /** A resumed secret hold: the parameters the person types. */
   readonly heldSecretParams?: readonly string[] | undefined;
+  /**
+   * H7: over MCP, what `mcpMayBindTargetSecrets` (journey-run-mode-gate.ts) answered for this Journey: false
+   * (its approval is stale, unrecorded or undetermined) and targets.json supplies nothing; a secret the call
+   * left out is refused `E_SECRET_PARAM_OVER_MCP`, as run_journey refuses it. Undefined: the caller checked first.
+   */
+  readonly mayBindTargetSecrets?: boolean | undefined;
 }
 
 export interface SecretRunPlan {
@@ -177,6 +183,23 @@ export function planSecretRun(req: SecretRunRequest): SecretRunPlan {
       mode,
       target.trust,
     );
+  // H7: the one rule run_journey applies: no current approval, no operator secret, whatever the mode.
+  if (req.mcp && req.mayBindTargetSecrets === false) {
+    if (missing.length > 0) {
+      refuse(
+        new RunModeRefusedError(
+          E_SECRET_PARAM_OVER_MCP,
+          `${E_SECRET_PARAM_OVER_MCP}: secret parameter${missing.length === 1 ? "" : "s"} ${missing.join(", ")} of journey '${id}': over MCP the operator's targets.json supplies a secret only to a promoted Journey whose approval still binds its content, and this one's does not (changed since approval, or none recorded); nothing ran. ` +
+            `A person reviews and re-approves it at a terminal (jevitate journey review ${id}; jevitate journey promote ${id}), or runs it on the CLI. This is not a failed run to retry.`,
+          `jevitate journey promote ${id}`,
+          mode,
+          target.trust,
+        ),
+        true,
+      );
+    }
+    if (mode === "automation") return NO_PLAN;
+  }
   if (mode === "test") {
     if (human.length > 0) refuse(testStepRefusal(`a human step (a handback, step ${human[0]! + 1})`), req.mcp);
     // §5.3: a test target's own secretFields (test credentials a person wrote) supply what the request left out.

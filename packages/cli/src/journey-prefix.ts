@@ -1,4 +1,4 @@
-import { secretParamNamesArgvWarning, withCommandSecretParams, type BoundSecretParams } from "./secret-params.js";
+import { secretParamNamesArgvWarning, withCommandSecretParams, type BoundSecretParams, type CommandSecretSeams } from "./secret-params.js";
 import { planSecretRun } from "./journey-secret-mode.js";
 import { redactCredentialShapes, redactText, redactUrl } from "@jevitate/ai-core";
 import { clock } from "@jevitate/domain";
@@ -413,7 +413,8 @@ export interface PrefixFromBranchOptions {
   readonly params?: Readonly<Record<string, string>>;
   readonly storageState?: string;
   readonly dbPath?: string;
-  readonly environmentSeams?: { readonly environmentsFile?: string; readonly targetsFile?: string };
+  /** The target's files and (H7) where the Journey's approval is read (its catalog dir: default the project's). */
+  readonly environmentSeams?: CommandSecretSeams;
   /** #827: `--secret-field` bindings: a secret parameter from the environment, off the command line (with the environment's targets.json secretFields). */
   readonly secretFields?: readonly string[];
   /** Where a binding's `env:` source is read (default `process.env`). */
@@ -437,7 +438,7 @@ export async function prefixFromBranch(branch: RecordedBranch, opts: PrefixFromB
     // #827: a secret parameter from a binding (--secret-field, the environment's targets.json), off the command line.
     let supplied: { params: Record<string, string>; bound?: BoundSecretParams };
     try {
-      supplied = await withCommandSecretParams({ dir: info.journeysDir, ids: [branch.journeyId], params: { ...info.params, ...(opts.params ?? {}) }, flags: opts.secretFields ?? [], environment, env: opts.env ?? process.env, seams: opts.environmentSeams });
+      supplied = await withCommandSecretParams({ dir: info.journeysDir, ids: [branch.journeyId], params: { ...info.params, ...(opts.params ?? {}) }, flags: opts.secretFields ?? [], environment, env: opts.env ?? process.env, seams: { ...opts.environmentSeams, journeysDir: info.journeysDir } });
     } catch (err) {
       throw new BranchReplayInputError(err instanceof Error ? err.message : String(err));
     }

@@ -25,6 +25,7 @@ import {
   emulationFromFlags,
   collectParam,
   emitJson,
+  commandSecretSeams,
   environmentSeams,
 } from "./cli-shared.js";
 
@@ -88,7 +89,7 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
       let param: Record<string, string>;
       let bound: BoundSecretParams | undefined;
       try {
-        ({ params: param, bound } = await withCommandSecretParams({ dir: resolveJourneysDir(deps, dir), ids: [journeyId], params: paramFlags, flags: secretField, environment, env: deps.explore?.env ?? process.env, seams: environmentSeams(deps) }));
+        ({ params: param, bound } = await withCommandSecretParams({ dir: resolveJourneysDir(deps, dir), ids: [journeyId], params: paramFlags, flags: secretField, environment, env: deps.explore?.env ?? process.env, seams: commandSecretSeams(deps, resolveJourneysDir(deps, dir)) }));
       } catch (err) {
         const e = secretFieldErrorOf(err, "E_LOAD_RUN_ARGS");
         if (e === undefined) throw err;

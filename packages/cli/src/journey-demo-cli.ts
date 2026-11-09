@@ -35,6 +35,7 @@ import {
   emulationFromFlags,
   collectParam,
   emitJson,
+  commandSecretSeams,
   environmentSeams,
 } from "./cli-shared.js";
 import { clock } from "@jevitate/domain";
@@ -97,7 +98,7 @@ export function registerJourneyDemoCommand(journey: Command, program: Command, d
       let param: Record<string, string>;
       let bound: BoundSecretParams | undefined;
       try {
-        ({ params: param, bound } = await withCommandSecretParams({ dir: journeysDir, ids: [id], params: paramFlags, flags: secretField, environment, env: deps.explore?.env ?? process.env, seams: environmentSeams(deps) }));
+        ({ params: param, bound } = await withCommandSecretParams({ dir: journeysDir, ids: [id], params: paramFlags, flags: secretField, environment, env: deps.explore?.env ?? process.env, seams: commandSecretSeams(deps, journeysDir) }));
       } catch (err) {
         const e = secretFieldErrorOf(err, "E_JOURNEY_DEMO_ARGS");
         if (e === undefined) throw err;

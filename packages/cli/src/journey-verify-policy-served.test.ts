@@ -11,6 +11,7 @@ import { buildProgram } from "./program.js";
 import { runJourneyProgrammatically } from "./journey-api.js";
 import { readVerifyRecord } from "./journey-review-store.js";
 import { reviewJourneyById } from "./journey-review-api.js";
+import { currentJourneyProof } from "./journey-proof-context.js";
 import { useSkippingTime } from "../../explore/src/testkit.js";
 useSkippingTime({ per: "all" });
 let server: Server;
@@ -44,7 +45,10 @@ it("block-write lets the declared read prerequisite reach the server and aborts 
   expect(result).toMatchObject({ outcome: "quarantined", at: 1, failurePhase: "postcondition" });
   expect(result.blockedWrites).toEqual(expect.arrayContaining([expect.objectContaining({ method: "POST", path: "/api/save" })]));
 });
-it("native mutate keeps recorded-origin policy when rebased and immediately reviews fresh", async () => {
+// Independent check M5: a receipt is bound to the target origin it ran on. `journey review --base-url` judges
+// the proof for that same target (fresh at once); with no environment it judges the recorded site
+// (localhost:3001), where a proof rebased elsewhere rightly reads stale, cause `target`.
+it("native mutate keeps recorded-origin policy when rebased, and `journey review --base-url` the same origin reviews fresh", async () => {
   const source = journey();
   source.recording.site = "http://localhost:3001";
   await new FsJourneyStore(join(root, "journeys")).put(source);
@@ -52,13 +56,30 @@ it("native mutate keeps recorded-origin policy when rebased and immediately revi
     "http://localhost:3001": { safety: { readRequests: ["/api/query"] } },
     [origin]: { safety: { readRequests: ["/destination-only"] } },
   }));
-  const output: string[] = [];
-  const program = buildProgram({ profiles: new ProfileManager(join(root, "profiles")), journeysDir: join(root, "journeys"), dbPath: join(root, "policy.sqlite"), explore: { targetsConfigPath: join(root, "targets.json"), browserPortFactory: () => new PlaywrightBrowserPort() } });
-  program.configureOutput({ writeOut: (s) => output.push(s), writeErr: () => {} });
-  process.exitCode = undefined;
-  try { await program.parseAsync(["journey", "verify", "mixed", "--mutate", "--base-url", origin, "--json"], { from: "user" }); } finally { process.exitCode = undefined; }
-  expect(JSON.parse(output.join(""))).toMatchObject({ ok: true });
-  const { review } = await reviewJourneyById(join(root, "journeys"), "mixed", { targetsFile: join(root, "targets.json"), catalogDir: null });
-  expect(review.proof.verify).toMatchObject({ stale: false });
+  const deps = { profiles: new ProfileManager(join(root, "profiles")), journeysDir: join(root, "journeys"), dbPath: join(root, "policy.sqlite"), explore: { targetsConfigPath: join(root, "targets.json"), browserPortFactory: () => new PlaywrightBrowserPort() } };
+  const run = async (args: string[]): Promise<unknown> => {
+    const output: string[] = [];
+    const program = buildProgram(deps);
+    program.configureOutput({ writeOut: (s) => output.push(s), writeErr: () => {} });
+    process.exitCode = undefined;
+    try { await program.parseAsync(args, { from: "user" }); } finally { process.exitCode = undefined; }
+    return JSON.parse(output.join(""));
+  };
+  expect(await run(["journey", "verify", "mixed", "--mutate", "--base-url", origin, "--json"])).toMatchObject({ ok: true });
   expect((await readVerifyRecord(join(root, "journeys"), "mixed"))?.proofContext).toEqual({ readRequests: ["/api/query"] });
+  const reviewed = (await run(["journey", "review", "mixed", "--base-url", origin, "--json"])) as { ok: boolean; data: { proof: { verify: unknown } } };
+  expect(reviewed.ok).toBe(true);
+  expect(reviewed.data.proof.verify).toMatchObject({ stale: false });
+});
+
+it("with no environment, review judges the recorded site: the rebased proof reads stale, cause target (M5)", async () => {
+  const { review } = await reviewJourneyById(join(root, "journeys"), "mixed", { targetsFile: join(root, "targets.json"), catalogDir: null });
+  expect(review.proof.verify).toMatchObject({ stale: true, staleCause: "target" });
+  const record = await readVerifyRecord(join(root, "journeys"), "mixed");
+  expect(record?.target).toEqual({ origin });
+  const stored = (await new FsJourneyStore(join(root, "journeys")).get("mixed"))!;
+  expect(currentJourneyProof(stored, record!, ["/api/query"], { origin })).toBe(true);
+  expect(currentJourneyProof(stored, record!, ["/api/query"], { origin: "http://localhost:3001" })).toBe(false);
+  // The API's own seam gives the same answer as `--base-url`.
+  expect((await reviewJourneyById(join(root, "journeys"), "mixed", { targetsFile: join(root, "targets.json"), catalogDir: null, proofOrigin: origin })).review.proof.verify).toMatchObject({ stale: false });
 });

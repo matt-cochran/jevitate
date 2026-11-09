@@ -440,6 +440,16 @@ export function currentBoundSecretParams(): BoundSecretParams | undefined {
   return boundScope.getStore();
 }
 
+/** Where `withCommandSecretParams` reads a target's trust and (H7) a Journey's approval; each defaults when unset. */
+export interface CommandSecretSeams {
+  readonly environmentsFile?: string | undefined;
+  readonly targetsFile?: string | undefined;
+  /** The journeys dir the approval is read against (default: the command's `dir`). */
+  readonly journeysDir?: string | undefined;
+  /** The catalog dir (linked personas/jobs); null: none. Default: the project's. */
+  readonly catalogDir?: string | null | undefined;
+}
+
 /**
  * #827: `withSecretParams` for a command that replays one or more Journeys (`journey verify`, `journey
  * chain --from --to`, `journey demo`, `load run`, `source run`, `explore --from-journey`): `--secret-field`
@@ -457,8 +467,8 @@ export async function withCommandSecretParams(req: {
   readonly env: Readonly<Record<string, string | undefined>>;
   /** false: a flag that binds none of the Journeys is left for the caller (`explore`'s goal loop binds live fields). */
   readonly strict?: boolean;
-  /** Where the target's trust is read (`environmentSeams`): the defaults otherwise. */
-  readonly seams?: { readonly environmentsFile?: string | undefined; readonly targetsFile?: string | undefined } | undefined;
+  /** Where the target's trust and the Journey's approval are read (`environmentSeams`): the defaults otherwise. */
+  readonly seams?: CommandSecretSeams | undefined;
 }): Promise<{ params: Record<string, string>; bound?: BoundSecretParams; used: readonly string[] }> {
   const targetFields = req.environment?.secretFields;
   if (req.flags.length === 0 && (targetFields ?? []).length === 0) return { params: { ...req.params }, used: [] };
@@ -477,7 +487,7 @@ export async function withCommandSecretParams(req: {
     const mine = specs.filter((_, i) => paramsFromFields(journey, [parsed[i]!], new Set(Object.keys(req.params))).used.size > 0);
     for (const spec of mine) used.add(spec);
     // 0.30.0 §5.3: over MCP the operator's targets.json binding serves only a Journey the run-mode rules let read it.
-    const fields = mcp && !(await mcpMayReadTargetSecrets(journey, req.environment, req.seams)) ? undefined : targetFields;
+    const fields = mcp && !(await mcpMayReadTargetSecrets(journey, req.environment, req.dir, req.seams)) ? undefined : targetFields;
     const r = withSecretParamsFor(journey, { id, params: req.params, flags: mine, targetFields: fields, targetOrigin: req.environment?.baseUrl, env: req.env });
     params = { ...r.params, ...params };
     Object.assign(bound, r.bound ?? {});
@@ -492,28 +502,24 @@ export async function withCommandSecretParams(req: {
 }
 
 /**
- * 0.30.0 §5.3, the rule `planSecretRun` and `testModeSecrets` apply (journey-secret-mode.ts), here for a
- * command's own binding step: over MCP a Journey reads the operator's `targets.json` `secretFields` only
- * when it is promoted and, on an automation-mode target, carries an approval a person made (owner
- * decision 5); on a test-mode target any promotion will do (decision 5: an MCP promotion authorises
- * test-mode runs). A draft never does. What this leaves out is the run's secret mode's to meet (a hold,
- * or a refusal), never a value the agent chose where to send.
+ * 0.30.0 §5.3 for a command's own binding step: over MCP a Journey reads the operator's `targets.json`
+ * `secretFields` only as `mcpMayBindTargetSecrets` (journey-run-mode-gate.ts) allows, the one rule
+ * run_journey and the run's secret plan apply too: promoted, its approval current (never stale), and a
+ * person's on an automation-mode target. A draft never does. What this leaves out is the run's secret
+ * mode's to meet (a hold, or a refusal), never a value the agent chose where to send.
  */
-async function mcpMayReadTargetSecrets(
-  journey: Journey,
-  environment: ResolvedJourneyEnvironment | undefined,
-  seams: { readonly environmentsFile?: string | undefined; readonly targetsFile?: string | undefined } | undefined,
-): Promise<boolean> {
+async function mcpMayReadTargetSecrets(journey: Journey, environment: ResolvedJourneyEnvironment | undefined, dir: string, seams: CommandSecretSeams | undefined): Promise<boolean> {
   if (journey.metadata.promoted !== true) return false;
   // Loaded late: the run-mode gate reaches this module through the CLI's shared modules.
-  const { approvalAuthorisesAutomation, resolveRunTarget } = await import("./journey-run-mode-gate.js");
+  const { mcpMayBindTargetSecrets, resolveRunTarget } = await import("./journey-run-mode-gate.js");
   const target = resolveRunTarget({
     origin: environment?.baseUrl ?? journey.recording.site,
     environment,
     ...(seams?.environmentsFile === undefined ? {} : { environmentsFile: seams.environmentsFile }),
     ...(seams?.targetsFile === undefined ? {} : { targetsFile: seams.targetsFile }),
   });
-  return target.mode === "test" || approvalAuthorisesAutomation(journey);
+  const catalogDir = seams?.catalogDir !== undefined ? seams.catalogDir : (await import("./catalog-api.js")).resolveCatalogDir(undefined);
+  return mcpMayBindTargetSecrets(journey, target.mode, { journeysDir: seams?.journeysDir ?? dir, catalogDir });
 }
 
 /** `--secret-field` on a replay command (#819, #827): the same binding `journey run` takes. */

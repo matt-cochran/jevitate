@@ -16,7 +16,7 @@ import { browserRunFromFlags, emulationFromFlags } from "../cli-shared.js";
 import { environmentFromFlags, isEnvironmentError } from "../environments.js";
 import { buildMissionFixtures, checkSetupRefs } from "../fixture-cli.js";
 import { BoundSecretOutsideFieldError, SecretFieldAmbiguousError, secretParamRefusalBody, secretParamsCarried, withSecretParams } from "../secret-params.js";
-import { approvalAuthorisesAutomation, resolveRunTarget, RunModeRefusedError, runModeRefusalBody } from "../journey-run-mode-gate.js";
+import { mcpMayBindTargetSecrets, resolveRunTarget, RunModeRefusedError, runModeRefusalBody } from "../journey-run-mode-gate.js";
 import { ParamTypeError, paramTypeRefusalBody } from "../journey-param-types.js";
 import { journeyApprovalState } from "../journey-stale-api.js";
 import { heldOutcomeOf } from "../journey-hold.js";
@@ -227,12 +227,8 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
     if (stored === null) return refuse;
     const environment = resolved.options.environment;
     const target = resolveRunTarget({ origin: environment?.baseUrl ?? stored.recording.site, environment, environmentsFile: deps.environmentsFile, targetsFile: deps.targetsConfigPath });
-    // Rule 5: automation mode reads the operator's file only for a Journey a person approved. In test mode any
-    // approval channel authorises the run (an MCP promotion included), and the file holds the test target's credentials.
-    if (target.mode === "automation" && !approvalAuthorisesAutomation(stored)) return refuse;
-    // Either way, only for an approval that still binds this content.
-    const state = await journeyApprovalState(stored, { journeysDir: deps.journeysDir, catalogDir: resolveCatalogDir(undefined) });
-    if (!state.promoted || state.approval !== "current") return refuse;
+    // Rules 5 and 6, the one rule every MCP surface applies (journey-run-mode-gate.ts): a current approval, a person's on an automation-mode target.
+    if (!(await mcpMayBindTargetSecrets(stored, target.mode, { journeysDir: deps.journeysDir, catalogDir: resolveCatalogDir(undefined) }))) return refuse;
     const fields = target.targetConfig?.secretFields ?? [];
     // 0.30.0 §5.3: no binding on this origin: in automation mode the run goes on and holds at the secret step
     // for a person; in test mode it is refused E_HUMAN_STEP_IN_TEST_MODE before any browser (journey-secret-mode.ts).

@@ -36,6 +36,7 @@ import {
   emulationFromFlags,
   collectParam,
   emitJson,
+  commandSecretSeams,
   environmentSeams,
 } from "../cli-shared.js";
 import { withProjectFlags } from "../project-layout.js";
@@ -164,7 +165,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
       let runParams: Record<string, string>;
       let bound: BoundSecretParams | undefined;
       try {
-        ({ params: runParams, bound } = await withCommandSecretParams({ dir: verifyJourneysDir, ids: [id], params: param, flags: secretField, environment, env: deps.explore?.env ?? process.env, seams: environmentSeams(deps) }));
+        ({ params: runParams, bound } = await withCommandSecretParams({ dir: verifyJourneysDir, ids: [id], params: param, flags: secretField, environment, env: deps.explore?.env ?? process.env, seams: commandSecretSeams(deps, verifyJourneysDir, flaggedCatalogDir(layout)) }));
       } catch (err) {
         const e = secretFieldErrorOf(err, "E_JOURNEY_VERIFY_ARGS");
         if (e === undefined) throw err;

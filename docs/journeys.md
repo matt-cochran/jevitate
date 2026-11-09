@@ -415,7 +415,8 @@ doneCheckPolicy, at?, outcome? }` in `--json`. Besides the done check's own base
 since the run), all `unverified`. A stale proof carries `proof.verify.staleCause` (#816): `journey-changed`,
 `engine` (the Journey is unchanged, but the engine that recorded the proof computes its identity
 differently), `engine-unknown` (a receipt written before 0.30.0), `read-policy`, `no-planner-identity`,
-`target` (the proof ran on another target origin than the Journey's recorded site) or `app-version` (it ran
+`target` (the proof ran on another target origin than the one the review judges for: the Journey's recorded
+site, or the target `journey review --env`/`--base-url` (MCP `review_journey` `env`/`baseUrl`) names) or `app-version` (it ran
 on another app version than `JEVITATE_APP_VERSION` names now), and `proof.verify.recordedBy: { version, commit }`
 from the receipt. Every verify receipt stores `engine: { version, commit }`, the target origin it ran on
 (`target: { origin }`: `--env`/`--base-url`, else the recorded site) and, when known, `appVersion`

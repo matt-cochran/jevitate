@@ -16,11 +16,17 @@ import { findProjectDir } from "./project-dir.js";
 import { journeyTargetSafety } from "./journey-target-policy.js";
 import { loadProjectConfig } from "./project-config.js";
 import { journeyRunLogsRoot, latestJourneyRun } from "./journey-run-record.js";
+import { proofTargetNow } from "./journey-proof-context.js";
 
 type ReviewOptions = {
   readonly targetsFile?: string; readonly catalogDir?: string | null; readonly readiness?: boolean; readonly strict?: boolean; readonly jev?: JevSetup; readonly action?: ApprovalAction;
   /** Where the run records are read from (default the logs beside the journeys dir: `<.jevitate>/logs`). */
   readonly logsRoot?: string;
+  /**
+   * M5: the target origin the mutation proof's freshness is judged for (`--env` / `--base-url`, resolved as
+   * verify and readiness resolve them). Absent: the Journey's recorded site, as before.
+   */
+  readonly proofOrigin?: string | undefined;
 };
 
 /**
@@ -110,6 +116,7 @@ async function reviewNativeJourney(journeysDir: string, id: string, journey: Jou
     catalog: { links, findings, nativeOwnerFindings },
     approvedSnapshot,
     lastVerify: await readVerifyRecord(journeysDir, id),
+    ...(opts.proofOrigin === undefined ? {} : { proofTarget: { ...proofTargetNow(journey), origin: opts.proofOrigin } }),
     proofPolicy: project.mutationProofPolicy ?? "advisory",
     // Owner decision "Proof role": the sheet leads with the latest run's job verdict.
     latestRun: latestJourneyRun(opts.logsRoot ?? journeyRunLogsRoot(journeysDir), id, journey) ?? null,

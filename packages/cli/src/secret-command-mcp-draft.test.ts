@@ -36,13 +36,20 @@ function journey(id: string, approval?: "tty" | "mcp"): Journey {
   return j;
 }
 
+/** H7: a person's (or an agent's) approval, then the content edited afterwards: the approval is stale. */
+function stale(id: string, approval: "tty" | "mcp"): Journey {
+  const j = journey(id, approval);
+  (j.recording.pages[0]!.steps as unknown[]).push({ step: { kind: "fill", target: { testId: "who" }, value: { var: "pw" }, expect: { kind: "visible", target: { testId: "q" } } } });
+  return j;
+}
+
 /** An environment as `environmentFromFlags` resolves it, with targets.json's binding for its origin. */
 function environment(name: "auto" | "test"): ResolvedJourneyEnvironment {
   return { name, baseUrl: SITE, allowedOrigins: [SITE], secretFields: [`param=pw=env:${VAR}`], source: `${environmentsFile}[${name}]` };
 }
 
 const bind = (id: string, env: ResolvedJourneyEnvironment, mcp: boolean) => {
-  const go = () => withCommandSecretParams({ dir, ids: [id], params: {}, flags: [], environment: env, env: { [VAR]: MARK }, seams: { environmentsFile, targetsFile } });
+  const go = () => withCommandSecretParams({ dir, ids: [id], params: {}, flags: [], environment: env, env: { [VAR]: MARK }, seams: { environmentsFile, targetsFile, journeysDir: dir, catalogDir: null } });
   return mcp ? runAsMcpInvocation(go) : go();
 };
 
@@ -54,7 +61,7 @@ beforeAll(() => {
   targetsFile = join(root, "targets.json");
   writeFileSync(environmentsFile, JSON.stringify({ auto: { baseUrl: SITE }, test: { baseUrl: SITE, trust: "test" } }));
   writeFileSync(targetsFile, JSON.stringify({ [SITE]: { secretFields: [`param=pw=env:${VAR}`] } }));
-  for (const j of [journey("draft"), journey("person", "tty"), journey("agent", "mcp")]) writeFileSync(join(dir, `${j.metadata.id}.json`), JSON.stringify(j));
+  for (const j of [journey("draft"), journey("person", "tty"), journey("agent", "mcp"), stale("stale-person", "tty"), stale("stale-agent", "mcp")]) writeFileSync(join(dir, `${j.metadata.id}.json`), JSON.stringify(j));
 });
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
@@ -86,5 +93,18 @@ describe("H1: over MCP a draft Journey never gets the operator's targets.json se
   it("on the CLI (a person at a terminal) the binding applies to a draft as before", async () => {
     const r = await bind("draft", environment("auto"), false);
     expect(r.params["pw"]).toBe(MARK);
+  });
+});
+
+describe("H7: over MCP a promoted Journey whose approval is stale never gets the operator's targets.json secret", () => {
+  it.each([
+    ["stale-person", "auto"],
+    ["stale-person", "test"],
+    ["stale-agent", "test"],
+  ] as const)("%s on the %s target: nothing is filled or bound (as run_journey refuses)", async (id, name) => {
+    const r = await bind(id, environment(name), true);
+    expect(r.params["pw"]).toBeUndefined();
+    expect(r.bound).toBeUndefined();
+    expect(JSON.stringify(r)).not.toContain(MARK);
   });
 });

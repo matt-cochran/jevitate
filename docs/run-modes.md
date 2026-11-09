@@ -119,11 +119,13 @@ In test mode a run never waits for a person. A Journey with a handback step is r
 `secretFields` in `~/.jevitate/targets.json` (test credentials a person wrote), through the same binding
 `vault-autofill` uses: code types it into the field the spec names, on that origin only, and the value never
 reaches the model, the result, the evidence or a log. A promoted Journey reads it whatever channel approved it, an MCP
-promotion included, since that authorises test-mode runs (on `run_journey` the approval must also be
-current); a draft never reads the file. The same rule holds where a tool binds the Journey's secrets before
-its replays (`verify_journey`, `journey_readiness`, `chain_journeys`, `demo_journey`, `run_load_test`, an
-exploration's `fromJourney` prefix): the file serves a promoted Journey, approved by a person on an automation-mode
-target, and never a draft. With no binding for
+promotion included, since that authorises test-mode runs, provided the approval is current; a draft never reads
+the file. The same rule holds, in both modes, where a tool binds the Journey's secrets before its replays
+(`verify_journey`, `journey_readiness`, `chain_journeys`, `demo_journey`, `run_load_test`, an exploration's
+`fromJourney` prefix): the file serves a promoted Journey whose approval is current (approved by a person on an
+automation-mode target), and never a draft. A Journey edited after its approval (a stale approval) gets no secret
+from the file on any surface: a secret the request leaves out is refused with `E_SECRET_PARAM_OVER_MCP`, as
+`run_journey` refuses it. With no binding for
 every such parameter (or a binding whose environment variable is unset), the run is refused with
 `E_HUMAN_STEP_IN_TEST_MODE` before any browser opens; it is never held. A binding on another origin only is
 refused with `E_SECRET_ORIGIN_REFUSED`.

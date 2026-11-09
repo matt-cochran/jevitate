@@ -308,10 +308,11 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "readiness: true adds the #434 Readiness section (links, intent, lint, mutation proof; with real: true and a judgment key, advisory Jev questions with probabilities); the #435 catalog analysis of its pairs is always included. " +
       "Pass that hash as promote_journey reviewedHash to bind an approval to exactly what was reviewed. " +
       "#523: strict: true exits 1 (defects) when the sheet has any ⚠ attention item (and runs the code-only readiness link checks — missing job / persona — even without readiness); ○ items and Jev never fail it. " +
+      "M5: env / baseUrl judge the mutation proof's freshness for that target, as verify_journey ran it (default: the Journey's recorded site, where a proof made on another target reads stale, cause target). " +
       "#467: stale: true (and no id) instead lists every promoted Journey whose approval is stale — each with its approved and current hash and stepIdOnly: true when the only change is minted step ids — for a person to re-approve; it never approves.",
     command: {
       path: "journey review",
-      params: { id: { kind: "string", positional: true }, stale: b("--stale"), readiness: b("--readiness"), strict: b("--strict"), ...JEV_ADVICE },
+      params: { id: { kind: "string", positional: true }, stale: b("--stale"), readiness: b("--readiness"), strict: b("--strict"), ...JEV_ADVICE, ...ENVIRONMENT },
       omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--markdown": OMIT.reviewRendering, "--full": OMIT.reviewRendering, "--out": OMIT.reviewRendering,
         "--pre-approval": "CLI-only native human-owner queue preflight; a typed pending-action projection, not approval or a new MCP review capability",
         ...JSON_FLAG },

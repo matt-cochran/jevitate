@@ -1770,7 +1770,9 @@ a human-readable review sheet for promotion sign-off: summary, steps, side effec
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--base-url <url>` | M5: judge the mutation proof's freshness for this origin, as `journey verify --base-url` ran it; default: the Journey's recorded site |  |  |  |  |
 | `--dir <path>` | deprecated: use --journeys-dir <path> (same meaning); default: the repo's .jevitate/journeys, outside a repo ~/.jevitate/journeys |  |  |  |  |
+| `--env <name>` | M5: judge the mutation proof's freshness for this environment's target (environments.json), as `journey verify --env` ran it; default: the Journey's recorded site |  |  |  |  |
 | `--full` | #496: show every detail section: catalog analysis, the full lint list, locator health, provenance, the full change diff |  |  |  |  |
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { Command } from "commander";
 import { fail, ok } from "./envelope.js";
 import { REPLAY_SECRET_FIELD_HELP, collectSecretField, secretFieldErrorOf, warnSecretParamsOnArgv, withCommandSecretParams } from "./secret-params.js";
-import { browserRunFromFlags, collectParam, emitCommandResult, environmentSeams, withBrowserLaunchFlags, type BrowserLaunchFlags, type CliDeps } from "./cli-shared.js";
+import { browserRunFromFlags, collectParam, commandSecretSeams, emitCommandResult, environmentSeams, withBrowserLaunchFlags, type BrowserLaunchFlags, type CliDeps } from "./cli-shared.js";
 import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, fixtureRebaseUrl, type ResolvedJourneyEnvironment } from "./environments.js";
 import { buildMissionFixtures, withFixtureFlags, type FixtureFlags } from "./fixture-cli.js";
 import { withRecordedFixtures } from "./journey-fixtures.js";
@@ -75,7 +75,7 @@ export function registerJourneyReadiness(journey: Command, program: Command, dep
       if (mode !== "report") {
         try {
           const environment = envName === undefined && baseUrl === undefined ? undefined : environmentFromFlags({ ...(envName === undefined ? {} : { env: envName }), ...(baseUrl === undefined ? {} : { baseUrl }) }, environmentSeams(deps));
-          ({ params: runParams } = await withCommandSecretParams({ dir: layout.journeysDir, ids: [id, withId], params: param, flags: secretField, environment, env: deps.explore?.env ?? process.env, seams: environmentSeams(deps) }));
+          ({ params: runParams } = await withCommandSecretParams({ dir: layout.journeysDir, ids: [id, withId], params: param, flags: secretField, environment, env: deps.explore?.env ?? process.env, seams: commandSecretSeams(deps, layout.journeysDir, flaggedCatalogDir(layout)) }));
         } catch (err) {
           // An environment error is left to readiness, which refuses in its own order (E_READINESS_TARGET first).
           if (!isEnvironmentError(err)) {
