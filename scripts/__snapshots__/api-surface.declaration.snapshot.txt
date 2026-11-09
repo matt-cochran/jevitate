@@ -1732,7 +1732,7 @@
   QueueExplorationResult: interface
   runJourney: function
 
-# @jevitate/missions (27 exports)
+# @jevitate/missions (31 exports)
   Budget: type-alias
   BudgetExceedsCeilingError: class
   ClaimOwner: interface
@@ -1753,6 +1753,10 @@
   MissionTargetStore: interface
   QUEUED_MISSION_STATUSES: variable
   QUEUED_SCREENSHOT_MODES: variable
+  QueuedEntry: type-alias
+  QueuedEntrySchema: variable
+  QueuedJourneyCall: interface
+  QueuedJourneyCallSchema: variable
   QueuedMission: interface
   QueuedMissionSchema: variable
   QueuedMissionStatus: type-alias

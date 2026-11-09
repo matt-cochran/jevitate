@@ -115,6 +115,10 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     invariantAuthTokens: "authoring adjudicates by the goal's own checks; app invariants are `explore --invariants` on the authored path",
     journeyPrefix: NO_ANCHORED_HERE,
     minEffort: "#424: every take is checked by --success and stops at the first verified path; a minimum effort would only delay it (`explore --min-actions`)",
+    doneCheck: "#800: a take is adjudicated by the goal's --success checks; `explore --job` reads the job's done check",
+    doneCheckBasis: "#800: a take is adjudicated by the goal's --success checks; `explore --job` reads the job's done check",
+    doneCheckPolicy: "#800: a take is adjudicated by the goal's --success checks; `explore --job` reads the job's done check",
+    requireDoneCheck: "#800: a take is adjudicated by the goal's --success checks; `explore --job` reads the job's done check",
     blockOffAllowlistNavigation: "#521: an authored Journey may cross to an IdP or checkout like any Journey; the navigation guard is `explore --block-off-allowlist-navigation`'s",
   },
   "coverage-strategy.ts runCoverageMission": { hostHealth: SEAM, nowIso: SEAM },
@@ -274,6 +278,10 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
 
   // ── mission run queue (MCP queue_exploration) ───────────────────────────────────────────────
   "mission-queue-runner.ts runExploration": {
+    doneCheck: "#800 0.30.0 GAPS item 12: queue_exploration does not carry a job yet; closed in wave E",
+    doneCheckBasis: "#800 0.30.0 GAPS item 12: queue_exploration does not carry a job yet; closed in wave E",
+    doneCheckPolicy: "#800 0.30.0 GAPS item 12: queue_exploration does not carry a job yet; closed in wave E",
+    requireDoneCheck: "#800 0.30.0 GAPS item 12: queue_exploration does not carry a job yet; closed in wave E",
     blockOffAllowlistNavigation: QUEUE_NARROW,
     secretCommand: "#324: a cmd: secret source runs an operator command — explore --allow-secret-cmd only, never a queued or suite mission",
     secretCommandAttempts: "#359: the bound on a cmd: secret source's command runs — goes with secretCommand (explore --allow-secret-cmd only)",
@@ -334,6 +342,10 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
 
   // ── check suites ────────────────────────────────────────────────────────────────────────────
   "check-execute.ts runExploration": {
+    doneCheck: "#800: a suite item takes no --job (suite-explore-options excludes it); a suite gates on its items' --success checks",
+    doneCheckBasis: "#800: a suite item takes no --job (suite-explore-options excludes it); a suite gates on its items' --success checks",
+    doneCheckPolicy: "#800: a suite item takes no --job (suite-explore-options excludes it); a suite gates on its items' --success checks",
+    requireDoneCheck: "#800: a suite item takes no --job (suite-explore-options excludes it); a suite gates on its items' --success checks",
     secretCommand: "#324: a cmd: secret source runs an operator command — explore --allow-secret-cmd only, never a queued or suite mission",
     secretCommandAttempts: "#359: the bound on a cmd: secret source's command runs — goes with secretCommand (explore --allow-secret-cmd only)",
     hostHealth: SEAM,
