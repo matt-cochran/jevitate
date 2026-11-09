@@ -173,6 +173,7 @@ export function declareExploreCommand(program: Command): Command {
     .addOption(GOAL_RUN_OPTIONS.replyCeilingMs())
     .addOption(GOAL_RUN_OPTIONS.replyMaxChars())
     .addOption(GOAL_RUN_OPTIONS.jobWaitMs())
+    .addOption(GOAL_RUN_OPTIONS.renderWaitMs())
     .addOption(GOAL_RUN_OPTIONS.deny())
     .addOption(GOAL_RUN_OPTIONS.paid())
     .addOption(GOAL_RUN_OPTIONS.allowControl())

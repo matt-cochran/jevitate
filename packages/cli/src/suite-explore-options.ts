@@ -86,6 +86,7 @@ export const SUITE_EXPLORE_OPTIONS = {
   replyCeilingMs: { shape: "integer", appliesTo: GOAL_UX },
   replyMaxChars: { shape: "integer", appliesTo: GOAL_UX, range: [20, 2000] },
   jobWaitMs: { shape: "integer", appliesTo: GOAL_UX },
+  renderWaitMs: { shape: "integer", appliesTo: ["goal"], range: [1, 300000] },
   // safety, settle, timing (the target config explore builds from its flags)
   deny: { shape: "strings", appliesTo: ALL_KINDS },
   paid: { shape: "strings", appliesTo: ALL_KINDS },

@@ -123,6 +123,7 @@ function samples(f: ReturnType<typeof files>): Record<SuiteExploreOptionName, Sa
     replyCeilingMs: { kind: "goal", set: 2000 },
     replyMaxChars: { kind: "goal", set: 100 },
     jobWaitMs: { kind: "goal", set: 3000 },
+    renderWaitMs: { kind: "goal", set: 60000 },
     deny: { kind: "feature", set: ["/^Archive/i"] },
     paid: { kind: "feature", set: ["/^Analyze/"] },
     allowControl: { kind: "feature", set: ["^Generate Your First Key$"] },

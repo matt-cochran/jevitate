@@ -7,6 +7,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProfileManager } from "@jevitate/daemon";
+import { clock } from "@jevitate/domain";
 import { FsJourneyStore } from "@jevitate/journey";
 import { FakeGenerationGateway, type Answer, type JudgmentPort } from "@jevitate/ai-core";
 import { GOAL_ALREADY_MET_QUESTION, GOAL_MET_QUESTION } from "@jevitate/explore";
@@ -42,6 +43,22 @@ let dir: string;
 beforeAll(async () => {
   server = createServer((req, res) => {
     const path = (req.url ?? "").split("?")[0] ?? "";
+    if (path === "/bootstrap-one" || path === "/bootstrap-two") {
+      void clock.sleep(150).then(() => res.writeHead(200, { "content-type": "application/json" }).end("{}"));
+      return;
+    }
+    if (path === "/bootstrap-never") return;
+    if (path === "/delayed-bootstrap" || path === "/stuck-bootstrap") {
+      const bootstrap = path === "/delayed-bootstrap"
+        ? 'fetch("/bootstrap-one").then(() => fetch("/bootstrap-two"))'
+        : 'fetch("/bootstrap-never")';
+      res.writeHead(200, { "content-type": "text/html" }).end(`<!doctype html><body>
+        <button id="finish" disabled>Finish</button><p data-testid="status">Waiting</p>
+        <script>${bootstrap}.then(() => { document.getElementById("finish").disabled = false; });
+        document.getElementById("finish").onclick = () => { document.querySelector("[data-testid=status]").textContent = "Complete"; };</script>
+      </body>`);
+      return;
+    }
     if (path === "/") return void res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(APP);
     res.writeHead(404).end();
   });
@@ -60,8 +77,7 @@ afterEach(() => {
 });
 
 /** Picks, in order: type into Password, click Sign in, then done. */
-function signInJudge(): JudgmentPort {
-  const script = [/type into .*Password/, /click .*Sign in/];
+function signInJudge(script: readonly RegExp[] = [/type into .*Password/, /click .*Sign in/]): JudgmentPort {
   let at = 0;
   return {
     async systemOne({ questions }: { questions: Record<string, { kind: string; options?: string[]; descriptions?: Record<string, string> }> }) {
@@ -83,14 +99,14 @@ function signInJudge(): JudgmentPort {
   } as unknown as JudgmentPort;
 }
 
-async function cli(journeysDir: string, args: string[]): Promise<{ out: string; err: string; exitCode: number | undefined }> {
+async function cli(journeysDir: string, args: string[], judge: JudgmentPort = signInJudge()): Promise<{ out: string; err: string; exitCode: number | undefined }> {
   const out: string[] = [];
   const err: string[] = [];
   const program = buildProgram({
     profiles: new ProfileManager("/unused"),
     journeysDir,
     dbPath: join(dir, "no-site-policy.sqlite"),
-    explore: { judge: signInJudge(), gen: new FakeGenerationGateway(), browserPortFactory: () => new PlaywrightBrowserPort(), targetsConfigPath: join(dir, "no-targets.json") },
+    explore: { judge, gen: new FakeGenerationGateway(), browserPortFactory: () => new PlaywrightBrowserPort(), targetsConfigPath: join(dir, "no-targets.json") },
   });
   program.configureOutput({ writeOut: (s) => out.push(s), writeErr: (s) => err.push(s) });
   const override = (c: Command): void => {
@@ -118,7 +134,7 @@ describe("explore-author-journey — served (#369)", () => {
     process.env.JEV_SERVED_PW = PASSWORD;
     const journeysDir = join(dir, "j-ok");
     const out = join(dir, "runs-ok");
-    const r = await cli(journeysDir, author("signin", out, ["--secret-field", "label=Password=env:JEV_SERVED_PW"]));
+    const r = await cli(journeysDir, author("signin", out, ["--secret-field", "label=Password=env:JEV_SERVED_PW", "--render-wait-ms", "60000"]));
     expect(r.out).not.toContain(PASSWORD);
     const env = JSON.parse(r.out) as { ok: boolean; data: { outcome: string; discovery?: { resultPath?: string }; takes?: unknown } };
     expect(env.data.outcome, r.out).toBe("authored");
@@ -154,5 +170,38 @@ describe("explore-author-journey — served (#369)", () => {
       expect(p.startsWith(out), p).toBe(true);
       expect(existsSync(p), p).toBe(true);
     }
+  });
+});
+
+describe("[realtime] #837 native exploration render wait", () => {
+  // The server deliberately holds real HTTP responses. Keep the real domain clock here.
+  it("waits through a delayed two-phase bootstrap and still requires the real user action", async () => {
+    const result = await cli(join(dir, "j-delayed"), [
+      "explore", "--url", `${origin}/delayed-bootstrap`, "--goal", "Click Finish once the page is ready",
+      "--success", "textIncludes:testId=status|Complete", "--render-wait-ms", "3000", "--fake-ai",
+      "--max-decisions", "3", "--out", join(dir, "delayed-runs"), "--json",
+    ], signInJudge([/click .*Finish/]));
+    expect(result.exitCode ?? 0).toBe(0);
+    const envelope = JSON.parse(result.out) as { data: { outcome: string; actions: number; checks: { passed: boolean }[] } };
+    expect(envelope.data.outcome).toBe("succeeded");
+    expect(envelope.data.actions).toBeGreaterThan(0);
+    expect(envelope.data.checks.every((check) => check.passed)).toBe(true);
+  });
+
+  it("still reports a genuinely nonsettling page as a hang within the configured bound", async () => {
+    const result = await cli(join(dir, "j-stuck"), [
+      "explore", "--url", `${origin}/stuck-bootstrap`, "--goal", "Click Finish once ready",
+      "--success", "textIncludes:testId=status|Complete", "--render-wait-ms", "750", "--fake-ai",
+      "--max-decisions", "3", "--out", join(dir, "stuck-runs"), "--json",
+    ], signInJudge([/click .*Finish/]));
+    const envelope = JSON.parse(result.out) as { data: { outcome: string; reason: string } };
+    expect(result.exitCode).toBe(3);
+    expect(envelope.data.outcome).toBe("hang");
+    const pendingAge = /after (\d+)ms/.exec(envelope.data.reason);
+    expect(pendingAge).not.toBeNull();
+    expect(Number(pendingAge?.[1])).toBeGreaterThanOrEqual(375);
+    // Real scheduling adds jitter; forgetting the flag would instead wait the default 15 seconds.
+    expect(Number(pendingAge?.[1])).toBeLessThan(5000);
+    expect(envelope.data.reason).toContain("reproduced 2/2");
   });
 });

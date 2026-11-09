@@ -112,6 +112,10 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
         }
       }
       const strategy = o.strategy ?? "goal";
+      if (o.renderWaitMs !== undefined && (strategy !== "goal" || o.feature !== undefined)) {
+        emitExplore(fail("E_EXPLORE_ARGS", "--render-wait-ms is supported only with --strategy goal (including find-out runs)"));
+        return;
+      }
       // #519: --scope-region on a strategy without a coverage gate, or one that does not parse, is refused up front
       // (also ahead of a --at-step sweep, whose per-stop runs would each refuse it).
       try {
