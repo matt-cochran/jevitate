@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { chromium } from "playwright";
 import { classifyInstalled, installBrowser, installPlan, pinnedBrowserReport, pinnedBrowsers, type PinnedBrowser } from "./pinned-browser.js";
@@ -48,7 +48,7 @@ describe("the tested Playwright (#825)", () => {
     expect(cliPin).toBe(playwrightVersion);
   });
   it("install-browser runs the Playwright whose browsers.json names the pinned revision", () => {
-    expect(installPlan({}).args[0]).toBe(`${playwrightDir}/cli.js`);
+    expect(installPlan({}).args[0]).toBe(join(playwrightDir, "cli.js"));
     const corePkg = createRequire(`${playwrightDir}/package.json`).resolve("playwright-core/package.json");
     expect((createRequire(corePkg)("./package.json") as { version: string }).version).toBe(playwrightVersion);
     const manifest = createRequire(corePkg)("./browsers.json") as { browsers: Array<{ name: string; revision: string }> };

@@ -130,7 +130,7 @@ describe("PlaywrightBrowserPort.open persistentProfile (explicit opt-in)", () =>
       calls.push({ dir, options: options ?? {} });
       throw new Error("persistent launch intercepted");
     };
-    const port = new PlaywrightBrowserPort({ launchPersistentContext, platform: "linux", pool: calmPool() });
+    const port = new PlaywrightBrowserPort({ launchPersistentContext, platform: "linux", env: { TMPDIR: "/tmp" }, pool: calmPool() });
     await expect(port.open({ ...base, persistentProfile: "/tmp/profile", args: ["--lang=de"] })).rejects.toThrow(
       "persistent launch intercepted",
     );
@@ -204,7 +204,7 @@ describe("PlaywrightBrowserPort.open extensions (#256)", () => {
 
   test("a throwaway persistent profile that loads exactly the extensions; headless uses the full Chromium build", async () => {
     const { calls, launchPersistentContext } = capture();
-    const port = new PlaywrightBrowserPort({ launchPersistentContext, platform: "linux", pool: calmPool() });
+    const port = new PlaywrightBrowserPort({ launchPersistentContext, platform: "linux", env: { TMPDIR: "/tmp" }, pool: calmPool() });
     await expect(port.open({ ...base, extensions: [ext], args: ["--lang=de"] })).rejects.toThrow("persistent launch intercepted");
     expect(calls[0]!.dir).toMatch(/jevitate-ext-profile-/);
     expect(calls[0]!.options).toMatchObject({
@@ -217,7 +217,7 @@ describe("PlaywrightBrowserPort.open extensions (#256)", () => {
 
   test("an explicit channel or executable is kept; a headed run needs no channel", async () => {
     const { calls, launchPersistentContext } = capture();
-    const port = new PlaywrightBrowserPort({ launchPersistentContext, platform: "linux", pool: calmPool() });
+    const port = new PlaywrightBrowserPort({ launchPersistentContext, platform: "linux", env: { TMPDIR: "/tmp" }, pool: calmPool() });
     await expect(port.open({ ...base, extensions: [ext], channel: "chrome" })).rejects.toThrow();
     await expect(port.open({ ...base, extensions: [ext], executablePath: "/opt/chromium" })).rejects.toThrow();
     await expect(port.open({ ...base, extensions: [ext], headless: false })).rejects.toThrow();
@@ -226,7 +226,7 @@ describe("PlaywrightBrowserPort.open extensions (#256)", () => {
 
   test("no extensions: the pooled path, never a persistent context", async () => {
     const { calls, launchPersistentContext } = capture();
-    const port = new PlaywrightBrowserPort({ launch: capturingLauncher().launch, launchPersistentContext, platform: "linux", pool: calmPool() });
+    const port = new PlaywrightBrowserPort({ launch: capturingLauncher().launch, launchPersistentContext, platform: "linux", env: { TMPDIR: "/tmp" }, pool: calmPool() });
     await expect(port.open({ ...base, extensions: [] })).rejects.toThrow("launch intercepted by test");
     expect(calls).toEqual([]);
   });
