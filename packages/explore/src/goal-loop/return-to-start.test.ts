@@ -24,6 +24,7 @@ function makeCtx() {
   const navigations: string[] = [];
   const ctx = {
     cfg: { goal: "finish", judge: {} },
+    auth: { attempted: false },
     depth: new DepthLog(),
     history: [] as string[],
     goalFocus: { noteUrl: () => undefined, offGoal: () => new Map() },
@@ -94,5 +95,14 @@ describe("return-to-start (#807)", () => {
     const third = await turn(ctx, snapOf("/dead", ["Back"]), "blocked");
     expect((third as { op: string }).op).toBe("blocked");
     expect(navigations.filter((n) => n.startsWith("recorded:"))).toHaveLength(MAX_RETURNS_PER_PAGE);
+  });
+
+  it("a sign-in page the run typed a credential into is never a target: a signed-in dead end stays put", async () => {
+    const { ctx, navigations } = makeCtx();
+    await turn(ctx, snapOf("/login", ["Sign In", "Remember this device"]), "click");
+    (ctx.auth as { attempted: boolean }).attempted = true;
+    const dead = await turn(ctx, snapOf("/", ["Start a new piece"]), "blocked");
+    expect((dead as { op: string }).op).toBe("blocked");
+    expect(navigations).toEqual([]);
   });
 });

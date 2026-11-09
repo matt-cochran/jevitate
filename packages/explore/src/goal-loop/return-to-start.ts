@@ -3,7 +3,11 @@
  * branch dead-ends (no progress on the last-chance turn, or the model's `blocked`) the decision becomes
  * a navigation back to the most recent such page, recorded as a navigate step in the Recording.
  * State is kept per run in a WeakMap, so `RunContext` is untouched.
+ *
+ * A sign-in page, once the run typed a credential, is never a target: navigating back to it restarts
+ * the sign-in (or shows a signed-in run the sign-in form again), it opens no untried branch.
  */
+import { isLoginLikeUrl } from "../seed-redirect.js";
 import type { Snapshot } from "../snapshot.js";
 import type { RunContext } from "./context.js";
 
@@ -49,6 +53,11 @@ function pathOf(url: string): string {
 export function notePage(ctx: RunContext, snap: Snapshot): void {
   const s = stateOf(ctx);
   const path = pathOf(snap.url);
+  // A sign-in page once a credential was typed: going back restarts the sign-in, it opens no branch.
+  if (ctx.auth.attempted && isLoginLikeUrl(snap.url)) {
+    s.pages.delete(path);
+    return;
+  }
   const untried = snap.controls
     .filter((c) => c.enabled && c.name.trim() !== "" && c.role !== "textbox" && !ctx.depth.tried(snap.url, c.name))
     .map((c) => c.name);
@@ -63,6 +72,7 @@ export function returnTarget(ctx: RunContext, currentUrl: string): RememberedPag
   const current = pathOf(currentUrl);
   for (const p of [...s.pages.values()].reverse()) {
     if (p.path === current || (s.returnsByPath.get(p.path) ?? 0) >= MAX_RETURNS_PER_PAGE) continue;
+    if (ctx.auth.attempted && isLoginLikeUrl(p.url)) continue;
     const untried = p.untried.filter((n) => !ctx.depth.tried(p.url, n));
     if (untried.length > 0) return { ...p, untried };
   }
