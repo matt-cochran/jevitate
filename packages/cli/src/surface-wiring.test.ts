@@ -478,6 +478,7 @@ const ENVELOPES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     missCause: "not surfaced: a usability review carries no goalReason (its job outcome is advisory; reason names the miss)",
     actionableControl: "not surfaced: actionable-control recovery is a goal-run handoff; a usability review stays advisory and does not offer a resume path",
     boundary: "not surfaced: a usability review is advisory and carries no goalOutcome; its reason line names the boundary signal",
+    noRouteShortfall: "not surfaced: a goal-run diagnostic for the no-route-found floor; a usability review carries no goalReason",
   },
 };
 
