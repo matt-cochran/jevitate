@@ -13,7 +13,8 @@ import { monitorFor } from "../page-monitor.js";
 import { awaitWrites } from "../side-effects.js";
 import { backgroundEndpoints, writesStartedSince } from "../stuck-actions.js";
 import { endAtBoundary } from "./boundary.js";
-import { newTabBoundary, offAllowlistBoundary, offAllowlistOrigin, watchNewTab } from "./boundary-navigation.js";
+import { newTabBoundary, offAllowlistBoundary, offAllowlistOrigin, linkOrigin, opensNewTab, watchNewTab } from "./boundary-navigation.js";
+import { descriptorToLocator } from "@jevitate/recorder";
 import type { RunContext } from "./context.js";
 import { TOGGLE_ROLES, actionIdentityOf, buttonLike, keyOf, noReply, quote, readRegion, readRegionState, safePath } from "./helpers.js";
 import type { Flow } from "./step.js";
@@ -29,6 +30,15 @@ export async function handleClick(ctx: RunContext, step: ActStep): Promise<Flow>
   if (leaving !== null) {
     const found = offAllowlistBoundary(ctx.tracker.actions + 1, leaving);
     record(false, `${blockedDepartureReason(control.href ?? leaving)}; ${found.reason}`, { origin: "engine", strategy: "origin-guard" });
+    endAtBoundary(ctx, found);
+    ctx.lastActedOp = decision.op;
+    return "stop";
+  }
+  // 0.30.0 (#807): a link that opens a new tab, read from the DOM, is never clicked: the
+  // run ends at the boundary — deterministic, never a race with the tab's `popup` event.
+  if (control.href != null && (await opensNewTab(descriptorToLocator(ctx.page, control.descriptor).first()))) {
+    const found = newTabBoundary(ctx.tracker.actions + 1, linkOrigin(control.href) ?? "about:blank", { beforeClick: true });
+    record(false, found.reason, { origin: "engine" });
     endAtBoundary(ctx, found);
     ctx.lastActedOp = decision.op;
     return "stop";

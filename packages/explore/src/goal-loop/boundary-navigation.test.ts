@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { newTabBoundary, offAllowlistBoundary, offAllowlistOrigin, watchNewTab } from "./boundary-navigation.js";
+import { newTabBoundary, offAllowlistBoundary, offAllowlistOrigin, opensNewTab, watchNewTab } from "./boundary-navigation.js";
 
 const allow = ["http://127.0.0.1:5000"];
 
@@ -27,5 +27,17 @@ describe("boundary-navigation (#807)", () => {
     expect(await watch.opened("http://127.0.0.1:5000/reports/q3")).toBe("http://127.0.0.1:5000");
     expect(closed).toBe(true);
     watch.dispose();
+  });
+  it("opensNewTab reads a link's target from the DOM; a failed read is false", async () => {
+    const el = (target: string | null) => ({ closest: () => ({ getAttribute: () => target }) }) as unknown as Element;
+    const at = (e: Element) => ({ evaluate: async <R>(fn: (el: Element) => R) => fn(e) });
+    expect(await opensNewTab(at(el("_blank")))).toBe(true);
+    expect(await opensNewTab(at(el("reports-window")))).toBe(true);
+    expect(await opensNewTab(at(el("_self")))).toBe(false);
+    expect(await opensNewTab(at(el(null)))).toBe(false);
+    expect(await opensNewTab({ evaluate: async () => Promise.reject(new Error("gone")) })).toBe(false);
+  });
+  it("names the tab boundary found before the click as not followed", () => {
+    expect(newTabBoundary(1, "http://127.0.0.1:5000", { beforeClick: true }).reason).toMatch(/stopped before following it/);
   });
 });

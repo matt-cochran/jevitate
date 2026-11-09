@@ -3,7 +3,8 @@
  * allowlist (`off-allowlist`, signal `write-refused`: the run's own guard refused the navigation),
  * or that opens a new tab the run cannot follow (`new-tab`, signal `tab-opened`). Both name the
  * origin the stop is about, and both end the run as a boundary (exit 2): neither proves anything
- * about the app. A tab a click opened is closed, never followed.
+ * about the app. A link that opens a new tab is known from the DOM and never clicked; a tab a click
+ * opened anyway (a script's `window.open`) is closed, never followed.
  */
 import type { Page } from "playwright";
 import { clock } from "@jevitate/domain";
@@ -37,14 +38,47 @@ export function offAllowlistBoundary(step: number, origin: string): NavigationBo
   };
 }
 
-export function newTabBoundary(step: number, origin: string): NavigationBoundary {
+export function newTabBoundary(step: number, origin: string, opts: { readonly beforeClick?: boolean } = {}): NavigationBoundary {
   return {
     kind: "new-tab",
     step: Math.max(1, step),
     origin,
     signal: "tab-opened",
-    reason: `the click opened a new tab (${origin}) the run cannot follow: the tab was closed`,
+    reason:
+      opts.beforeClick === true
+        ? `the link opens a new tab (${origin}) the run cannot follow: the run stopped before following it`
+        : `the click opened a new tab (${origin}) the run cannot follow: the tab was closed`,
   };
+}
+
+/** The http(s) origin of a link's destination, or null. */
+export function linkOrigin(href: string | null | undefined): string | null {
+  try {
+    const url = new URL(href ?? "");
+    return url.protocol === "http:" || url.protocol === "https:" ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when the element's link opens in a new browsing context (`target="_blank"` or a named target
+ * on its `a`/`area`). Read from the DOM before the click, so a link's new tab is known without racing
+ * the `popup` event; the watcher stays for a tab a script opens. A read that fails (the element is
+ * gone) is false.
+ */
+export async function opensNewTab(locator: { evaluate<R>(fn: (el: Element) => R): Promise<R> }): Promise<boolean> {
+  return locator
+    .evaluate((el: Element) => {
+      // BROWSER CODE
+      const own = (t: string | null | undefined): boolean => {
+        const v = (t ?? "").trim().toLowerCase();
+        return v !== "" && v !== "_self" && v !== "_top" && v !== "_parent";
+      };
+      const link = el.closest("a[href],area[href]");
+      return link !== null && own(link.getAttribute("target"));
+    })
+    .catch(() => false);
 }
 
 /** Watches the page for a tab its next click opens. */
@@ -66,16 +100,8 @@ export function watchNewTab(page: Pick<Page, "on" | "off">): NewTabWatch {
       const tab = popup;
       if (tab === null) return null;
       popup = null;
-      const originOf = (u: string | null | undefined): string | null => {
-        try {
-          const url = new URL(u ?? "");
-          return url.protocol === "http:" || url.protocol === "https:" ? url.origin : null;
-        } catch {
-          return null;
-        }
-      };
       // The link's own destination is preferred: the tab itself is never waited on or followed.
-      const origin = originOf(hint) ?? originOf(tab.url());
+      const origin = linkOrigin(hint) ?? linkOrigin(tab.url());
       await tab.close().catch(() => undefined);
       return origin ?? "about:blank";
     },
