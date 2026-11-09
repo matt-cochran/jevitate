@@ -26,7 +26,7 @@ import {
 } from "@jevitate/sources";
 import type { SourceApiDeps } from "./source-api.js";
 import { inMcpInvocation } from "./approval-provenance.js";
-import { SecretParamOverMcpError, secretParamArgvWarning, secretParamsCarriedBy } from "./secret-params.js";
+import { SecretParamOverMcpError, secretParamArgvWarning, secretParamsCarriedBy, withSecretParamsFor } from "./secret-params.js";
 import { JourneyRequiresAuthError, journeyFixtureBaseDir, redactErrorSecrets, redactSecretParams } from "./journey-api.js";
 
 /**
@@ -156,6 +156,13 @@ export interface RunSourceJourneyRequest {
   browser?: BrowserLaunchOptions;
   /** The site-policy gate (`jevitate site policy set`); absent = no site policy. */
   siteGate?: SiteGateDeps;
+  /**
+   * #827: `source run --secret-field` bindings (CLI only): a secret parameter from the environment, off the
+   * command line, typed only inside the run's allowlist (the Journey's site and its gate-approved origins).
+   */
+  secretFields?: readonly string[];
+  /** Where a `--secret-field` `env:` source is read (default `process.env`). */
+  secretEnv?: Readonly<Record<string, string | undefined>>;
 }
 
 /** Resolves a registered source's recorded pin, or throws `UnknownSourceError`
@@ -215,9 +222,12 @@ export async function runSourceJourney(
     const carried = secretParamsCarriedBy(file, req.params);
     if (carried.length > 0) throw new SecretParamOverMcpError(carried);
   } else {
-    const warning = secretParamArgvWarning(file, req.params);
+    const warning = secretParamArgvWarning(file, req.params, "source run");
     if (warning !== undefined) req.warn?.(warning);
   }
+  // #827: on the CLI, a --secret-field binding supplies a secret parameter from the environment. Never over MCP:
+  // a source's Journey is someone else's, so nothing of the operator's is typed into it from a tool call.
+  const params = inMcpInvocation() || (req.secretFields ?? []).length === 0 ? req.params : withSecretParamsFor(file, { id: req.journeyId, params: req.params, flags: req.secretFields ?? [], targetFields: undefined, targetOrigin: undefined, env: req.secretEnv ?? process.env }).params;
 
   // 0.30.0 §5: the run mode of the Journey's site, from the person-written files only. The approval-channel
   // rule does not apply: a source Journey runs only once a person trusted it (`source trust`, a CLI act no
@@ -228,10 +238,10 @@ export async function runSourceJourney(
   // #399: a secret parameter (e.g. a token in a navigate URL) never comes back — not in the
   // result, not in an escaping error — exactly as `journey run` redacts it.
   try {
-    const result = await run(file, req.params, req.policy ?? safeRunPolicy(), req.storageState, req.emulation, req.browser, req.siteGate, decided, modeNotes);
+    const result = await run(file, params, req.policy ?? safeRunPolicy(), req.storageState, req.emulation, req.browser, req.siteGate, decided, modeNotes);
     const withMode: JourneyRunResult & { readonly run: RunModeRecord } = { ...result, run: runModeRecord(decided, modeNotes) };
-    return redactSecretParams(withMode, file, req.params);
+    return redactSecretParams(withMode, file, params);
   } catch (err) {
-    throw redactErrorSecrets(err, secretParamValues(file, req.params));
+    throw redactErrorSecrets(err, secretParamValues(file, params));
   }
 }

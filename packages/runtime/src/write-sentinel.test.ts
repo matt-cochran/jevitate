@@ -45,6 +45,19 @@ describe("WriteSentinel", () => {
     expect(payload).toContain('POST button');
   });
 
+  it("GAPS 17: asks about the control's effect, not the job", async () => {
+    let questions: Record<string, { instructions?: string }> = {};
+    const gateway: SentinelGateway = {
+      async systemOne(args) {
+        questions = args.questions;
+        return {};
+      },
+    };
+    await new WriteSentinel(gateway, redact).judge(input);
+    expect(questions["write.destructive"]?.instructions).toBe("Does clicking this control delete, erase, overwrite, revoke or cancel saved data or access?");
+    expect(questions["write.outside-intent"]?.instructions).toBe("Is this pending write outside what the job intends the user to do?");
+  });
+
   it("returns [] with jev-unavailable when the gateway rejects, and resolves", async () => {
     const gateway: SentinelGateway = { systemOne: () => Promise.reject(new Error("down")) };
     await expect(new WriteSentinel(gateway, redact).judge(input)).resolves.toEqual({

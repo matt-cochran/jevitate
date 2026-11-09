@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { DEFAULT_DONE_CHECK_POLICY, JOURNEY_RUN_OUTCOMES, journeyExitCode, type DoneCheckPolicy, type JourneyRunOutcome } from "@jevitate/domain";
 import { randomUUID } from "node:crypto";
 import { judgeDoneCheck, type DoneCheckEvidence, type DoneReading, type JobVerdict } from "@jevitate/adjudicator";
 import { evaluateOutcomeChecks } from "@jevitate/explore";
@@ -6,12 +7,13 @@ import { doneCheckScope, isDoneCheckIssues, parseDoneCheck, type DoneCheckSpec, 
 import { PlaywrightBrowserPort, type BrowserPort as SessionPort } from "@jevitate/playwright";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { loadCatalog } from "./catalog-api.js";
-import { linkedJobDone } from "./catalog-refs.js";
+import { journeyDoneCheck } from "./catalog-refs.js";
 import { parseSuccessSpec } from "./explore-specs.js";
 import { createHttpProbe } from "./http-probe.js";
-import { readDoneCheck, type BrowserPort, type DoneCheckSession } from "./journey-done-check.js";
+import { DONE_CHECK_FAILED_MESSAGE, doneCheckExitInput, readDoneCheck, type BrowserPort, type DoneCheckSession } from "./journey-done-check.js";
+import { loadProjectConfig } from "./project-config.js";
 import { trustOfRunContext } from "./journey-run-mode-gate.js";
-import { registerRunHooks } from "./journey-run-hooks.js";
+import { hasRunHookOwner, registerRunHooks } from "./journey-run-hooks.js";
 
 /**
  * #800 (design 0.30.0 §3.1, owner exit-code decisions 2/3): `journey run` reads the linked job's done
@@ -46,6 +48,8 @@ export interface DoneCheckRunRequest {
   readonly browserPort?: BrowserPort | undefined;
   /** The browser the default port opens sessions from (default `new PlaywrightBrowserPort()`). */
   readonly sessionPortFactory?: (() => SessionPort) | undefined;
+  /** #801 `journey shorten --job`: read this catalog job's done check instead of the one the Journey links. */
+  readonly jobId?: string | undefined;
 }
 
 interface PendingCheck {
@@ -105,8 +109,10 @@ function boundValues(bound: ReadonlySet<string>, ...sources: readonly unknown[])
 async function specFor(req: DoneCheckRunRequest, journey: Journey): Promise<DoneCheckSpec | "invalid" | undefined> {
   let done: unknown;
   try {
-    const catalog = await loadCatalog(req.catalogDir, req.journeysDir);
-    done = linkedJobDone(catalog, journey)?.done;
+    // #801: an explicit job (`journey shorten --job`) decides in place of the Journey's own link. Design §3.1: a
+    // Journey that links no job reads its own metadata.done (journeyDoneCheck), with no catalog read.
+    const linksJob = (req.jobId ?? journey.metadata.job) !== undefined;
+    done = journeyDoneCheck(linksJob ? await loadCatalog(req.catalogDir, req.journeysDir) : undefined, journey, req.jobId)?.done;
   } catch {
     // A catalog that cannot be read is no check, as `journey find` treats it: the run says `no-check`.
     return undefined;
@@ -122,6 +128,8 @@ function unreadable(at: "pre" | "post"): DoneReading {
 
 /** Registers the done check's `validateParams` (before) and `readDoneCheck` (after) hooks. Returns the unregistration. */
 export function registerDoneCheckHooks(): () => void {
+  // GAPS 21: a second registration (a test after the central one) would read every check twice.
+  if (hasRunHookOwner(DONE_CHECK_HOOK_OWNER)) return () => undefined;
   return registerRunHooks(DONE_CHECK_HOOK_OWNER, {
     validateParams: async (ctx) => {
       const run = scope.getStore();
@@ -173,6 +181,46 @@ export function registerDoneCheckHooks(): () => void {
       run.decide(trustOfRunContext(ctx) === "harness" ? { attainment: "unverified", basis: "harness" } : judgeDoneCheck(evidence));
     },
   });
+}
+
+/**
+ * GAPS 21: the central registration `buildProgram` and `buildMcpTools` make, once per process by owner, so a
+ * test that registered the hooks itself (before or after) does not get them twice. Undefined when already registered.
+ */
+export function registerDoneCheckHooksOnce(): (() => void) | undefined {
+  return hasRunHookOwner(DONE_CHECK_HOOK_OWNER) ? undefined : registerDoneCheckHooks();
+}
+
+/** The project's done-check policy (`project.json doneCheckPolicy`); the default when it is unset or unreadable. */
+export function doneCheckPolicyOf(catalogDir: string | null): DoneCheckPolicy {
+  try {
+    return loadProjectConfig(catalogDir).doneCheckPolicy ?? DEFAULT_DONE_CHECK_POLICY;
+  } catch {
+    return DEFAULT_DONE_CHECK_POLICY;
+  }
+}
+
+/**
+ * GAPS 21: a run result with the job verdict, as `journey run --json` reports it: `job`, a `done-check-failed`
+ * failure when the job was not achieved and the steps passed, and the exit code the outcome and the job give
+ * under `policy`. Anything else (no verdict, a result with no run outcome) is returned unchanged.
+ */
+export function withJobVerdict(result: unknown, job: JobVerdict | undefined, policy: DoneCheckPolicy): unknown {
+  if (job === undefined || result === null || typeof result !== "object") return result;
+  const outcome = (result as { outcome?: unknown }).outcome;
+  const failed = job.attainment === "not-achieved" && !("failure" in result);
+  const exit = typeof outcome === "string" && (JOURNEY_RUN_OUTCOMES as readonly string[]).includes(outcome) ? { exitCode: journeyExitCode(outcome as JourneyRunOutcome, doneCheckExitInput(job, policy)) } : {};
+  return { ...result, job, ...(failed ? { failure: { kind: "done-check-failed", message: DONE_CHECK_FAILED_MESSAGE } } : {}), ...exit };
+}
+
+/**
+ * GAPS 21: `fn` (one Journey run) inside a done-check scope, its result carrying the job verdict (`withJobVerdict`).
+ * `policy` (`require` for `requireDoneCheck`, as `journey run --require-done-check`) overrides project.json's.
+ */
+export async function runWithDoneCheck(request: DoneCheckRunRequest, fn: () => Promise<unknown>, policy?: DoneCheckPolicy): Promise<unknown> {
+  const run = new DoneCheckRun(request);
+  const result = await run.run(fn);
+  return withJobVerdict(result, run.job, policy ?? doneCheckPolicyOf(request.catalogDir));
 }
 
 // --- The real browser: a new Playwright context per reading -------------------------------------------

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { FsJourneyStore, JourneyRegistry, declaredNonSecretParams, flatJourneySteps, isSecretName, journeyParamSchema, secretParamNames, type Journey } from "@jevitate/journey";
 import { navigateUrlParams } from "@jevitate/recording";
 import { SecretFieldSpecError, fieldMatches, parseSecretField, type Control, type SecretField } from "@jevitate/explore";
@@ -15,14 +16,78 @@ import { SETUP_REF, type MissionFixtures } from "./mission-fixtures.js";
 export const SECRET_PARAM_OVER_MCP = "E_SECRET_PARAM_OVER_MCP";
 
 const secretFieldHelp = "'<label|testId|id|name>=<value>=env:<VAR>'";
+/** #819: the binding that works for any secret parameter, one in a `navigate` URL included. */
+const secretParamHelp = (name: string): string => `'param=${name}=env:<VAR>'`;
 
 /** Names only, never a value. Says what to do instead. */
 function refusalMessage(names: readonly string[]): string {
   return (
     `secret parameter${names.length === 1 ? "" : "s"} ${names.join(", ")}: a Journey that needs a secret doesn't run over MCP, because the value would pass through the model or be sent by a Journey an agent can promote; nothing ran. ` +
-    `A person runs it on the CLI: jevitate journey run <id> --secret-field ${secretFieldHelp}. Or sign in once and use a stored session ('storageState'), so the Journey needs no secret. ` +
+    `A person runs it on the CLI: jevitate journey run <id> --secret-field ${secretFieldHelp} (a field) or --secret-field ${secretParamHelp("<name>")} (any secret parameter, a token in a navigate URL included). Or sign in once and use a stored session ('storageState'), so the Journey needs no secret. ` +
     `If the name only looks like a credential, declare the parameter "secret": false and have a person approve the Journey at a terminal (jevitate journey promote <id>): an approval over MCP lifts nothing, and a source's Journey can't lift it`
   );
+}
+
+/**
+ * Extract naming (0.30.0): terms that are a credential wherever they appear in an `extract as` name,
+ * separators ignored. None of them occurs inside an ordinary English word.
+ */
+const EXTRACT_CREDENTIAL_ANYWHERE_RE =
+  /passw|pwd|ssword|p4ss|passphrase|passcode|s3cret|t0ken|credential|bearer|jwt|csrf|xsrf|hmac|sessid|saml|twofactor|apikey|privatekey|accesskey|secretkey|sshkey|signingkey|encryptionkey|sharedkey|licensekey|pincode|pinnumber|smscode|verificationcode|recoverycode|backupcode|invitecode|securitycode|securityanswer|cardnumber|ccnumber|creditcard|webhookurl|connectionstring|magiclink|resetlink|kennwort|wachtwoord|contrase|senha|пароль|密码|暗号|パスワード/;
+
+/** Terms that are a credential as a word of the name, or at the start or end of one (`authToken`, `sessionid`, `csrftoken`). */
+const EXTRACT_CREDENTIAL_EDGE_TERMS = ["secret", "token", "session", "cookie", "otp", "auth", "mfa", "2fa", "cvv", "cvc", "nonce", "signature", "assertion", "iban", "dsn", "clave", "parola"] as const;
+
+/** Terms that are a credential only as a whole word of the name (`pass` but not `passengers`, `pin` but not `spin`). */
+const EXTRACT_CREDENTIAL_WORD_RE = /^(?:pass|pins?|pw|sess|sid|ssn|creds?|key|tfa|mdp)\d*$/;
+
+/** A last word that says the name is ABOUT a credential, not one: `token_count`, `session_name`, `cookie_banner`. */
+const DESCRIBING_LAST_WORDS: ReadonlySet<string> = new Set(["count", "total", "type", "kind", "length", "len", "name", "label", "title", "channel", "banner", "enabled", "required", "expiry", "expires", "ttl"]);
+
+/** The words of a name: separators and camelCase boundaries split it, lower-cased (`authToken` → auth, token). */
+function nameWords(name: string): string[] {
+  return name
+    .replace(/(\p{Ll}|\p{N})(\p{Lu})/gu, "$1_$2")
+    .replace(/(\p{Lu}+)(\p{Lu}\p{Ll})/gu, "$1_$2")
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((w) => w !== "");
+}
+
+function edgeTermIn(word: string): boolean {
+  return EXTRACT_CREDENTIAL_EDGE_TERMS.some((t) => {
+    if (word !== t && !word.startsWith(t) && !word.endsWith(t)) return false;
+    // `author` and `authority` are not `auth`; `authorization` and `authorize` are.
+    if (t === "auth" && word.startsWith("author") && !word.startsWith("authoriz") && !word.endsWith("auth")) return false;
+    return true;
+  });
+}
+
+/**
+ * Extract naming (0.29.0 accepted limit, narrowed in 0.30.0): is an `extract as` name a credential's?
+ * Such an extract makes the Journey secret-bound, so it loses self-heal and annotate, and its value is
+ * masked as it binds. Narrower than {@link isSecretName}, and never wider: a name matches only if
+ * `isSecretName` does too and, by its words (separators and camelCase split it):
+ *  - the name, separators removed, holds an unambiguous credential term (`password`, `pwd`, `apikey`,
+ *    `jwt`, `csrf`, `pincode`, …), or
+ *  - a word is, starts with or ends with `secret`, `token`, `session`, `cookie`, `otp`, `auth` (not
+ *    `author`), `mfa`, `2fa`, `cvv`, `cvc`, `nonce`, `signature`, `assertion`, `iban`, `dsn`, or
+ *  - a word is exactly `pass`, `pin`, `pins`, `pw`, `sess`, `sid`, `ssn`, `cred`, `creds`, `key`, `tfa`
+ *    or `mdp` (a trailing number allowed: `pin2`);
+ *  - unless the name has two or more words and its last one describes rather than holds a value
+ *    (`count`, `total`, `type`, `kind`, `length`, `len`, `name`, `label`, `title`, `channel`, `banner`,
+ *    `enabled`, `required`, `expiry`, `expires`, `ttl`).
+ * So `apiKey`, `authToken`, `session_id`, `user_pass` and `otp` refuse; `passengers`, `footprint`,
+ * `bypass_cache`, `token_count` and `cookie_banner` don't. A parameter's name still uses the broad rule
+ * (it has its way out: `secret: false` with a person's approval).
+ */
+export function isCredentialExtractName(name: string): boolean {
+  if (!isSecretName(name)) return false;
+  const words = nameWords(name);
+  const last = words[words.length - 1];
+  if (words.length >= 2 && last !== undefined && DESCRIBING_LAST_WORDS.has(last)) return false;
+  if (EXTRACT_CREDENTIAL_ANYWHERE_RE.test(words.join(""))) return true;
+  return words.some((w) => edgeTermIn(w) || EXTRACT_CREDENTIAL_WORD_RE.test(w));
 }
 
 /**
@@ -34,7 +99,7 @@ export function secretBoundNeeds(journey: Journey, params: Readonly<Record<strin
   const nonSecret = declaredNonSecretParams(journey);
   const extracted = flatJourneySteps(journey)
     .flatMap(({ recorded: { step } }) => (step.kind === "forEach" ? step.steps : [step]))
-    .flatMap((step) => (step.kind === "extract" && isSecretName(step.as) && !nonSecret.has(step.as) ? [`extracted credential ${step.as}`] : []));
+    .flatMap((step) => (step.kind === "extract" && isCredentialExtractName(step.as) && !nonSecret.has(step.as) ? [`extracted credential ${step.as}`] : []));
   return [...secretParamNames(journey, params).map((n) => `secret parameter ${n}`), ...new Set(extracted)];
 }
 
@@ -102,45 +167,76 @@ export function missingSecretParams(journey: Journey, params: Readonly<Record<st
   return secretParamNames(journey).filter((n) => required.includes(n) && !(n in params)).sort();
 }
 
-/** The warning for these secret parameters on the command line. It names them and never holds a value. */
-export function secretParamNamesArgvWarning(names: readonly string[]): string {
+/**
+ * The warning for these secret parameters on the command line. It names them and never holds a value.
+ * #819: the route it names works for every secret parameter, a token in a `navigate` URL included
+ * (`param=<name>`); a field binding works only for one a field types. `command`: the command that
+ * takes `--secret-field` (#827); undefined: one that has none, so the warning says which does.
+ */
+export function secretParamNamesArgvWarning(names: readonly string[], command?: string): string {
+  const bindings = names.map((n) => `--secret-field ${secretParamHelp(n)}`).join(" ");
+  const where = command === undefined ? "`jevitate journey run` reads it from the environment instead" : `\`jevitate ${command}\` reads it from the environment instead`;
   return (
     `warning: --param ${names.join(", ")}: a secret value on the command line is visible in the process list and shell history. ` +
-    `\`jevitate journey run\` reads it from the environment instead: --secret-field ${secretFieldHelp}\n`
+    `${where}: ${bindings} (any secret parameter, a token in a navigate URL included), or a field's binding ${secretFieldHelp}; with --env or --base-url, that origin's targets.json secretFields take the same bindings\n`
   );
 }
 
 /** The warning for secret parameters given with `--param`, or undefined. */
-export function secretParamArgvWarning(journey: Journey, params: Readonly<Record<string, string>>): string | undefined {
+export function secretParamArgvWarning(journey: Journey, params: Readonly<Record<string, string>>, command?: string): string | undefined {
   const names = secretParamsCarriedBy(journey, params);
-  return names.length === 0 ? undefined : secretParamNamesArgvWarning(names);
+  return names.length === 0 ? undefined : secretParamNamesArgvWarning(names, command);
 }
 
-/** `secretParamArgvWarning`, for a command that has only the Journey's id. */
-export async function warnSecretParamsOnArgv(write: ((line: string) => void) | undefined, dir: string, ids: readonly (string | undefined)[], params: Readonly<Record<string, string>>): Promise<void> {
+/** `secretParamArgvWarning`, for a command that has only the Journey's id. `command`: as in {@link secretParamNamesArgvWarning}. */
+export async function warnSecretParamsOnArgv(write: ((line: string) => void) | undefined, dir: string, ids: readonly (string | undefined)[], params: Readonly<Record<string, string>>, command?: string): Promise<void> {
   if (Object.keys(params).length === 0) return;
   const lines = new Set<string>();
   for (const id of ids) {
     const journey = id === undefined ? null : await loadJourney(dir, id);
-    const line = journey === null ? undefined : secretParamArgvWarning(journey, params);
+    const line = journey === null ? undefined : secretParamArgvWarning(journey, params, command);
     if (line !== undefined) lines.add(line);
   }
   for (const line of lines) write?.(line);
 }
 
-/** A bound secret goes in at a field op on its origin, nowhere else: `navigate` and `http` send it without one. */
+/**
+ * A bound secret goes only to its binding's origin: typed into a field there, or (#819) sent in a
+ * `navigate` URL whose origin is one of them. An `http` check sends it outside the browser, where its
+ * origin can't be held to the binding, so that is refused.
+ */
 export class BoundSecretOutsideFieldError extends Error {
   readonly code = "E_SECRET_ORIGIN_REFUSED";
-  constructor(name: string, where: string) {
-    super(`secret parameter ${name} is bound, and ${where} would send it in a URL, where its origin can't be held to its binding; nothing ran. Take it out of ${where}, or give it with --param if that is what you mean`);
+  constructor(name: string, where: string, why = "would send it in a URL, where its origin can't be held to its binding") {
+    super(`secret parameter ${name} is bound, and ${where} ${why}; nothing ran. Take it out of ${where}, or give it with --param if that is what you mean`);
     this.name = "BoundSecretOutsideFieldError";
   }
 }
 
-function assertBoundOnlyInFields(journey: Journey, names: readonly string[]): void {
-  for (const name of names) {
+/** The origin a navigate template goes to when its origin is literal (`https://host/…${x}`); undefined for a relative one (the page's own). */
+function literalNavigateOrigin(url: string): string | undefined {
+  if (!/^https?:\/\//i.test(url)) return undefined;
+  try {
+    return new URL(url.replace(/\$\{[^}]*\}/g, "x")).origin;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Before anything runs: a bound secret in an `http` check refuses; one in a navigate URL whose literal
+ * origin is not its binding's refuses. A relative navigate URL goes to the page's own origin, which the
+ * replay checks as it navigates (the interpreter, `boundSecretParams`), as it does for a field.
+ * `targetOrigin`: where the run goes, which the Journey's recorded site stands for.
+ */
+function assertBoundOnlyOnOrigin(journey: Journey, bound: BoundSecretParams, targetOrigin: string | undefined): void {
+  const site = literalNavigateOrigin(journey.recording.site);
+  for (const [name, origins] of Object.entries(bound)) {
     for (const { recorded: { step } } of flatJourneySteps(journey)) {
-      if (step.kind === "navigate" && navigateUrlParams(step.url).includes(name)) throw new BoundSecretOutsideFieldError(name, "a navigate step");
+      if (step.kind !== "navigate" || !navigateUrlParams(step.url).includes(name) || origins === "allowlist") continue;
+      const literal = literalNavigateOrigin(step.url);
+      const goesTo = literal !== undefined && literal === site && targetOrigin !== undefined ? targetOrigin : literal;
+      if (goesTo !== undefined && !origins.includes(goesTo)) throw new BoundSecretOutsideFieldError(name, "a navigate step", `would send it to ${goesTo}, and its binding is for ${origins.join(", ") || "no origin"}`);
     }
     const ref = `\${${name}}`;
     for (const c of journey.metadata.endState ?? []) {
@@ -149,7 +245,7 @@ function assertBoundOnlyInFields(journey: Journey, names: readonly string[]): vo
   }
 }
 
-/** A replay's binding: `env:` only (a `cmd:` source is read at type time, which a replay's parameter is not). */
+/** A replay's binding: `env:` only (a `cmd:` source is read at type time, which a replay's parameter is not). `param=<name>` binds a parameter by name (#819). */
 function replayField(spec: string, env: Readonly<Record<string, string | undefined>>): SecretField {
   if (spec.includes("=cmd:")) throw new SecretFieldSpecError(`--secret-field on a replay takes ${secretFieldHelp}: a cmd: source is for goal runs`);
   return parseSecretField(spec, "value", env);
@@ -192,12 +288,18 @@ export class SecretFieldAmbiguousError extends Error {
 function paramsFromFields(journey: Journey, fields: readonly SecretField[], given: ReadonlySet<string> = new Set()): { params: Record<string, string>; used: Set<SecretField> } {
   const fieldsOf = new Map<string, Set<SecretField>>();
   const paramsOf = new Map<SecretField, Set<string>>();
+  const bind = (name: string, field: SecretField): void => {
+    fieldsOf.set(name, (fieldsOf.get(name) ?? new Set()).add(field));
+    paramsOf.set(field, (paramsOf.get(field) ?? new Set()).add(name));
+  };
   for (const { name, target } of secretParamTargets(journey)) {
     if (given.has(name)) continue;
-    for (const field of fields.filter((f) => fieldMatchesTarget(f, target))) {
-      fieldsOf.set(name, (fieldsOf.get(name) ?? new Set()).add(field));
-      paramsOf.set(field, (paramsOf.get(field) ?? new Set()).add(name));
-    }
+    for (const field of fields.filter((f) => fieldMatchesTarget(f, target))) bind(name, field);
+  }
+  // #819: `param=<name>` binds a secret parameter by its name, wherever the Journey uses it (a navigate URL too).
+  for (const name of secretParamNames(journey)) {
+    if (given.has(name)) continue;
+    for (const field of fields.filter((f) => f.matcher.key === "param" && f.matcher.value === name)) bind(name, field);
   }
   const ambiguous = new Set<string>();
   for (const [name, bound] of fieldsOf) if (bound.size > 1) ambiguous.add(name);
@@ -256,7 +358,7 @@ export function withSecretParamsFor(
   const unused = flagFields.filter((f) => !fromFlags.used.has(f));
   if (unused.length > 0) {
     throw new SecretFieldSpecError(
-      `--secret-field ${unused.map((f) => f.descriptor).join(", ")} matches no secret parameter of journey '${req.id}' that --param did not give (a recorded step's label, testId, id or name; type= needs a live field, so it cannot match on a replay)`,
+      `--secret-field ${unused.map((f) => f.descriptor).join(", ")} matches no secret parameter of journey '${req.id}' that --param did not give (a recorded step's label, testId, id or name, or param=<name>; type= needs a live field, so it cannot match on a replay)`,
     );
   }
   const targetFields = [...new Set(req.targetFields ?? [])].flatMap((spec) => {
@@ -272,6 +374,100 @@ export function withSecretParamsFor(
   for (const name of Object.keys(fromFlags.params)) bound[name] = "allowlist";
   // Targets are keyed by origin, so there is one whenever a target's binding applied.
   for (const name of Object.keys(fromTargets.params)) bound[name] = req.targetOrigin === undefined ? [] : [req.targetOrigin];
-  assertBoundOnlyInFields(journey, Object.keys(bound));
+  assertBoundOnlyOnOrigin(journey, bound, req.targetOrigin);
   return { params: { ...fromTargets.params, ...fromFlags.params, ...req.params }, ...(Object.keys(bound).length === 0 ? {} : { bound }) };
+}
+
+/**
+ * #827: the bound secrets of the replays a command makes, where a surface's own plumbing does not carry
+ * them (verify, chain, demo, an exploration's prefix): each replay in `fn` types or sends them on their
+ * binding's origin only, as `journey run --secret-field` does.
+ */
+const boundScope = new AsyncLocalStorage<BoundSecretParams>();
+
+export function withBoundSecretParams<T>(bound: BoundSecretParams | undefined, fn: () => Promise<T>): Promise<T> {
+  return bound === undefined ? fn() : boundScope.run(bound, fn);
+}
+
+/** The bound secrets of the command this replay is part of, if it bound any. */
+export function currentBoundSecretParams(): BoundSecretParams | undefined {
+  return boundScope.getStore();
+}
+
+/**
+ * #827: `withSecretParams` for a command that replays one or more Journeys (`journey verify`, `journey
+ * chain --from --to`, `journey demo`, `load run`, `source run`, `explore --from-journey`): `--secret-field`
+ * and, with `--env`/`--base-url`, the environment's `targets.json` `secretFields` supply each Journey's
+ * secret parameters from the environment, off the command line. A flag must bind a secret parameter of at
+ * least one of the Journeys; one Journey's binding never lifts another's refusal. Unknown Journeys keep
+ * `params` (the command reports them).
+ */
+export async function withCommandSecretParams(req: {
+  readonly dir: string;
+  readonly ids: readonly (string | undefined)[];
+  readonly params: Readonly<Record<string, string>>;
+  readonly flags: readonly string[];
+  readonly environment?: { readonly secretFields?: readonly string[] | undefined; readonly baseUrl?: string | undefined } | undefined;
+  readonly env: Readonly<Record<string, string | undefined>>;
+  /** false: a flag that binds none of the Journeys is left for the caller (`explore`'s goal loop binds live fields). */
+  readonly strict?: boolean;
+}): Promise<{ params: Record<string, string>; bound?: BoundSecretParams; used: readonly string[] }> {
+  const targetFields = req.environment?.secretFields;
+  if (req.flags.length === 0 && (targetFields ?? []).length === 0) return { params: { ...req.params }, used: [] };
+  const ids = [...new Set(req.ids.filter((id): id is string => typeof id === "string" && id !== ""))];
+  const journeys = (await Promise.all(ids.map(async (id) => [id, await loadJourney(req.dir, id)] as const))).filter((e): e is readonly [string, Journey] => e[1] !== null);
+  const specs = [...new Set(req.flags)];
+  // A mistake the operator typed, whatever the Journeys: a malformed spec, an unset variable.
+  const parsed = specs.map((spec) => replayField(spec, req.env));
+  let params: Record<string, string> = { ...req.params };
+  const bound: Record<string, readonly string[] | "allowlist"> = {};
+  const used = new Set<string>();
+  for (const [id, journey] of journeys) {
+    // Only the flags that bind something of this Journey: the others are another Journey's.
+    const mine = specs.filter((_, i) => paramsFromFields(journey, [parsed[i]!], new Set(Object.keys(req.params))).used.size > 0);
+    for (const spec of mine) used.add(spec);
+    const r = withSecretParamsFor(journey, { id, params: req.params, flags: mine, targetFields, targetOrigin: req.environment?.baseUrl, env: req.env });
+    params = { ...r.params, ...params };
+    Object.assign(bound, r.bound ?? {});
+  }
+  const unused = specs.filter((s) => !used.has(s));
+  if (unused.length > 0 && journeys.length > 0 && req.strict !== false) {
+    throw new SecretFieldSpecError(
+      `--secret-field ${unused.map((s) => parsed[specs.indexOf(s)]!.descriptor).join(", ")} matches no secret parameter of journey ${journeys.map(([id]) => `'${id}'`).join(" or ")} that --param did not give (a recorded step's label, testId, id or name, or param=<name>; type= needs a live field, so it cannot match on a replay)`,
+    );
+  }
+  return { params, ...(Object.keys(bound).length === 0 ? {} : { bound }), used: [...used] };
+}
+
+/** `--secret-field` on a replay command (#819, #827): the same binding `journey run` takes. */
+export const REPLAY_SECRET_FIELD_HELP =
+  "a secret parameter from the environment, off the command line (repeatable): '<label|testId|id|name>=<value>=env:<VAR>' matched on the recorded step that types it, e.g. 'label=Password=env:APP_PASSWORD', or 'param=<name>=env:<VAR>' for any secret parameter by name, a token in a navigate URL included. With --env/--base-url the environment's secretFields in ~/.jevitate/targets.json apply the same way; --param wins";
+
+/** Collects a repeatable `--secret-field`. */
+export const collectSecretField = (v: string, prev: string[]): string[] => [...prev, v];
+
+/** A binding the operator gave that can't be used, as a command's `{code, message}` (value-free), or undefined. */
+export function secretFieldErrorOf(err: unknown, argsCode: string): { code: string; message: string } | undefined {
+  if (err instanceof BoundSecretOutsideFieldError) return { code: err.code, message: err.message };
+  if (err instanceof SecretFieldSpecError || err instanceof SecretFieldAmbiguousError) return { code: argsCode, message: err.message };
+  return undefined;
+}
+
+/**
+ * #827: a secret parameter's value written in a file that is read at run time (a `check` suite's
+ * `params`, a campaign spec's `params`) sits at rest, so it is refused by name, never echoing the value.
+ * The way that works: a binding (`param=<name>=env:<VAR>`, or the field's) in the target's `secretFields`,
+ * which holds only the variable's name, or the operator's `targets.json` for that origin.
+ */
+export function secretParamAtRestMessage(names: readonly string[], where: string): string {
+  return (
+    `secret parameter${names.length === 1 ? "" : "s"} ${names.join(", ")}: a secret value in ${where} sits in a file at rest, so nothing ran. ` +
+    `Take it out and bind it instead: ${names.map((n) => `'param=${n}=env:<VAR>'`).join(", ")} in the target's secretFields (the file holds only the variable's name), or in ~/.jevitate/targets.json for that origin. ` +
+    `A \${setup.x} reference (a fixture's output) is not a value and stays allowed`
+  );
+}
+
+/** #827: which of `specs` bind a secret parameter of `journey` (a malformed spec or an unset variable throws, value-free). */
+export function specsBinding(journey: Journey, specs: readonly string[], env: Readonly<Record<string, string | undefined>>): string[] {
+  return [...new Set(specs)].filter((spec) => paramsFromFields(journey, [replayField(spec, env)]).used.size > 0);
 }

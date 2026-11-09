@@ -1,6 +1,9 @@
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname } from "node:path";
 import { describe, expect, it } from "vitest";
 import { chromium } from "playwright";
-import { classifyInstalled, installBrowser, installPlan, pinnedBrowserReport, type PinnedBrowser } from "./pinned-browser.js";
+import { classifyInstalled, installBrowser, installPlan, pinnedBrowserReport, pinnedBrowsers, type PinnedBrowser } from "./pinned-browser.js";
 
 const pinned: PinnedBrowser[] = [{ name: "chromium", revision: "10", dirPrefix: "chromium" }];
 const fsOf = (...names: string[]) => ({ readdir: () => names });
@@ -32,5 +35,23 @@ describe("pinned browser", () => {
   });
   it("forwards --with-deps to the playwright install", () => {
     expect(installPlan({ withDeps: true }).args).toContain("--with-deps");
+  });
+});
+
+describe("the tested Playwright (#825)", () => {
+  const require = createRequire(import.meta.url);
+  const playwrightDir = dirname(require.resolve("playwright/package.json"));
+  const playwrightVersion = (JSON.parse(readFileSync(`${playwrightDir}/package.json`, "utf8")) as { version: string }).version;
+  const cliPin = (JSON.parse(readFileSync(new URL("../../cli/package.json", import.meta.url), "utf8")) as { dependencies: Record<string, string> }).dependencies.playwright;
+
+  it("the published cli pins the exact Playwright these tests run", () => {
+    expect(cliPin).toBe(playwrightVersion);
+  });
+  it("install-browser runs the Playwright whose browsers.json names the pinned revision", () => {
+    expect(installPlan({}).args[0]).toBe(`${playwrightDir}/cli.js`);
+    const corePkg = createRequire(`${playwrightDir}/package.json`).resolve("playwright-core/package.json");
+    expect((createRequire(corePkg)("./package.json") as { version: string }).version).toBe(playwrightVersion);
+    const manifest = createRequire(corePkg)("./browsers.json") as { browsers: Array<{ name: string; revision: string }> };
+    for (const p of pinnedBrowsers()) expect(manifest.browsers.find((b) => b.name === p.name)?.revision).toBe(p.revision);
   });
 });

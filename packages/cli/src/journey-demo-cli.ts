@@ -1,4 +1,4 @@
-import { warnSecretParamsOnArgv } from "./secret-params.js";
+import { REPLAY_SECRET_FIELD_HELP, collectSecretField, secretFieldErrorOf, warnSecretParamsOnArgv, withBoundSecretParams, withCommandSecretParams, type BoundSecretParams } from "./secret-params.js";
 import { formatScreenshotsLine, parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
 import { PromotionsConfigError } from "./promotions.js";
 import { existsSync } from "node:fs";
@@ -56,6 +56,7 @@ export function registerJourneyDemoCommand(journey: Command, program: Command, d
     )
     .option("--dir <path>", DEPRECATED_DIR_HELP)
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
+    .option("--secret-field <binding>", REPLAY_SECRET_FIELD_HELP, collectSecretField, [] as string[])
     .option("--storage-state <file>", "Playwright storageState JSON to start the replay authenticated; must exist")
     .option("--video <file>", "write the demo video here (.webm) and its subtitles beside it (.vtt)")
     .option("--guide <file>", "write a Markdown guide here (.md), screenshots in <name>.assets/ beside it")
@@ -64,8 +65,9 @@ export function registerJourneyDemoCommand(journey: Command, program: Command, d
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
       const ownFixtureFlags = this.opts<FixtureFlags>();
-      const { dir, param, storageState: storageStateFlag, video: videoFlag, guide: guideFlag, pace, json, env: envName, baseUrl, screenshots: screenshotsFlag, actionDeltas, project, journeysDir: journeysDirFlag, ...rest } = this.opts<{
+      const { dir, param: paramFlags, secretField, storageState: storageStateFlag, video: videoFlag, guide: guideFlag, pace, json, env: envName, baseUrl, screenshots: screenshotsFlag, actionDeltas, project, journeysDir: journeysDirFlag, ...rest } = this.opts<{
         actionDeltas?: boolean;
+        secretField: string[];
         dir?: string;
         project?: string;
         journeysDir?: string;
@@ -80,7 +82,7 @@ export function registerJourneyDemoCommand(journey: Command, program: Command, d
       const layout = journeyLayout(program, deps, { project, journeysDir: journeysDirFlag, dir });
       if (layout === null) return;
       const journeysDir = layout.journeysDir;
-      await warnSecretParamsOnArgv(program.configureOutput().writeErr, journeysDir, [id], param);
+      await warnSecretParamsOnArgv(program.configureOutput().writeErr, journeysDir, [id], paramFlags, "journey demo");
 
       // #247: --env/--base-url choose where the demo runs — the same resolver as `journey run`.
       let environment: ResolvedJourneyEnvironment | undefined;
@@ -89,6 +91,17 @@ export function registerJourneyDemoCommand(journey: Command, program: Command, d
       } catch (err) {
         if (!isEnvironmentError(err)) throw err;
         emitJson(program, fail(err.code, err.message));
+        return;
+      }
+      // #827: a secret parameter from the environment (--secret-field, targets.json), off the command line.
+      let param: Record<string, string>;
+      let bound: BoundSecretParams | undefined;
+      try {
+        ({ params: param, bound } = await withCommandSecretParams({ dir: journeysDir, ids: [id], params: paramFlags, flags: secretField, environment, env: deps.explore?.env ?? process.env }));
+      } catch (err) {
+        const e = secretFieldErrorOf(err, "E_JOURNEY_DEMO_ARGS");
+        if (e === undefined) throw err;
+        emitJson(program, fail(e.code, e.message));
         return;
       }
       const fixtureFlags: FixtureFlags = {
@@ -123,7 +136,7 @@ export function registerJourneyDemoCommand(journey: Command, program: Command, d
       }
 
       try {
-        const result = await withSiteGate(resolveDbPath(deps), (siteGate) =>
+        const result = await withSiteGate(resolveDbPath(deps), (siteGate) => withBoundSecretParams(bound, () =>
           demoJourney({
             ...(siteGate === undefined ? {} : { siteGate }),
             dir: journeysDir,
@@ -149,10 +162,10 @@ export function registerJourneyDemoCommand(journey: Command, program: Command, d
                 ...(storageState !== undefined ? { storageState } : {}),
                 ...(environment?.fixtures === undefined ? {} : { targetFixtures: environment.fixtures }),
               });
-              checkSetupRefs({ "--param": Object.values(param) }, fx);
+              checkSetupRefs({ "--param": Object.values(paramFlags) }, fx);
               return fx;
             },
-          }),
+          })),
         );
         const data = withEngine(result);
         // A stale demo (the Journey no longer replays) is a failed check: exit 1, and nothing written.

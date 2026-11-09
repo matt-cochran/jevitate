@@ -125,8 +125,23 @@ every such parameter (or a binding whose environment variable is unset), the run
 `E_HUMAN_STEP_IN_TEST_MODE` before any browser opens; it is never held. A binding on another origin only is
 refused with `E_SECRET_ORIGIN_REFUSED`.
 
-Limits of this route: the `targets.json` read covers `run_journey` and its holds, not every tool. A Journey with
-a secret still cannot self-heal or be annotated, and a secret in a `navigate` URL runs on the CLI only.
+A secret in a `navigate` URL (an invite token) has no field for a person to type it into, so it never holds. Over
+MCP it is supplied only by a `param=<name>=env:<VAR>` binding in `targets.json` `secretFields` for the run's origin;
+with none, the run is refused with `E_SECRET_MODE_UNAVAILABLE` before any browser opens.
+
+What each tool does with a secret the call leaves out:
+
+| Tool | A secret the call leaves out |
+|---|---|
+| `run_journey`, `queue_journey` | `vault-autofill` from `targets.json`, else hold (automation); the test target's `secretFields`, else `E_HUMAN_STEP_IN_TEST_MODE` (test) |
+| `verify_journey` | `vault-autofill` only; else `E_HUMAN_STEP_IN_PROOF` (a proof never holds) |
+| `demo_journey`, `chain_journeys` (producer) | as `run_journey` |
+| `run_load_test`, `run_exploration` (`fromJourney`) | `vault-autofill` only; else `E_SECRET_MODE_UNAVAILABLE` |
+| `annotate_journey` | refuses a secret-bound Journey (`E_MODEL_REFUSED_SECRET`) |
+| `sources` | refused: a source's Journey never reads `targets.json` |
+
+A value in any tool's `params` is refused by name (`E_SECRET_PARAM_OVER_MCP`). A Journey with a secret still
+cannot self-heal or be annotated.
 
 ## Holds and resume
 

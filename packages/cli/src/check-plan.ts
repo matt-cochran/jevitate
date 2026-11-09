@@ -1,6 +1,7 @@
 // check-plan.ts — `jevitate check` planning: targets, per-item setup, fixtures, sessions (#231).
 import { JourneyRunRefusedError } from "@jevitate/mcp-facade";
 import { inMcpInvocation } from "./approval-provenance.js";
+import { secretParamAtRestMessage, secretParamsCarriedBy, withSecretParamsFor, type BoundSecretParams } from "./secret-params.js";
 import { assertMcpRunnable } from "./journey-stale-api.js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import type { InvariantSpec } from "@jevitate/recording";
@@ -27,6 +28,7 @@ import { resolveScopeRegions } from "./explore-cli/scope-region.js";
 import { resolveJourneyPrefix, type JourneyPrefix } from "./journey-prefix.js";
 import { isSweepMode, splitBudget, sweepStops } from "@jevitate/journey";
 import type { SuiteGoal, SuiteItemOverrides, SuiteJourney, SuiteMission, SuiteTarget, SuiteVerifyFix } from "./check-suite.js";
+import { resolveJourneyParams } from "./check-suite.js";
 import { CheckAiSetupError, CheckArgsError, CheckPreflightError, type ItemKind, type RunCheckOptions } from "./check-types.js";
 import { isRecord } from "@jevitate/domain";
 import type { HealBudget, SelfHealMode } from "@jevitate/domain";
@@ -155,6 +157,8 @@ export interface PreparedTarget {
   readonly journeys: Map<string, Journey>;
   /** #247: each Journey item that names an `env`/`baseUrl`, and the environment it resolved to at preflight. */
   readonly environments?: ReadonlyMap<SuiteJourney, ResolvedJourneyEnvironment>;
+  /** #827: a Journey item's secret parameters a binding supplied (CLI), and where each may go. Values in memory only. */
+  readonly journeySecrets?: ReadonlyMap<SuiteJourney, { readonly params: Readonly<Record<string, string>>; readonly bound?: BoundSecretParams }>;
   readonly goals: Map<string, SuccessCheck[]>;
   /** The target's `secretFields`, resolved from the environment at preflight (#170). */
   readonly secretFields: readonly SecretField[];
@@ -436,12 +440,16 @@ export async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Prom
             ...(m.maxDecisions === undefined ? {} : { maxDecisions: splitBudget(m.maxDecisions, stops.length) }),
           }));
         }
+        // #827: the prefix's secret parameters: never a value in the suite file; on the CLI from a binding.
+        const anchoredJourney = await new JourneyRegistry(new FsJourneyStore(dir)).get(fromJourney);
+        const supplied = anchoredJourney === null || anchoredJourney === undefined ? { params: { ...(m.params ?? {}) } } : suiteSecretParams(t, anchoredJourney, m.params ?? {}, env, opts, `mission ${m.name}`);
         for (const dm of derived) {
           const prefix = await resolveJourneyPrefix({
             dir,
             id: fromJourney,
             atStep: dm.atStep!,
-            params: { ...(m.params ?? {}) },
+            params: { ...supplied.params },
+            ...(supplied.bound === undefined ? {} : { boundSecretParams: supplied.bound }),
             ...(env === undefined ? {} : { environment: env }),
             ...(session === undefined ? {} : { storageState: session }),
             ...(opts.sitePolicyDbPath === undefined ? {} : { dbPath: opts.sitePolicyDbPath }),
@@ -485,6 +493,7 @@ export async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Prom
   }
   const journeys = new Map<string, Journey>();
   const environments = new Map<SuiteJourney, ResolvedJourneyEnvironment>();
+  const journeySecrets = new Map<SuiteJourney, { params: Record<string, string>; bound?: BoundSecretParams }>();
   if (t.journeys.length > 0) {
     const registry = new JourneyRegistry(new FsJourneyStore(t.journeysDir ?? opts.journeysDir));
     for (const sj of t.journeys) {
@@ -525,6 +534,12 @@ export async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Prom
         throw new CheckPreflightError(`target ${t.name}: Journey ${sj.id} runs on ${origin}, which is not on the target's allowlist`);
       }
       journeys.set(sj.id, j);
+      try {
+        const supplied = suiteSecretParams(t, j, resolveJourneyParams(sj.params, "preflight"), env, opts, `Journey ${sj.id}`);
+        journeySecrets.set(sj, { params: Object.fromEntries(Object.entries(supplied.params).filter(([k]) => !(k in sj.params))), ...(supplied.bound === undefined ? {} : { bound: supplied.bound }) });
+      } catch (e) {
+        throw new CheckPreflightError(`target ${t.name}: Journey ${sj.id}: ${errorMessage(e)}`);
+      }
     }
   }
   let config: TargetConfig | undefined;
@@ -566,6 +581,7 @@ export async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Prom
     allowlist,
     journeys,
     ...(environments.size === 0 ? {} : { environments }),
+    ...(journeySecrets.size === 0 ? {} : { journeySecrets }),
     goals,
     ...(invariants === undefined ? {} : { invariants }),
     ...(invariantAuthTokens === undefined || invariantAuthTokens.size === 0 ? {} : { invariantAuthTokens }),
@@ -575,6 +591,35 @@ export async function prepareTarget(t: SuiteTarget, opts: RunCheckOptions): Prom
     ...(fixturesFile === undefined ? {} : { fixturesFile }),
     ...(prefixes.size === 0 ? {} : { prefixes, expanded }),
   };
+}
+
+/**
+ * #827: a suite Journey's secret parameters. A value for one in the suite file is refused (it sits at
+ * rest). On the CLI a binding supplies it: the suite target's `secretFields` (variable names only) and the
+ * operator's `targets.json` for the run's origin, each bound to that origin. Over MCP the run's secret
+ * mode supplies it (journey-secret-mode.ts), never a file an MCP call named.
+ */
+function suiteSecretParams(
+  t: SuiteTarget,
+  j: Journey,
+  params: Readonly<Record<string, string>>,
+  env: ResolvedJourneyEnvironment | undefined,
+  opts: RunCheckOptions,
+  what: string,
+): { params: Record<string, string>; bound?: BoundSecretParams } {
+  const atRest = secretParamsCarriedBy(j, params);
+  if (atRest.length > 0) throw new Error(secretParamAtRestMessage(atRest, `${what}'s params in the suite file`));
+  if (inMcpInvocation()) return { params: { ...params } };
+  let origin: string;
+  try {
+    origin = new URL(env?.baseUrl ?? j.recording.site).origin;
+  } catch {
+    return { params: { ...params } };
+  }
+  const operator = env?.secretFields ?? resolveTargetConfig(opts.targetsConfig ?? {}, origin)?.secretFields ?? [];
+  const specs = [...(t.secretFields ?? []), ...operator];
+  if (specs.length === 0) return { params: { ...params } };
+  return withSecretParamsFor(j, { id: j.metadata.id, params, flags: [], targetFields: specs, targetOrigin: origin, env: opts.env ?? process.env });
 }
 
 /** The item's setup, a refusal naming its path-precise location (#213: like every other suite refusal), before anything runs. */

@@ -11,6 +11,7 @@ import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import type { Assertion, RecordedStep } from "@jevitate/recording";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
+import { advisoryCatalogDir } from "./done-check-policy.testkit.js";
 import { buildMcpTools } from "./mcp-api.js";
 import { useSkippingTime } from "../../explore/src/testkit.js";
 
@@ -123,6 +124,7 @@ async function cli(args: string[]): Promise<{ out: string; err: string; exitCode
     profiles: new ProfileManager("/unused"),
     journeysDir: join(root, "journeys"),
     dbPath: join(root, "no-site-policy.sqlite"),
+    catalogDir: advisoryCatalogDir(root),
     explore: { browserPortFactory: () => new PlaywrightBrowserPort() },
   });
   program.configureOutput({ writeOut: (s) => out.push(s), writeErr: (s) => err.push(s) });

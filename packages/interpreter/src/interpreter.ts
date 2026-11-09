@@ -101,7 +101,7 @@ export class RecordingInterpreter {
     } = {},
   ) {}
 
-  #targetOpts(): ResolveTargetOptions & {
+  #targetOpts(site: string): ResolveTargetOptions & {
     observer?: StepObserver;
     skipStep?: (index: number, recorded: RecordedStep) => boolean;
     selectAlternative?: (index: number) => SelectAlternative | undefined;
@@ -110,8 +110,11 @@ export class RecordingInterpreter {
     actionGuard?: ReplayActionGuard;
     onExtracted?: (value: string, name?: string) => void | Promise<void>;
     boundSecretParams?: ReadonlyMap<string, readonly string[]>;
+    navigateBase?: string;
   } {
     return {
+      // #819: where a relative navigate URL goes from a page with no http(s) origin yet (the session's baseURL).
+      navigateBase: site,
       ...(this.options.targetTimeoutMs === undefined ? {} : { timeoutMs: this.options.targetTimeoutMs }),
       ...(this.options.observer === undefined ? {} : { observer: this.options.observer }),
       ...(this.options.skipStep === undefined ? {} : { skipStep: this.options.skipStep }),
@@ -150,7 +153,7 @@ export class RecordingInterpreter {
     validateRecording(rec);
     const flat = flatten(rec);
     const varsMap = new Map(Object.entries(vars ?? {}));
-    return runFlat(actor, flat, varsMap, flat.length - 1, this.#targetOpts(), sink);
+    return runFlat(actor, flat, varsMap, flat.length - 1, this.#targetOpts(rec.site), sink);
   }
 
   /**
@@ -179,7 +182,7 @@ export class RecordingInterpreter {
     const flat = flatten(rec);
     const varsMap = new Map<string, string>();
     const lastIndex = Math.min(stepIndex, flat.length - 1);
-    return runFlat(actor, flat, varsMap, lastIndex, this.#targetOpts());
+    return runFlat(actor, flat, varsMap, lastIndex, this.#targetOpts(rec.site));
   }
 
   /**
@@ -201,7 +204,7 @@ export class RecordingInterpreter {
   ): Promise<InterpretResult> {
     validateRecording(rec);
     const flat = flatten(rec);
-    return runFlat(actor, flat, new Map(Object.entries(vars)), flat.length - 1, this.#targetOpts(), sink, fromIndex);
+    return runFlat(actor, flat, new Map(Object.entries(vars)), flat.length - 1, this.#targetOpts(rec.site), sink, fromIndex);
   }
 
   /**
@@ -214,7 +217,7 @@ export class RecordingInterpreter {
     if (fromIndex < 0 || toIndex < fromIndex) throw new Error(`runRange: invalid range ${fromIndex}..${toIndex}`);
     validateRecording(rec);
     const flat = flatten(rec);
-    return runFlat(actor, flat, new Map(Object.entries(vars)), Math.min(toIndex, flat.length - 1), this.#targetOpts(), undefined, fromIndex);
+    return runFlat(actor, flat, new Map(Object.entries(vars)), Math.min(toIndex, flat.length - 1), this.#targetOpts(rec.site), undefined, fromIndex);
   }
 }
 
@@ -322,6 +325,8 @@ async function runFlat(
     refLookup?: AssertionRefLookup;
     actionGuard?: ReplayActionGuard;
     onExtracted?: (value: string, name?: string) => void | Promise<void>;
+    boundSecretParams?: ReadonlyMap<string, readonly string[]>;
+    navigateBase?: string;
   },
   sink?: RecordingSink,
   startIndex = 0,

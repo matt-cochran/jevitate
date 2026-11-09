@@ -89,10 +89,23 @@ function instructionText(controls: readonly Control[], visibleText: string): str
 const goalNames = (goal: string, name: string): boolean => new RegExp(`\\b${escaped(normalized(name))}\\b`).test(goal);
 
 /**
+ * #826 — the goal names the control in part: at least two of its content words (stemmed) stand in the
+ * goal (`Publish report` from 'Publish the Q3 sales report', `Show the demo now` from 'press Show the
+ * demo'), or its only content word is a variant of a goal word (`Reports`). One shared word of several
+ * (`Publish archive`) is not the goal naming it.
+ */
+const goalNamesPart = (name: string, goalTerms: ReadonlySet<string>): boolean => {
+  const controlTerms = terms(name);
+  const hits = [...controlTerms].filter((t) => goalTerms.has(t)).length;
+  return controlTerms.size > 0 && hits >= Math.min(2, controlTerms.size);
+};
+
+/**
  * #693 — an enabled, untried forward control that the goal and the page's own instruction both
  * name. Deterministic: the page text minus the controls' labels must be an instruction containing
  * every content word of the control's name, and at least one of those words must be in the goal.
- * #769 — with `goalNamed`, a control whose whole name the goal states need not be in that instruction.
+ * #769 — with `goalNamed`, a control whose whole name the goal states need not be in that instruction;
+ * #826 — nor one the goal names in part (`goalNamesPart`).
  */
 export function forwardControls(
   ctx: RunContext,
@@ -114,7 +127,7 @@ export function forwardControls(
     const controlTerms = terms(name);
     if (controlTerms.size === 0) continue;
     const instructed = [...controlTerms].some((t) => goalTerms.has(t)) && [...controlTerms].every((t) => instructionTerms.has(t));
-    if (instructed || (goalNamed && goalNames(goal, name))) out.push(control);
+    if (instructed || (goalNamed && (goalNames(goal, name) || goalNamesPart(name, goalTerms)))) out.push(control);
   }
   // #769 — rank by how explicitly the goal names the control: a control the goal itself states
   // (`Show the demo`, from 'press Show the demo') precedes one the page instruction merely suggests (`Check in`).
@@ -122,15 +135,16 @@ export function forwardControls(
 }
 
 /**
- * #769 — how explicitly `goal` names `name`: a whole-name phrase in the goal outranks mere term
- * overlap, then the fraction of the name the goal names, then the raw count. A stable sort keeps the
- * page's own order for equal ranks.
+ * #769 — how explicitly `goal` names `name`: a whole-name phrase in the goal outranks a name the goal
+ * states in part (#826), which outranks mere term overlap (a control only the page's instruction
+ * suggests); within a tier, more goal-named words, then the fraction of the name they cover. A stable
+ * sort keeps the page's own order for equal ranks.
  */
 function goalNaming(goal: string, name: string, goalTerms: ReadonlySet<string>): number {
   const controlTerms = terms(name);
   if (controlTerms.size === 0) return 0;
   const hits = [...controlTerms].filter((t) => goalTerms.has(t)).length;
-  return (goalNames(goal, name) ? 1_000 : 0) + (hits / controlTerms.size) * 100 + hits;
+  return (goalNames(goal, name) ? 10_000 : 0) + (goalNamesPart(name, goalTerms) ? 1_000 : 0) + hits * 10 + (hits / controlTerms.size) * 5;
 }
 
 /** The first #693 forward control, or null — the single obvious control a model `blocked` is refused beside. */

@@ -7,7 +7,7 @@ import { preflightVerifyRecord, verifyRecordPath, VerifyReceiptPreflightError, w
 import { verifyJourneyMutations } from "./journey-verify.js";
 
 let dir: string;
-const record = () => ({ journeyId: "receipt", contentHash: "a".repeat(64), proofHash: "b".repeat(64), verdict: "proven" as const, summary: {}, at: "2026-10-26T00:00:00.000Z" });
+const record = () => ({ journeyId: "receipt", contentHash: "a".repeat(64), proofHash: "b".repeat(64), verdict: "sensitive" as const, summary: {}, at: "2026-10-26T00:00:00.000Z" });
 const journey = (): Journey => ({ metadata: { id: "receipt", name: "Receipt", params: [], promoted: false, createdAtIso: "2026-10-26T00:00:00.000Z" }, recording: { version: "1", site: "https://example.test", pages: [{ url: "/", steps: [] }] } });
 
 beforeEach(async () => {
@@ -21,7 +21,7 @@ describe("#711 verify receipt destinations", () => {
   it("writes a private receipt through the preflighted atomic destination", async () => {
     await writeVerifyRecord(dir, record());
     const path = verifyRecordPath(dir, "receipt");
-    expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({ verdict: "proven" });
+    expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({ verdict: "sensitive" });
     const stat = await lstat(path);
     expect(stat.mode & 0o777).toBe(0o600);
     if (process.getuid !== undefined) expect(stat.uid).toBe(process.getuid());

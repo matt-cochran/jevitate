@@ -117,7 +117,8 @@ export async function runGoalStrategy(ctx: ExploreRunContext): Promise<void> {
       // prefix re-resolved so its secret params (and so every redaction) hold the bound value.
       if (journeyPrefix !== undefined && prefixRequest !== undefined && Object.values(o.param).some((v) => v.includes("${setup."))) {
         const params = Object.fromEntries(Object.entries(o.param).map(([k, v]) => [k, substituteSetupRefs(v, b, { where: `--param ${k}` })]));
-        journeyPrefix = await resolveJourneyPrefix({ ...prefixRequest, params });
+        // #827: a value a --secret-field bound for the prefix stays (its --param form is the one substituted).
+        journeyPrefix = await resolveJourneyPrefix({ ...prefixRequest, params: { ...prefixRequest.params, ...params } });
         o.secret = [...new Set([...o.secret, ...journeyPrefix.secrets])];
       }
     } catch (err) {

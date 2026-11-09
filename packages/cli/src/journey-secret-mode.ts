@@ -2,7 +2,7 @@ import type { Page } from "playwright";
 import type { SecretMode } from "@jevitate/domain";
 import { parseSecretField, SecretFieldSpecError, type SecretField } from "@jevitate/explore";
 import { flatJourneySteps, type Journey, type SecretRef } from "@jevitate/journey";
-import type { RecordedStep, TargetDescriptor } from "@jevitate/recording";
+import { navigateUrlParams, type RecordedStep, type TargetDescriptor } from "@jevitate/recording";
 import type { HandbackHandler } from "@jevitate/runtime";
 import { Secret, SecretOriginMismatchError, SecretUnresolvableError, type SecretManagerPort } from "@jevitate/runtime";
 import { currentMcpInvocation, inMcpInvocation, noteMcpRefusal } from "./approval-provenance.js";
@@ -201,9 +201,25 @@ export function planSecretRun(req: SecretRunRequest): SecretRunPlan {
     held = missing.filter((n) => !(n in params));
     const targets = secretParamTargets(req.journey);
     for (const name of held) {
-      const elsewhere = others.find(({ field }) => targets.some((t) => t.name === name && fieldMatchesTarget(field, t.target)));
+      const elsewhere = others.find(({ field }) => boundByField(field, name, targets));
       if (elsewhere !== undefined) refuse(originRefused(`secret parameter ${name}`, elsewhere.origin, target), req.mcp);
     }
+  }
+  // #819: a secret no field types (a token in a navigate URL) can't be handed to a person in the browser.
+  const untypable = held.filter((n) => urlSecret(req.journey, n));
+  if (untypable.length > 0) {
+    refuse(
+      new RunModeRefusedError(
+        E_SECRET_MODE_UNAVAILABLE,
+        `${E_SECRET_MODE_UNAVAILABLE}: secret parameter${untypable.length === 1 ? "" : "s"} ${untypable.join(", ")} of journey '${id}' ${untypable.length === 1 ? "goes" : "go"} in a navigate URL, not a field, so a person can't type ${untypable.length === 1 ? "it" : "them"} at a hold, and nobody supplied ${untypable.length === 1 ? "it" : "them"}; nothing ran. ` +
+          `A person binds ${untypable.length === 1 ? "it" : "each"} for ${target.origin} in targets.json["${target.origin}"].secretFields (${untypable.map((n) => `'param=${n}=env:<VAR>'`).join(", ")}; the value comes from the server's environment and is sent to that origin only), ` +
+          `or runs the Journey on the CLI: jevitate journey run ${id} ${untypable.map((n) => `--secret-field 'param=${n}=env:<VAR>'`).join(" ")}. This is not a failed run to retry.`,
+        `targets.json["${target.origin}"].secretFields`,
+        mode,
+        target.trust,
+      ),
+      req.mcp,
+    );
   }
 
   // Recorded handback steps: one operator binding for their field on this origin is vault-autofill.
@@ -282,13 +298,25 @@ function testModeSecrets(req: SecretRunRequest, target: RunTarget, missing: read
     const others = otherOriginFields(req.targetsFile, target.origin);
     const targets = secretParamTargets(req.journey);
     for (const name of left) {
-      const elsewhere = others.find(({ field }) => targets.some((t) => t.name === name && fieldMatchesTarget(field, t.target)));
+      const elsewhere = others.find(({ field }) => boundByField(field, name, targets));
       if (elsewhere !== undefined) refuse(originRefused(`secret parameter ${name}`, elsewhere.origin, target), req.mcp);
     }
     refuse(refusal(left), req.mcp);
   }
   const bound = Object.fromEntries(Object.keys(params).map((n) => [n, supplied.bound?.[n] ?? [target.origin]] as const));
   return { ...NO_PLAN, params, bound, values: Object.values(params), trust: target.trust };
+}
+
+/** Does an operator's binding name this secret parameter: its field's target, or (#819) `param=<name>`? */
+function boundByField(field: SecretField, name: string, targets: ReadonlyArray<{ readonly name: string; readonly target: TargetDescriptor }>): boolean {
+  if (field.matcher.key === "param") return field.matcher.value === name;
+  return targets.some((t) => t.name === name && fieldMatchesTarget(field, t.target));
+}
+
+/** #819: a secret parameter a navigate URL carries, or that no fill/select step types: no person can type it at a hold. */
+function urlSecret(journey: Journey, name: string): boolean {
+  const inUrl = flatJourneySteps(journey).some(({ recorded: { step } }) => step.kind === "navigate" && navigateUrlParams(step.url).includes(name));
+  return inUrl || secretFillIndexes(journey, name).length === 0;
 }
 
 /** The 0-based flat indexes of the fill/select steps that type `name`. */

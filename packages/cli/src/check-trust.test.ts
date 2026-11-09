@@ -46,7 +46,7 @@ afterEach(() => {
 describe("check --require-trust", () => {
   it("a trust edited in the working tree exits 1 naming the environment; after commit it exits 0", async () => {
     write({ staging: { baseUrl: "https://staging.example.test", trust: "test" }, dev: { baseUrl: "https://dev.example.test" } });
-    expect(await run(["--require-trust", "--json"])).toBe(1);
+    expect(await run(["--require-trust", "--json", "--out", join(repo, "out-refused")])).toBe(1);
     const text = out.join("");
     expect(text).toContain("staging");
     expect(text).toContain("E_TRUST_DRIFT");

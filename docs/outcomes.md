@@ -2,6 +2,61 @@
 
 Every Jevitate mission ends in a typed, exit-coded outcome. This page is the full reference; the README keeps the short table.
 
+## What changed in 0.30.0
+
+**Breaking: a pass that cannot show the job got done exits `2`.** In 0.29.0 a run whose steps passed
+exited `0`. From 0.30.0 a run also answers whether the user's job got done
+([did the job get done?](#did-the-job-get-done)). When nothing decides that, the job reads
+`job: { attainment: "unverified", basis: "no-check" }`, and under the default
+`doneCheckPolicy: "require"` the run exits `2` (`inconclusive`): it proves nothing about the job. This
+applies to:
+
+- `journey run` and MCP `run_journey`, when the Journey links no job and has no `metadata.done` of its
+  own, or its job has no `done` check;
+- a queued Journey call (`journey queue`, MCP `queue_journey`) when `mission run` drains it;
+- a goal run (`explore --goal`, MCP `run_exploration`, a queued goal mission) that passed with neither
+  `--success` nor `--job`. Such a pass was accepted by the model's grounded judgment, which is not a
+  check code made against the app's state.
+
+A pass whose done check was already true before the run (`already-true`) or could not be read
+(`reading-unknown`) is also `unverified` and exits `2`. A goal pass verified by a `--success` check
+keeps exit `0`; its job still reads `unverified`. So does a find-out goal whose grounded answer was
+accepted: it claims no end state (`--require-done-check` makes either exit `2`). A failed run keeps its own code, a pending review stays
+`5`, and a pass on a target declared `trust: "harness"` exits `0` ([harness](./harness.md)).
+
+How to migrate:
+
+1. To keep 0.29.0's exit codes while you add done checks, set the policy in `.jevitate/project.json`:
+
+   ```json
+   { "doneCheckPolicy": "advisory" }
+   ```
+
+   An unverified pass then exits `0` again, and the result still carries `job`. Any other value is refused
+   with `E_PROJECT_CONFIG` (exit `64`).
+2. Give each job a `done` check in `.jevitate/jobs.json` ([done-check contract](./contracts/done-check.md)).
+   The check is part of the job's content, so an approved job becomes stale; approve it again with
+   `jevitate job approve <id>`.
+3. Link each Journey to its job: `jevitate journey link <id> --job <jobId>`. On a promoted Journey that
+   makes its approval stale, so promote it again. `jevitate journey lint` reports `missing-done-check` for
+   each promoted Journey whose job has none.
+4. For goal runs, pass `--success <check>` or `--job <id>` (MCP: `success`, `job`).
+5. In CI, read exit `2` as "could not tell", never as a pass or a defect. `job.basis` says why.
+6. When every job has a check, remove `"advisory"`. To make one run strict under an `advisory` project,
+   pass `--require-done-check` (`journey run`, `explore --goal`, `mission queue`; MCP `requireDoneCheck`
+   on `run_exploration` and `queue_exploration`).
+
+The other changes to exit codes:
+
+| Situation | 0.29.0 | 0.30.0 |
+|---|---|---|
+| a Journey's steps pass but its job's done check reads false after the run | `0` | `1` `defects-found`, `failure.kind: "done-check-failed"` |
+| a goal run stops at a boundary: a wall, a lost session, a link off the allowlist, a new tab | `1` `defects-found` (`blocked`) | `2` `inconclusive`, `goalOutcome: "boundary"` ([boundary outcomes](#boundary-outcomes)) |
+| `journey verify --mutate` with every mutation noticed | `0`, `verdict: "proven"` | `0`, `verdict: "sensitive"`, `verdictLegacy: "proven"` until 0.32.0 ([`proven` is now `sensitive`](#proven-is-now-sensitive)) |
+
+No exit number changes its meaning. Mutation proof is advisory: the job's done check is the gate
+([the role of a mutation proof](#the-role-of-a-mutation-proof)).
+
 ## Exit codes
 
 One table for every `jevitate` command (`packages/cli/src/exit-codes.ts`). Other pages list a
@@ -10,8 +65,8 @@ command's codes only as a reminder; this is the reference.
 | Exit | Class | Meaning |
 |---|---|---|
 | `0` | ok | clean, succeeded, check passed, fixed, or the command did what it was asked |
-| `1` | defects | defects found, a gating finding (`check`), still reproduces (`verify-fix`, `ledger verify`, `regression run`), an assertion still passing under its mutation (`journey verify --mutate`), a success check that did not hold, an invalid invariant file (`invariants validate`; an unreadable one is `64`) |
-| `2` | inconclusive | the run or command could not finish its work: `inconclusive`/`crashed`, a `check` item errored or the budget ran out, a queued mission could not run, an unexpected error, or `ledger verify` matched no entries (nothing was verified). It proves nothing. |
+| `1` | defects | defects found, a gating finding (`check`), still reproduces (`verify-fix`, `ledger verify`, `regression run`), an assertion still passing under its mutation (`journey verify --mutate`), a success check that did not hold, a Journey whose steps passed but whose job's done check read false (`failure.kind: "done-check-failed"`), an invalid invariant file (`invariants validate`; an unreadable one is `64`) |
+| `2` | inconclusive | the run or command could not finish its work: `inconclusive`/`crashed`, a `check` item errored or the budget ran out, a queued mission or Journey call could not run, an unexpected error, or `ledger verify` matched no entries (nothing was verified). Also a goal run that stopped at a boundary (`goalOutcome: "boundary"`), and a pass whose job is `unverified` under `doneCheckPolicy: "require"`, the default. It proves nothing. |
 | `3` | hang | the app hung, and the hang reproduced on replay |
 | `4` | intermittent | a hang, or a `verify-fix` signal, fired on some but not every replay |
 | `5` | pending-review | a self-heal produced a proposed Journey revision; nothing passes until a person accepts it (`journey promote <id> --proposal <pid>`) |
@@ -68,9 +123,65 @@ response only, until bytes of its body are reported (see "What a proof assumes")
 sends its headers and keeps working has not answered yet. A frame or a popup starting to load drops nothing. A write still open when any replay closes, or that replay throws or stalls, makes the proof `inconclusive`, and nothing further
 runs, as with a failed fixture restore. A stalled replay whose close never finished can't say what was open, and counts as having a write open, and a resume reads the same. A mutated replay that stopped early still stays open as long as the base did.
 
+### `proven` is now `sensitive`
+
+`journey verify --mutate` reported `verdict: "proven"` when every paired assertion noticed its
+mutations. The word read as "the job got done". It said only that the Journey's checks noticed a changed
+step. From 0.30.0 the word is `sensitive`; the rule behind it is unchanged.
+
+| 0.29.0 | 0.30.0 | Where |
+|---|---|---|
+| `verdict: "proven"` | `verdict: "sensitive"` | `journey verify --mutate --json`, readiness, review |
+| `verdict: "insensitive"` | unchanged | |
+| `verdict: "inconclusive"` | unchanged | |
+| none | `verdictLegacy` | `journey verify --mutate --json`: `"proven"` when `verdict` is `"sensitive"`, otherwise equal to `verdict` |
+| none | `countsForGate: boolean` | `journey verify --mutate --json`: from the target's trust |
+| `mutationProofPolicy: "require-proven"` | `"require-sensitive"` | `project.json`. `"require-proven"` is read as `"require-sensitive"` with one warning per process |
+
+`verdictLegacy` and the `require-proven` alias are removed in 0.32.0. A script that tests
+`verdict === "proven"` breaks in 0.30.0: read `verdictLegacy` until you change it, then read `verdict`.
+A receipt a 0.29.0 proof wrote still reads, as `sensitive`. The exit codes are unchanged: `0` sensitive,
+`1` insensitive, `2` inconclusive.
+
+`countsForGate` is `true` only on a target declared `trust: "test"` or `"harness"`. A proof's strength depends on a target you can reset: it sends
+real writes, including a closing replay, so on a target you cannot reset a `sensitive` reading is
+reported and is not counted by a strict gate. A receipt from before 0.30.0 carries no trust and counts for
+nothing there. `sensitive` says the checks noticed the mutations that ran, under the conditions they ran
+in. It does not say the user's job was done; that is `job.attainment`.
+
+### The role of a mutation proof
+
+**The job's done check is the gate; a mutation proof is advisory.** `job.attainment` decides whether a
+run passed. A mutation proof grades how strong a Journey's own checks are: it is a checks-strength line
+beside the job verdict, never the job verdict.
+
+- `mutationProofPolicy` in `project.json` defaults to `advisory`: a proof's result changes no run's exit
+  code, and neither `journey readiness` nor `journey review --strict` gates on it. A missing, stale,
+  insensitive or unwaived `inconclusive` proof shows on the checks-strength line with a warning; the
+  job verdict gates.
+- `require-attempt` and `require-sensitive` are opt-ins for the review and readiness gate (see
+  [mutation-proof policy](./journeys.md)). Choose `require-sensitive` only for targets you can reset:
+  under it a `sensitive` proof counts only when `countsForGate` is `true` and its receipt names the
+  engine that recorded it (a receipt from before 0.30.0 names none), and no waiver lifts it.
+- `journey readiness` leads with the `job` check: the latest run's `job.attainment`. `not-achieved` exits 1;
+  `unverified` exits 2 under `doneCheckPolicy: "require"` and does not gate under `advisory`.
+- Under `advisory`, a missing, stale or insensitive proof neither blocks `journey readiness` nor fails
+  `journey review --strict`: it is a ○ checks-strength line. An unwaived `inconclusive` attempt stays
+  inconclusive on the line but does not gate either. Under `require-attempt` and `require-sensitive` the
+  proof gates as before. The exit codes that changed are in the
+  [readiness contract](./contracts/readiness-and-bundle.md#3-receipt).
+
+Why. On the accuracy lab (#800, 16 cells, 3 replicates each, real Chromium), the done check caught 27 of
+27 seeded defects with no false alarm on 12 clean cells. Mutation proof caught 24 of 27 and raised 6 false
+alarms on the 12: it reads `inconclusive` on a sound wizard Journey whose each step's check is the next
+step's start. It also said `proven` on a "Saved" page over a masked 500 in 3 of 3 runs, because the
+Journey's checks did notice a skipped Save; the job was never done. Where a proof adds value is the
+Journey's checks: it flagged 2 of the 3 deliberately weak Journeys on the working app, which the done
+check cannot, since there the job really is done. `journey lint` flagged 2 of the 3 in about 1 s.
+
 ### What a proof assumes
 
-A `proven` verdict says what was shown, and no more: this Journey's checks noticed when a recorded step was changed,
+A `sensitive` verdict (0.29.0: `proven`) says what was shown, and no more: this Journey's checks noticed when a recorded step was changed,
 under the conditions the proof ran in. It does not say the Journey's checks are right in general, or that a real job
 can be done. A job being doable is shown by a successful run with a done check, not by a mutation proof. The verdict
 holds only if all of these are true. Each one that fails can produce a false reading.
@@ -99,7 +210,7 @@ holds only if all of these are true. Each one that fails can produce a false rea
   write sent during step n's window, recorded there or not. So a timer's write that lands in the last write step's window
   is blocked by that step's mutation, even if a delta names it under another step or none does. What still holds: the
   check does depend on that write, since it failed when the write was stopped. What does not: the step named may not be
-  the one that caused it, so that step's mutation can read `sensitive` and the proof `proven` without that step mattering.
+  the one that caused it, so that step's mutation can read `sensitive` and the proof `sensitive` without that step mattering.
   To spot it, read `--json`: the site's `provedBy` is `block-write:<n>`, `skip:<n>` passed, and step n's delta does not
   name the check's request. That can also be a real difference between skip and block, so it is a reason to look, not a
   verdict. To correct the credit, move the line to the delta of the step that starts the timer and add
@@ -118,7 +229,7 @@ holds only if all of these are true. Each one that fails can produce a false rea
   document (a form POST whose `no-store` page streams). So a `no-store` response
   whose server has sent its first bytes and goes on working reads as answered after those 2 s for those pages, and what the
   server does next is seen only through the independence replay. If that work changes what a site reads, that site can read
-  `sensitive` and the proof `proven`. This can't be limited to pages that don't read: the browser sends the same kinds of event
+  `sensitive` and the proof `sensitive` too. This can't be limited to pages that don't read: the browser sends the same kinds of event
   for a complete unread body and for the first bytes of one that is read, cloned or beaconed. Their byte counts can differ (on
   chunked HTTP/1.1 they carry framing), but that was seen in one probe and is not relied on. A page that reads a body
   to its end is not at risk once it ends, since the write then finishes.
@@ -128,7 +239,7 @@ holds only if all of these are true. Each one that fails can produce a false rea
   popup sends as it opens, before the replay can watch it; a body a frame or a popup had reported, once the opened page loads
   a new document; a write open in a popup that navigates or closes, which nothing reports; and any unread `no-store` write if the browser doesn't let the replay watch the page within 2 s.
 
-Some readings are limits rather than assumptions: they are never `proven`, but they say less than the Journey deserves.
+Some readings are limits rather than assumptions: they never make a proof `sensitive`, but they say less than the Journey deserves.
 
 - A claim that really depends on the mutated write and also decays inside the hold (a toast shorter than the margin)
   reads `cascade`, and the proof `inconclusive`: the experiment cannot tell it from a claim the hold broke.
@@ -243,11 +354,136 @@ clean.
 Exit `5` is not a failure and not a pass: review the proposal (`jevitate journey review <id>`), then
 `journey promote <id> --proposal <pid>`. Missions never end `pending-review`.
 
+These are the codes of the steps alone. From 0.30.0 the job answer below is folded in
+(`journeyExitCode`, `packages/domain/src/journey-outcome.ts`): it can turn an `ok` into `1` or `2`, and a
+`healed-pending-review` into `1`. It never turns a failed run into a pass.
+
 The MCP tool `get_mission_result` returns the same status and code for a
 finished run; a broken run comes back as an error result. Its `id` is a result stem —
 `explore-<stamp>` (a goal run: `status` is its canonical `missionOutcome`, and its own
 `succeeded`/`failed`/`exhausted`/`blocked` comes back beside it as `goalOutcome`), `coverage-`, `exploratory-`, `adversarial-`, `feature-` or
-`usability-<stamp>` — or a `queue_exploration` `missionId`.
+`usability-<stamp>` — or a `queue_exploration` `missionId`, or a `queue_journey` `callId` (its stored record: see
+[multi-run](./multi-run.md)).
+
+### Did the job get done?
+
+A Journey's steps passing says the path ran as recorded. It does not say the user's objective was met:
+a page can say "Saved" while nothing was stored. So every `journey run`, MCP `run_journey`, drained
+Journey call and goal run reports a second answer beside its outcome:
+
+```json
+"job": { "attainment": "achieved", "basis": "done-check" }
+```
+
+Code decides it, from the job's done check: a statement about the app's state that is false before the
+job is done and true after it, read in a fresh browser context. A model's judgment never decides it.
+The check lives on the job in `.jevitate/jobs.json`; its fields are in the
+[done-check contract](./contracts/done-check.md).
+
+| `attainment` | Meaning |
+|---|---|
+| `achieved` | the done check read false before the run and true after it |
+| `not-achieved` | the done check read false before the run and still false after it: the steps may have passed, but the job did not happen |
+| `unverified` | nothing decided it; `basis` says why |
+
+| `basis` | `attainment` | Why |
+|---|---|---|
+| `done-check` | `achieved` or `not-achieved` | the before reading was false, and the after reading decided it |
+| `already-true` | `unverified` | the check already read true before the run, so the run proves nothing either way. Make the Journey create its own data and name that parameter in `distinguishedBy` |
+| `reading-unknown` | `unverified` | a reading could not be taken: no fresh session could be opened (a persona with no storageState file), the check names something not on the page, the page was replaced, or the check does not pass its lint and was not read |
+| `no-check` | `unverified` | the Journey links no job, its job has no `done` check, the catalog could not be read, or the run used `--no-done-check` |
+| `harness` | `unverified` | the target is declared `trust: "harness"`, which never gives a job verdict ([harness](./harness.md)) |
+
+How a `journey run` reads it:
+
+1. Before step 1, before any fixture runs and before the run's own browser opens, a new headless browser
+   context seeded with the run's storageState opens `at` on the run's origin and reads `check`.
+2. The Journey runs.
+3. After the last step and the end state, a second new context reads it again. Because it is a new
+   session, a page that shows "Saved" with nothing stored reads false.
+
+A reading opens only the run's origin, and an `http` check may GET only that origin. A placeholder
+takes the run's non-secret parameter or `extract` output of that name; the evidence keeps the
+placeholders, never the values. The linked job's check is read whatever the job's approval status.
+
+`explore --goal --job <id>` (MCP `run_exploration {job}`, `queue_exploration {job}`) reads the job's
+check once before the run and again after each `done` the model proposes. A reading that is false rejects
+that `done`, and the run goes on; if it ends there, the job is `not-achieved`. A check that is already
+true before the run reads `already-true`. A job id the catalog does not have is refused with
+`E_EXPLORE_JOB` before the run.
+
+What it costs. Each reading opens a browser context. On the accuracy lab the median passing
+`journey run` took 6.8 s with the done check against 3.7 s without: about 3 s, or 81%, more than a plain
+replay. That is 8.9% of a mutation proof's time on passing runs, and 23.6% across all runs, failing
+ones included (experiment #800).
+
+What a done check cannot do. It says the job's state holds; it cannot say the Journey is the best way
+to reach it. A setting that is always true reads `already-true`. A reading depends on the page the check
+names being readable in a new session with the run's auth. A done check is only as good as the person who
+wrote it.
+
+#### Exit codes for the job answer
+
+The steps' outcome and the job answer give one code (`journeyMissionOutcome`):
+
+| Steps | `job.attainment` | `doneCheckPolicy` | Exit | Result |
+|---|---|---|---|---|
+| `ok` | `achieved` | `require` | `0` | `outcome: ok` |
+| `ok` | `achieved` | `advisory` | `0` | `outcome: ok` |
+| `ok` | `not-achieved` | `require` | `1` | `failure.kind: "done-check-failed"` |
+| `ok` | `not-achieved` | `advisory` | `1` | `failure.kind: "done-check-failed"` |
+| `ok` | `unverified` | `require` | `2` | `inconclusive`; `job.basis` says why |
+| `ok` | `unverified` | `advisory` | `0` | the attainment is still reported |
+| `healed-pending-review` | `not-achieved` | `require` | `1` | the proposal does not do the job |
+| `healed-pending-review` | `unverified` | `require` | `5` | a pending review stays a pending review |
+| `quarantined` | `not-achieved` | `require` | `1` | a failed run keeps its own code |
+
+An `unverified` pass whose `basis` is `harness` always exits `0`, under either policy: it still reads
+`unverified`, so nobody takes it for proof. A done check that reads false is a defect of the app or of the
+Journey; the run's evidence keeps both readings so the author can tell which. A Journey that exited `0` in
+0.29.0 can exit `1` once its job declares a check.
+
+A goal run folds the same way: a pass with an `unverified` job is `inconclusive` (exit `2`) under
+`require`, unless an independent `--success` check verified it. `--require-done-check` makes that pass
+`unverified` too.
+
+#### `doneCheckPolicy`, `--require-done-check`, `--no-done-check`
+
+| Setting | Effect |
+|---|---|
+| `project.json` `"doneCheckPolicy": "require"` | the default. An `unverified` pass exits `2` |
+| `project.json` `"doneCheckPolicy": "advisory"` | an `unverified` pass keeps exit `0`; the attainment is still reported |
+| `journey run --require-done-check` | exit `2` on an unverified pass even when the project says `advisory` |
+| `journey run --no-done-check` | skip both readings. The job reads `unverified`, basis `no-check`, so the run exits `2` unless the policy is `advisory` |
+| `explore --goal --require-done-check` | as on `journey run`; a pass verified only by `--success` counts as unverified too. MCP `requireDoneCheck` on `run_exploration` and `queue_exploration`, and `mission queue --require-done-check` |
+
+`--no-done-check` with `--require-done-check` is refused with `E_JOURNEY_RUN_ARGS` (exit `64`) before any
+browser opens. `run_journey` and `journey queue` take neither option: they follow `project.json`.
+
+### Boundary outcomes
+
+A goal run that reaches a boundary it may not or cannot cross stops and says so, instead of ending
+`blocked` as if the app were broken. Code detects four boundaries, from what the run observed:
+
+| `boundary.kind` | `boundary.signal` | When |
+|---|---|---|
+| `wall` | `http-401`, `http-403` | the page's document, or a write to the run's own origin, answered 401 or 403 |
+| `wall` | `paid-control` | the page offers only a paid control (one the safety policy refuses) where the goal's control would be |
+| `session` | `login-url` | a step settled on a sign-in page the goal did not ask for: the session ended mid-run |
+| `off-allowlist` | `write-refused` | the only way on leaves the allowlist; the run stops before following it |
+| `new-tab` | `tab-opened` | the click opened a tab or window the run cannot follow, or the link would; the tab is closed, not followed |
+
+A boundary run reports `goalOutcome: "boundary"`, `missionOutcome: "inconclusive"` and exit `2`
+(`GOAL_OUTCOME_FOLD`). Its `goalReason` is the signal, and `boundary` carries `kind`, `signal`, the
+`step` and, for an off-allowlist or new-tab stop, the `origin`. Defects found before the boundary are
+still listed, and the run still exits `2`. In 0.29.0 these runs exited `1` as `defects-found`, so a CI
+script that read `1` as "the job is broken" was misled: a boundary says Jevitate was stopped, not that
+the app is wrong. A mutation proof whose run met a boundary is `inconclusive`.
+
+What is not detected. A run in a canvas or an iframe that gives none of these signals is not reported as
+a boundary. A sign-in page is no boundary when the goal is about signing in. A run that finds no route
+reports what it searched, not that no route exists. A goal that stops for another reason (`exhausted`,
+`failed`, `blocked`) keeps its code.
 
 ### Every `outcome`, `stop` and `missionOutcome` value
 
@@ -268,10 +504,11 @@ whose success check did not hold is `missionOutcome: "defects-found"`, `goalOutc
 
 | `goalOutcome` | `missionOutcome` | Exit code | Meaning |
 |---|---|---|---|
-| `succeeded` | `clean` | 0 | every independent success check held |
+| `succeeded` | `clean` | 0 | every independent success check held. Under `doneCheckPolicy: "require"`, a pass that no `--success` check verified and whose job is `unverified` folds to `inconclusive` (2) instead ([did the job get done?](#did-the-job-get-done)) |
 | `failed` | `defects-found` | 1 | the model said `done` (or kept proposing it until code stopped accepting proposals), but an independent success check did not hold — `failure.kind: "success-check-failed"`, the check named in `failure.message` |
 | `exhausted` | `defects-found` | 1 | the action/decision budget ran out before the checks held |
 | `blocked` | `defects-found` | 1 | the loop stopped without the goal met and without claiming it: the model gave up (e.g. no matching control), or no progress was possible |
+| `boundary` | `inconclusive` | 2 | 0.30.0: the run stopped at a wall, a lost session, a link off the allowlist or a new tab ([boundary outcomes](#boundary-outcomes)). `goalReason` is the signal. In 0.29.0 such a run was `blocked`, exit 1 |
 | `defects-found` | `defects-found` | 1 | only when a violated declared invariant overrode an `inconclusive` budget or vacuous-check stop (#423: a defect no longer replaces `succeeded`/`failed`/`exhausted`/`blocked` — see the table below) |
 | `inconclusive` | `inconclusive` | 2 | the run could not do its work (page never rendered, a required model call stayed unavailable) — or every failing success check was **vacuous** (#202: satisfied before the run's first action), so the run proved nothing either way: `failure.kind: "vacuous-check"`, naming the check |
 | `not-started` | `inconclusive` | 2 | #448: the run executed **zero actions** (no controls offered, the auth check failed, a preflight failed), so nothing was exercised — never `clean`, never `succeeded`, whatever else it saw; treated exactly like `inconclusive`. `goalReason` says why (`no-controls`, `auth-failed`, `preflight-failed`, `no-actions`). Defects found passively (console, server log) are still listed in `defects[]` but do not make the run "exercised". A zero-action hang, crash or environment ending (starved host, unreachable target, …) keeps its own outcome. `--allow-vacuous-checks` is the operator's explicit acceptance of a goal that already held before any action: its `succeeded` stays |
@@ -298,8 +535,9 @@ and so the exit code — is derived from both by ONE table (`goalMissionOutcome`
 | `intermittent` | `intermittent` (4) | `intermittent` (4) |
 | `inconclusive` / `crashed` | that outcome (2) | that outcome (2) |
 | `not-started` | `inconclusive` (2) | `inconclusive` (2) |
+| `boundary` | `inconclusive` (2) | `inconclusive` (2) |
 
-Every exit code is the same as in 0.7.0. In particular a goal that was not achieved with no defect
+Every exit code is the same as in 0.7.0, except that a `boundary` (0.30.0) was `blocked` (1). In particular a goal that was not achieved with no defect
 still exits 1 (the long-standing "the check failed" code): read `defectOutcome.status: "none"` and
 `goalReason` to tell "untested because the agent could not do it" from "tested and found bugs". A
 hang or a broken run dominates its defects, which are still listed and counted.
@@ -320,10 +558,16 @@ achieved, decided by code from the run's state, never parsed from `reason`:
 | `vacuous-check` | every failing check was satisfied before the first action |
 | `broken-run` | the run itself broke or proved nothing: a crash, an unreachable or unresponsive app, a starved host, an unreadable `--log-defect` oracle, a kill |
 | `defects` | `goalOutcome: "defects-found"` with no more specific cause |
+| `http-401`, `http-403`, `paid-control`, `login-url`, `write-refused`, `tab-opened` | `boundary`: the signal the run stopped at ([boundary outcomes](#boundary-outcomes)) |
 
 The human summary prints both: `GOAL blocked (not-found, stop: blocked)` and `DEFECTS server-log 2`
 (or `none`). `jevitate report` shows them per run, and `check`'s `--fake-ai` rule (a goal-only miss is
 inconclusive under the fake judge) no longer hides a defect the run found.
+
+A goal run whose decision budget runs out on the turn straight after a refused `blocked` ends
+`stop: "exhausted"` with `goalReason: "budget"`, and its `reason` says so: `decision budget ran out straight
+after a refused blocked (N decisions, M actions) — the decision the refusal asked for was never taken: "<the
+refusal>"`.
 
 **Goal / explore loop — `stop: StopReason`**, why the loop itself stopped acting (folds into
 the `goalOutcome` above; not separately exit-coded):

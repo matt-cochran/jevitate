@@ -47,6 +47,14 @@ export interface PriceTable {
 }
 
 const JEV_1_13: ModelPrice = { inputUsdPerMtok: 0.042, outputUsdPerMtok: 0 };
+/**
+ * GAPS 18 (0.30.0): Jev 1.14, the model the TypeSafe route answers with since 2026-10-14 (`jev-1.14.0`).
+ * From OpenRouter's public endpoints API, https://openrouter.ai/api/v1/models/typesafe/jev-1.14/endpoints,
+ * retrieved 2026-11-09: provider TypeSafe, endpoint `typesafe/jev-1.14-20261014`, `pricing.prompt`
+ * "0.000000042" USD/token ($0.042/Mtok input), `pricing.completion` "0". The model is not in the flat
+ * `/api/v1/models` listing (only `typesafe/jev-router`, priced per request), so the endpoints API is the source.
+ */
+const JEV_1_14: ModelPrice = { inputUsdPerMtok: 0.042, outputUsdPerMtok: 0 };
 
 /**
  * Jev (TypeSafe `systemOne`) prices, from TypeSafe's own model page: Jev 1.13 is "$42 / $0.042"
@@ -64,10 +72,13 @@ export const JEV_PRICE_TABLE: PriceTable = {
   // `usage.cost` on every answered call, so these price only a response that lacks one.
   models: {
     "jev-1.13.0": JEV_1_13,
+    "jev-1.14.0": JEV_1_14,
     "jev-latest": JEV_1_13,
     "jev-preview": JEV_1_13,
     "typesafe/jev-1.13": JEV_1_13,
     "typesafe/jev-1.13-20260917": JEV_1_13,
+    "typesafe/jev-1.14": JEV_1_14,
+    "typesafe/jev-1.14-20261014": JEV_1_14,
     "~typesafe/jev-latest": JEV_1_13,
   },
 };

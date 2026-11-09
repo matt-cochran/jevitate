@@ -17,6 +17,7 @@ import {
   type MutationPlan,
   type MutationRunResult,
   mutationPlanSites,
+  endStateIsolationNotes,
 } from "./index.js";
 import { classifyMutation, judgeAssertions as judgeSites, mutationProofVerdict } from "@jevitate/adjudicator";
 /** #812: the adjudicator's judging of a Journey's own assertion sites, as `journey verify` gathers them. */
@@ -142,6 +143,89 @@ describe("#609 nextTargetedRelaxation", () => {
       expect(next).toEqual({
         refuse: "end-state:0 is not an earlier step assertion: only end-state:0 failed, so step:2 held under skip:2 and cannot show what it changes; make step:2's own check read what skip:2 removes, or remove step:2's claim",
       });
+    });
+  });
+
+  // #817: three sibling end-state checks on one write; the reloadThen absence check holds on a view that has not loaded.
+  describe("sibling end-state checks (#817)", () => {
+    const owner = (absence = true): Journey =>
+      JourneySchema.parse({
+        metadata: {
+          id: "owner-help",
+          name: "Resolve owner help",
+          promoted: false,
+          params: [],
+          createdAtIso: "2026-11-09T00:00:00Z",
+          endState: [
+            { kind: "responseStatus", method: "POST", pathGlob: "/api/resolve", status: { class: 2 } },
+            { kind: "reloadThen", assertion: absence ? { kind: "count", target: { css: ".request" }, max: 0 } : { kind: "textIncludes", target: { css: "#open" }, text: "0 open" } },
+            { kind: "http", method: "GET", url: "http://127.0.0.1:1/api/state", textIncludes: ['"ownerHelpOpen":0'] },
+          ],
+          mutationPairs: [0, 1, 2].flatMap((i) => [
+            { check: `end-state:${i}`, mustFailWhen: "skip:3" },
+            { check: `end-state:${i}`, mustFailWhen: "block-write:3" },
+          ]),
+        },
+        recording: {
+          version: "1",
+          site: "http://127.0.0.1:1",
+          pages: [
+            {
+              url: "/help",
+              steps: [
+                { step: { kind: "navigate", url: "/help", expect: { kind: "visible", target: { role: "heading", name: "Owner help" } } } },
+                { step: { kind: "click", target: { role: "button", name: "Today" }, expect: { kind: "visible", target: { css: ".request" } } } },
+                {
+                  step: { kind: "click", target: { role: "button", name: "Done" }, expect: { kind: "count", target: { css: ".request" }, max: 0 } },
+                  expectRequests: [{ kind: "responseStatus", method: "POST", pathGlob: "/api/resolve", status: { class: 2 } }],
+                  delta: { verdict: "relevant-change", why: "resolved", changes: [], requests: ["POST /api/resolve → 200"], overheadMs: 1 },
+                },
+              ],
+            },
+          ],
+        },
+      });
+    const skip3: JourneyMutation = { kind: "skip", step: 3, id: "skip:3" };
+    const siblingsFailed = { outcome: "failed" as const, failedSites: [{ where: "end-state" as const, index: 0 }, { where: "end-state" as const, index: 2 }] };
+
+    it("a target judged and held while its siblings failed says it is not a cascade of them, and stays refused", () => {
+      const j = owner();
+      const next = nextTargetedRelaxation(j, planJourneyMutations(j), skip3, "end-state:1", siblingsFailed, ["step-request:3:0"]);
+      expect(next).toEqual({
+        refuse:
+          "end-state:1 was judged and held under skip:3 while its sibling end-state checks end-state:0, end-state:2 failed: end-state checks are judged independently, so no sibling is relaxed to isolate it (unsupported, and it would change nothing); the base passed end-state:1 as well, so it holds with and without what skip:3 removes, and as an absence check it also holds on a page or view that has not loaded; make end-state:1 read state skip:3 removes (for an absence check, first wait for content that shows the view loaded), or remove end-state:1's claim",
+      });
+    });
+
+    it("a non-absence target held while its siblings failed gets the same diagnosis without the unloaded-view note", () => {
+      const j = owner(false);
+      const next = nextTargetedRelaxation(j, planJourneyMutations(j), skip3, "end-state:1", siblingsFailed, []);
+      expect(next).toEqual({
+        refuse:
+          "end-state:1 was judged and held under skip:3 while its sibling end-state checks end-state:0, end-state:2 failed: end-state checks are judged independently, so no sibling is relaxed to isolate it (unsupported, and it would change nothing); the base passed end-state:1 as well, so it holds with and without what skip:3 removes; make end-state:1 read state skip:3 removes, or remove end-state:1's claim",
+      });
+    });
+
+    it("the classification stays cascade: the diagnosis never moves the verdict toward sensitive", () => {
+      const j = owner();
+      const site = journeyAssertions(j).find((s) => assertionSiteKey(s) === "end-state:1")!;
+      const refused = nextTargetedRelaxation(j, planJourneyMutations(j), skip3, "end-state:1", siblingsFailed, []);
+      expect(refused).toHaveProperty("refuse");
+      const result: MutationRunResult = { ...siblingsFailed, targeted: [{ site: "end-state:1", relaxedSites: [], outcome: "failed", failedSites: siblingsFailed.failedSites, refused: (refused as { refuse: string }).refuse }] };
+      expect(classifyMutation(site, skip3, result)).toBe("cascade");
+    });
+
+    it("--plan names the shape before any browser: an absence end-state check sharing its mutations with sibling end-state checks", () => {
+      const j = owner();
+      expect(endStateIsolationNotes(j, planJourneyMutations(j))).toEqual([
+        {
+          site: "end-state:1",
+          note: "end-state:1 checks an absence (it also holds on a page or view that has not loaded) and shares block-write:3, skip:3 with sibling end-state checks end-state:0, end-state:2: if it holds while they fail, no targeted proof can isolate it (sibling end-state checks are never relaxed) and it stays a cascade; first wait for content that shows the view loaded",
+        },
+      ]);
+      // A positive read of the loaded state is not that shape.
+      const positive = owner(false);
+      expect(endStateIsolationNotes(positive, planJourneyMutations(positive))).toEqual([]);
     });
   });
 

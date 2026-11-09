@@ -88,7 +88,9 @@ export interface ReconcileLinkedInput extends Omit<ReconcileInput, "job"> {
 export async function reconcileLinkedJob(input: ReconcileLinkedInput): Promise<ReconcileResult> {
   let job: JobDoneView | undefined;
   try {
-    job = linkedJobDone(await loadCatalog(input.catalogDir, input.journeysDir), input.journey);
+    // Design §3.1: a Journey that links no job reconciles against its own metadata.done.
+    const own = input.journey.metadata.job === undefined ? input.journey.metadata.done : undefined;
+    job = own !== undefined ? { id: input.journey.metadata.id, status: "draft", done: own } : linkedJobDone(await loadCatalog(input.catalogDir, input.journeysDir), input.journey);
   } catch {
     job = undefined;
   }

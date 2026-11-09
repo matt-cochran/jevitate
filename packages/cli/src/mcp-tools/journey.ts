@@ -152,6 +152,10 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
     if (stepResponseTimeoutMs !== undefined && stepResponseTimeoutMs > MAX_STEP_RESPONSE_TIMEOUT_MS) {
       throw new McpArgError(`'stepResponseTimeoutMs' must be an integer from 1 to ${MAX_STEP_RESPONSE_TIMEOUT_MS}`);
     }
+    // #800: `journey run --no-done-check` / `--require-done-check`, refused together as the CLI refuses them.
+    const noDoneCheck = optBool(args, "noDoneCheck") === true;
+    const requireDoneCheck = optBool(args, "requireDoneCheck") === true;
+    if (noDoneCheck && requireDoneCheck) throw new McpArgError("'noDoneCheck' and 'requireDoneCheck' cannot be used together");
     const healRequest: JourneyHealRequest = {
       selfHeal,
       ...(changes === undefined ? {} : { changes }),
@@ -193,6 +197,8 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
         ...(screenshots === undefined ? {} : { screenshots }),
         ...(optBool(args, "actionDeltas") === true ? { actionDeltas: true } : {}),
         ...(stepResponseTimeoutMs === undefined ? {} : { stepResponseTimeoutMs }),
+        ...(noDoneCheck ? { noDoneCheck: true } : {}),
+        ...(requireDoneCheck ? { requireDoneCheck: true } : {}),
       },
       ...(usage === undefined ? {} : { usage }),
     };
@@ -262,7 +268,7 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
         "with a clear error when no storageState is given. #255 (same as the CLI flags): 'env' (a named environment in .jevitate/environments.json; its session from ~/.jevitate/targets.json) and/or 'baseUrl'; " +
         "'headed' (needs a display) and 'slowMo'; 'recordVideo' (true, or a directory) → videoPaths; 'screenshots' (true | screens | steps | mode:<dir> | <dir>) → screenshotPaths; " +
         "'viewport' {width,height} or 'device' (mutually exclusive); 'geolocation' '<lat>,<lng>[,<accuracy m>]' (#329); 'fixtures' (a fixtures JSON path: setup before, restore after; 'fixtureIdentity' (#243) 'name=<storageState path>' entries name who a step with auth.identity authenticates as; an environment's shell hooks are never run over MCP — they refuse as the CLI does without --allow-shell-hooks); " +
-        "'extension' (#256: unpacked extension directories inside the project or ~/.jevitate; a Journey recorded with extensions needs the same build); 'selfHeal' fail-closed (default) | hybrid | full with 'real' or 'fakeAi' (a write step never self-heals; 'jevProvider' typesafe | openrouter picks the Jev key with real, #429) — #453: a heal mode needs a change context, 'changes' (a git range such as HEAD~1..HEAD, read-only) and/or 'changeNote' (strings), else it is refused; only a break that change explains is retargeted, one-for-one, and the run ends healed-pending-review (exitCode 5: a proposed revision a person accepts, never a pass); budgets 'healMaxAttempts'/'healMaxModelCalls'/'healMaxMs' (per broken step) and 'healMaxRunAttempts'/'healMaxRunMs' (per run), each >= 1; the result's 'exitCode' is the CLI's (0 ok, 5 pending review, 1 failed); 'actionDeltas' (#303, opt-in: each replayed step's action delta, compared with the recorded one → actionDeltas); 'stepResponseTimeoutMs' (#486, 1..300000, default 15000: how long a step's responseStatus check waits for a request sent but not yet answered, e.g. a cold start — a late 2xx is an advisory slowSteps finding; a step's own responseTimeoutMs overrides it); 'maxBrowsers'/'maxBrowserMemory' (#205: machine-wide browser cap, browser memory ceiling in MiB); 'tags' (#426: {key: value} run metadata, returned on the result — never a secret). A site-policy refusal is {error: throttled, retryAfter}.",
+        "'extension' (#256: unpacked extension directories inside the project or ~/.jevitate; a Journey recorded with extensions needs the same build); 'selfHeal' fail-closed (default) | hybrid | full with 'real' or 'fakeAi' (a write step never self-heals; 'jevProvider' typesafe | openrouter picks the Jev key with real, #429) — #453: a heal mode needs a change context, 'changes' (a git range such as HEAD~1..HEAD, read-only) and/or 'changeNote' (strings), else it is refused; only a break that change explains is retargeted, one-for-one, and the run ends healed-pending-review (exitCode 5: a proposed revision a person accepts, never a pass); budgets 'healMaxAttempts'/'healMaxModelCalls'/'healMaxMs' (per broken step) and 'healMaxRunAttempts'/'healMaxRunMs' (per run), each >= 1; the result's 'exitCode' is the CLI's (0 ok, 5 pending review, 1 failed); 'actionDeltas' (#303, opt-in: each replayed step's action delta, compared with the recorded one → actionDeltas); 'stepResponseTimeoutMs' (#486, 1..300000, default 15000: how long a step's responseStatus check waits for a request sent but not yet answered, e.g. a cold start — a late 2xx is an advisory slowSteps finding; a step's own responseTimeoutMs overrides it); 'maxBrowsers'/'maxBrowserMemory' (#205: machine-wide browser cap, browser memory ceiling in MiB); 'tags' (#426: {key: value} run metadata, returned on the result — never a secret); 'noDoneCheck' (#800, `--no-done-check`: skip the linked job's done check; the job reads unverified, basis no-check, which exits 2 unless project.json doneCheckPolicy is advisory) and 'requireDoneCheck' (`--require-done-check`: an unverified job exits 2 even under the advisory policy), not both. A site-policy refusal is {error: throttled, retryAfter}.",
       inputSchema: {
         type: "object",
         properties: {
@@ -296,6 +302,8 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
           maxBrowserMemory: { type: "integer", minimum: 1 },
           actionDeltas: { type: "boolean" },
           stepResponseTimeoutMs: { type: "integer", minimum: 1, maximum: MAX_STEP_RESPONSE_TIMEOUT_MS },
+          noDoneCheck: { type: "boolean" },
+          requireDoneCheck: { type: "boolean" },
           tags: { type: "object", additionalProperties: { type: "string" } },
         },
         required: ["id"],

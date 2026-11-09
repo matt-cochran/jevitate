@@ -97,6 +97,14 @@ export function isQueuedMissionId(id: unknown): id is string {
   return typeof id === "string" && QUEUED_MISSION_ID.test(id);
 }
 
+/** #797: a `queue_journey` callId: `journey-` plus a lowercase RFC 4122 uuid (what `queueJourney` generates). */
+const QUEUED_JOURNEY_CALL_ID = /^journey-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** True for a `queue_journey` callId — resolved to its stored queue record (GAPS 19). A closed shape: never a path. */
+export function isQueuedJourneyCallId(id: unknown): id is string {
+  return typeof id === "string" && QUEUED_JOURNEY_CALL_ID.test(id);
+}
+
 /**
  * The result file a (validated) result id names: `<stem>.result.json`, with a usability report stem
  * mapped onto its Recording's (`usability-<stamp>` → `usability-<stamp>.recording.result.json`).

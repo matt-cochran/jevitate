@@ -47,7 +47,7 @@ beforeEach(async () => {
   const store = new FsJourneyStore(dir); await store.put(journey); stored = (await store.get("sample"))!;
   stored.metadata.anchors![0]!.stepId = stored.recording.pages[0]!.steps[0]!.stepId;
   await store.put(stored); stored = (await store.get("sample"))!;
-  await writeVerifyRecord(dir, { journeyId: "sample", contentHash: journeyReviewHash(stored), proofHash: journeyProofHash(stored), verdict: "proven", summary: { sensitive: 1, insensitive: 0, unpaired: 0 }, at: "2026-11-07T00:00:00Z" });
+  await writeVerifyRecord(dir, { journeyId: "sample", contentHash: journeyReviewHash(stored), proofHash: journeyProofHash(stored), verdict: "sensitive", summary: { sensitive: 1, insensitive: 0, unpaired: 0 }, at: "2026-11-07T00:00:00Z" });
 });
 afterEach(async () => { for (const stop of unregister) stop(); vi.restoreAllMocks(); process.exitCode = 0; await rm(root, { recursive: true, force: true }); });
 
@@ -68,7 +68,7 @@ describe("native read-only pre-approval projection", () => {
     expect(result.readyForOwnerReview).toBe(true);
     expect(result.pendingActions.map((a) => a.kind)).toEqual(["persona-approve", "job-approve", "annotation-approve", "journey-promote"]);
     expect(result.candidate.source).toBe("annotation");
-    expect(result.review.proof.verify).toMatchObject({ status: "recorded", stale: false, verdict: "proven" });
+    expect(result.review.proof.verify).toMatchObject({ status: "recorded", stale: false, verdict: "sensitive" });
     expect((await reviewJourneyById(dir, "sample", { ...opts(), strict: true })).review.attention!.filter((a) => a.severity === "warn").length).toBeGreaterThan(0);
     expect(await bytes()).toEqual(before);
   });

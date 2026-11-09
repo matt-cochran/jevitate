@@ -834,7 +834,7 @@ describe("nothing secret-bound goes to a model: self-heal", { timeout: 120_000 }
 
   it.each([
     ["a parameter", { passengers: "2" }, [{ step: { kind: "fill", target: { testId: "who" }, value: { var: "passengers" }, expect: { kind: "visible", target: { testId: "who" } } } }], "passengers"],
-    ["an extract", {}, [{ step: { ...extractKey.step, as: "token_count" } }], "token_count"],
+    ["an extract", {}, [{ step: { ...extractKey.step, as: "issueKey" } }], "issueKey"],
   ] as const)("a name that only looks like a credential, on %s: refused, naming the way out, and a person's secret: false heals", async (what, params, extra, name) => {
     const id = `heal-broad-${what.replace(/\W+/g, "-")}`;
     const make = (): Journey => {
@@ -860,6 +860,23 @@ describe("nothing secret-bound goes to a model: self-heal", { timeout: 120_000 }
     const byPerson = await heal(id, lifted("tty"), params, { keepApproval: true });
     expect(byPerson.sent.length).toBeGreaterThan(0);
     expect(byPerson.text).not.toContain("self-heal skipped");
+  });
+
+  // Extract naming (0.29.0 accepted limit): an extract's name decides by the narrower credential rule.
+  it.each(["passengers", "token_count", "tokenCount", "session_name", "cookie_banner", "footprint", "bypass_cache"])("an extract named %s only contains a credential fragment or describes one: heals, the model is asked", async (name) => {
+    const id = `heal-extract-${name.replace(/\W+/g, "-")}`;
+    const r = await heal(id, noSecretJourney(id, [{ step: { ...extractKey.step, as: name } }]), {});
+    expect(r.sent.length).toBeGreaterThan(0);
+    expect(r.text).not.toContain("self-heal skipped");
+  });
+
+  it.each(["authToken", "password", "session_id", "csrfToken", "pwd", "otp", "access_key", "authorization", "user_pass", "secretary"])("an extract named %s, a credential name: skipped, no model call", async (name) => {
+    const id = `heal-extract-cred-${name.replace(/\W+/g, "-")}`;
+    const r = await heal(id, noSecretJourney(id, [{ step: { ...extractKey.step, as: name } }]), {});
+    expect(r.sent).toEqual([]);
+    expect(r.text).toContain("self-heal skipped");
+    expect(r.text).toContain(`extracted credential ${name}`);
+    expect(r.text).not.toContain("ExtractVal5Rt1");
   });
 
   it("a run holding none still heals: the model is asked", async () => {
@@ -939,6 +956,25 @@ describe("nothing secret-bound goes to a model: annotate", { timeout: 120_000 },
     const byPerson = await annotate(lifted(), { passengers: "2" }, {}, "tty");
     expect(byPerson.err).toBeUndefined();
     expect(byPerson.sent.length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ["passengers", true],
+    ["token_count", true],
+    ["otp_channel", true],
+    ["authToken", false],
+    ["session_id", false],
+    ["apiKey", false],
+  ] as const)("an extract named %s: annotated only when the name is not a credential name", async (name, annotates) => {
+    const r = await annotate(plain(`an-extract-${name.replace(/\W+/g, "-")}`, [{ step: { kind: "extract", target: { testId: "pw" }, as: name, attr: "id", expect: { kind: "visible", target: { testId: "pw" } } } }]), {});
+    if (annotates) {
+      expect(r.err).toBeUndefined();
+      expect(r.sent.length).toBeGreaterThan(0);
+    } else {
+      expect(r.err).toBeInstanceOf(SecretBoundJourneyError);
+      expect((r.err as Error).message).toContain(`extracted credential ${name}`);
+      expect(r.sent).toEqual([]);
+    }
   });
 
   it("annotate_journey says so over MCP, by name", async () => {

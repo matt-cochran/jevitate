@@ -1,3 +1,5 @@
+import { inMcpInvocation } from "./approval-provenance.js";
+import { missingSecretParams, secretParamAtRestMessage, secretParamsCarriedBy, specsBinding, withSecretParamsFor } from "./secret-params.js";
 import { existsSync, readFileSync } from "node:fs";
 import { reportSlowness, type JourneyReplaySlowness, type SlownessReport } from "./cold-start-report.js";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -89,6 +91,8 @@ export interface CampaignJobPlan {
   readonly id: string;
   readonly journey: string;
   readonly params: Readonly<Record<string, string>>;
+  /** #827: the `--secret-field` bindings that bind this job's Journey (specs, never values). */
+  readonly secretFields?: readonly string[];
   readonly storageState?: string;
   /** #485: the Journey's first page on the campaign's environment (the preflight's reachability and signed-in checks). */
   readonly startUrl?: string;
@@ -128,6 +132,12 @@ export interface ValidateCampaignOptions {
   readonly hookTimeoutMs?: number;
   /** #247 seams (`environments.json`, `targets.json`). */
   readonly environmentSeams?: { readonly environmentsFile?: string; readonly targetsFile?: string };
+  /** #827: `--secret-field` bindings (variable names only) every replay and mission of the campaign takes. */
+  readonly secretFields?: readonly string[];
+  /** #827: the jobs' params came from the command line (`explore --at-step all --param`), not a file at rest. */
+  readonly paramsFromArgv?: boolean;
+  /** Where a binding's `env:` source is read (default `process.env`). */
+  readonly env?: Readonly<Record<string, string | undefined>>;
 }
 
 const at = (path: readonly PropertyKey[]): string => (path.length === 0 ? "spec" : path.map((p) => (typeof p === "number" ? `[${p}]` : `.${String(p)}`)).join("").replace(/^\./, ""));
@@ -242,10 +252,20 @@ export async function validateCampaignSpec(raw: unknown, specPath: string, opts:
     }
     if (new Set(anchors.map((a) => a.branch.step)).size !== anchors.length) problems.push(`${where}.anchors: two anchors name the same step`);
     const deepest = Math.max(0, ...anchors.map((a) => a.branch.step));
+    // #827: a secret parameter's value never sits in the spec file; a binding supplies it.
+    const atRest = opts.paramsFromArgv === true ? [] : secretParamsCarriedBy(stored, job.params ?? {});
+    if (atRest.length > 0) problems.push(`${where}.params: ${secretParamAtRestMessage(atRest, "the campaign spec")}`);
     if (deepest > 0) {
       try {
         const prefix = journeyPrefix(full, deepest);
-        validateParams(journeyParamSchema(prefix), prefixParams(full, prefix, job.params ?? {}));
+        const given = job.params ?? {};
+        // Over MCP the missions' secret mode supplies a secret the spec leaves out (the operator's targets.json);
+        // on the CLI a --secret-field or the environment's targets.json binding must cover it now.
+        const specs = [...(opts.secretFields ?? []), ...(environment?.secretFields ?? [])];
+        const supplied = specs.length === 0 ? given : withSecretParamsFor(full, { id: job.journey, params: given, flags: [], targetFields: specs, targetOrigin: new URL(full.recording.site).origin, env: opts.env ?? process.env }).params;
+        const leftToSecretMode = inMcpInvocation() ? new Set(missingSecretParams(prefix, prefixParams(full, prefix, supplied))) : new Set<string>();
+        const schema = journeyParamSchema(prefix);
+        validateParams({ ...schema, required: schema.required.filter((n) => !leftToSecretMode.has(n)) }, prefixParams(full, prefix, supplied));
       } catch (err) {
         problems.push(`${where}.params: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -276,10 +296,17 @@ export async function validateCampaignSpec(raw: unknown, specPath: string, opts:
     }
     totalRuns += anchors.length * job.strategies.length;
     const declaredContext = declaredContextOf(full.metadata);
+    let jobSecretFields: string[] = [];
+    try {
+      jobSecretFields = specsBinding(full, opts.secretFields ?? [], opts.env ?? process.env);
+    } catch (err) {
+      problems.push(`${where}: ${err instanceof Error ? err.message : String(err)}`);
+    }
     jobs.push({
       id: job.id,
       journey: job.journey,
       params: job.params ?? {},
+      ...(jobSecretFields.length === 0 ? {} : { secretFields: jobSecretFields }),
       ...(session === undefined ? {} : { storageState: session }),
       startUrl: journeyStartUrl(full.recording),
       allowlist: environment === undefined ? [new URL(full.recording.site).origin] : [...environment.allowedOrigins],
@@ -443,6 +470,8 @@ function budgetsOf(maxActions: number | undefined, maxDecisions: number | undefi
 function commonArgs(plan: CampaignPlan, job: CampaignJobPlan): string[] {
   return [
     ...Object.entries(job.params).flatMap(([k, v]) => ["--param", `${k}=${v}`]),
+    // #827: a binding's spec, never its value: each replay reads the variable itself.
+    ...(job.secretFields ?? []).flatMap((spec) => ["--secret-field", spec]),
     ...(plan.env === undefined ? [] : ["--env", plan.env]),
     ...(plan.baseUrl === undefined ? [] : ["--base-url", plan.baseUrl]),
     ...(job.storageState === undefined ? [] : ["--storage-state", job.storageState]),

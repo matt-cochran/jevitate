@@ -35,7 +35,17 @@ import { loadLogClassRules } from "./log-classes.js";
 import { parseCorrelationHeaders, parseLogIdPatterns } from "./log-trace.js";
 import { buildMissionFixtures, checkSetupRefs } from "./fixture-cli.js";
 import { substituteSetupRefs, type MissionFixtures } from "./mission-fixtures.js";
-import { clock } from "@jevitate/domain";
+import { clock, combineOutcomes, journeyExitCode, safeRunPolicy, JOURNEY_RUN_OUTCOMES, MISSION_EXIT_CODES, MISSION_OUTCOMES, type JourneyRunOutcome, type MissionOutcome } from "@jevitate/domain";
+import type { ClaimOwner, JourneyCallQueueStore, QueuedJourneyRecord } from "@jevitate/missions";
+import { runAsMcpInvocation } from "./approval-provenance.js";
+import { exploreDoneCheckPolicy, prepareJobDoneCheck } from "./explore-job-done-check.js";
+import { resolveCatalogDir } from "./catalog-api.js";
+import { resolveLayout } from "./project-layout.js";
+import { heldOutcomeOf } from "./journey-hold.js";
+import { withJourneyRunRecord } from "./journey-run-record.js";
+import { assertMcpRunnable } from "./journey-stale-api.js";
+import { missingSecretParams, withSecretParamsFor } from "./secret-params.js";
+import { withSiteGate } from "./site-gate-cli.js";
 import { inMcpInvocation } from "./approval-provenance.js";
 import { prepareMcpRunGuard } from "./mcp-run-guard.js";
 import { withRunMetadata } from "./run-metadata.js";
@@ -103,7 +113,44 @@ export interface DrainReport {
   readonly recovered: RecoveredMission[];
   /** Left `queued` for a later drain (e.g. a model-driven mission when no gateway was selected). */
   readonly skipped: SkippedMission[];
+  /** #797: the queued Journey calls this drain ran (present only when it ran one). */
+  readonly journeys?: DrainedJourneyCall[];
+  /** GAPS 20: queued Journey calls a dead drain left `running`, now recorded `failed`, never re-run (present only when there was one). */
+  readonly journeysRecovered?: RecoveredJourneyCall[];
 }
+
+/** GAPS 20: a queued Journey call recovered from a dead drain, as `RecoveredMission`. */
+export interface RecoveredJourneyCall {
+  readonly callId: string;
+  readonly error: string;
+}
+
+/** #797: one queued Journey call, drained. `done`: it reached an outcome; `failed`: it could not run (a refusal, `code`). */
+export interface DrainedJourneyCall {
+  readonly callId: string;
+  readonly journey: string;
+  readonly status: "done" | "failed";
+  readonly outcome?: string;
+  readonly exitCode?: number;
+  readonly runId?: string;
+  readonly code?: string;
+  readonly error?: string;
+  /** GAPS 21 (#800): the linked job's verdict from its done check, as `journey run` reports it. */
+  readonly job?: { readonly attainment: string; readonly basis: string };
+}
+
+/** #797: what a drained Journey call ended as. A refusal before the run throws instead (the drain records it `failed`). */
+export interface QueuedJourneyRun {
+  readonly outcome: string;
+  readonly exitCode: number;
+  /** The run record's key (`journey-evidence-<runId>`), when run records are on. */
+  readonly runId?: string;
+  readonly code?: string;
+  /** GAPS 21 (#800): the linked job's verdict from its done check. */
+  readonly job?: { readonly attainment: string; readonly basis: string };
+}
+
+export type QueuedJourneyExecutor = (call: QueuedJourneyRecord["call"]) => Promise<QueuedJourneyRun>;
 
 export interface DrainMissionQueueOptions {
   readonly queue: DrainableMissionQueueStore;
@@ -120,6 +167,8 @@ export interface DrainMissionQueueOptions {
   readonly isAlive?: (pid: number) => boolean;
   /** A `running` mission whose drain cannot be checked (another host, an old claim) is abandoned after this long (default 12h). */
   readonly orphanAfterMs?: number;
+  /** #797: the queued Journey calls (`queue_journey` / `journey queue`), drained after the missions, oldest first. */
+  readonly journeyCalls?: { readonly store: JourneyCallQueueStore; readonly execute: QueuedJourneyExecutor };
 }
 
 /** `<dir>/<stem>.result.json` → `<stem>`: the id `get_mission_result` takes. */
@@ -206,7 +255,88 @@ export async function drainMissionQueue(opts: DrainMissionQueueOptions): Promise
     ran.push(drained);
     opts.onMission?.(drained);
   }
-  return { ran, recovered, skipped };
+  const journeysRecovered = opts.journeyCalls === undefined ? [] : await recoverOrphanJourneyCalls(opts.journeyCalls.store, opts, self, now);
+  const journeys = opts.journeyCalls === undefined ? [] : await drainJourneyCalls(opts.journeyCalls, self, now);
+  return { ran, recovered, skipped, ...(journeys.length === 0 ? {} : { journeys }), ...(journeysRecovered.length === 0 ? {} : { journeysRecovered }) };
+}
+
+/**
+ * Whether a `running` claim belongs to a drain that died (GAPS 20; the rule `recoverOrphans` applies to
+ * missions): a claim of this process is its own; on this host, its process is gone; when that cannot be
+ * checked (another host, a claim with no owner), it has been running longer than `orphanAfterMs`.
+ * Returns the error to record, or undefined while it may still be running.
+ */
+function orphanError(
+  owner: ClaimOwner | null,
+  startedIso: string,
+  opts: Pick<DrainMissionQueueOptions, "isAlive" | "orphanAfterMs">,
+  self: { readonly pid: number; readonly host: string },
+  now: () => string,
+): string | undefined {
+  const isAlive = opts.isAlive ?? processAlive;
+  const orphanAfterMs = opts.orphanAfterMs ?? ORPHAN_AFTER_MS;
+  if (owner !== null && owner.host === self.host && owner.pid === self.pid) return undefined;
+  const checkable = owner !== null && owner.host === self.host;
+  const dead = checkable ? !isAlive(owner.pid) : Date.parse(now()) - Date.parse(startedIso) > orphanAfterMs;
+  if (!dead) return undefined;
+  const who = owner === null ? "its drain" : `its drain (pid ${owner.pid} on ${owner.host})`;
+  return checkable
+    ? `${who} stopped without finishing it; it was not re-run, since it may already have sent writes — enqueue it again to retry`
+    : `${who} has not finished it after ${Math.round(orphanAfterMs / 3_600_000)}h; recorded failed, not re-run, since it may already have sent writes — enqueue it again to retry`;
+}
+
+/** GAPS 20: a queued Journey call a dead drain left `running` is recorded `failed`, never re-run (it may have sent writes). */
+async function recoverOrphanJourneyCalls(
+  store: JourneyCallQueueStore,
+  opts: Pick<DrainMissionQueueOptions, "isAlive" | "orphanAfterMs">,
+  self: { readonly pid: number; readonly host: string },
+  now: () => string,
+): Promise<RecoveredJourneyCall[]> {
+  const out: RecoveredJourneyCall[] = [];
+  for (const r of await store.list()) {
+    if (r.status !== "running") continue;
+    const owner = await store.claimOwner(r.id);
+    const error = orphanError(owner, r.startedAtIso ?? owner?.claimedAtIso ?? r.enqueuedAtIso, opts, self, now);
+    if (error === undefined) continue;
+    await store.update({ ...r, status: "failed", finishedAtIso: now(), error });
+    out.push({ callId: r.id, error });
+  }
+  return out;
+}
+
+/**
+ * #797: drains every queued Journey call, oldest first, one at a time, as `drainMissionQueue` drains
+ * missions: an exclusive claim (never run twice), `running` → `done` | `failed`. A refusal (a Journey
+ * changed since the call was queued, unpromoted, the run mode) is recorded `failed` with its code.
+ */
+async function drainJourneyCalls(
+  calls: NonNullable<DrainMissionQueueOptions["journeyCalls"]>,
+  self: { readonly pid: number; readonly host: string },
+  now: () => string,
+): Promise<DrainedJourneyCall[]> {
+  const queued = (await calls.store.list()).filter((r) => r.status === "queued").sort((a, b) => a.enqueuedAtIso.localeCompare(b.enqueuedAtIso));
+  const out: DrainedJourneyCall[] = [];
+  for (const candidate of queued) {
+    if (!(await calls.store.claim(candidate.id, { ...self, claimedAtIso: now() }))) continue;
+    const record = await calls.store.get(candidate.id);
+    if (record === null || record.status !== "queued") continue;
+    const running: QueuedJourneyRecord = { ...record, status: "running", startedAtIso: now() };
+    await calls.store.update(running);
+    const journey = record.call.journey.id;
+    try {
+      const run = await calls.execute(record.call);
+      const extra = { ...(run.runId === undefined ? {} : { runId: run.runId }), ...(run.code === undefined ? {} : { code: run.code }), ...(run.job === undefined ? {} : { job: { attainment: run.job.attainment, basis: run.job.basis } }) };
+      await calls.store.update({ ...running, status: "done", finishedAtIso: now(), outcome: run.outcome, exitCode: run.exitCode, ...extra });
+      out.push({ callId: record.id, journey, status: "done", outcome: run.outcome, exitCode: run.exitCode, ...extra });
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      const c = (err as { code?: unknown } | null)?.code;
+      const code = typeof c === "string" && /^E_[A-Z0-9_]+$/.test(c) ? c : undefined;
+      await calls.store.update({ ...running, status: "failed", finishedAtIso: now(), error, ...(code === undefined ? {} : { code }) });
+      out.push({ callId: record.id, journey, status: "failed", error, ...(code === undefined ? {} : { code }) });
+    }
+  }
+  return out;
 }
 
 /** #427: how long a queued mission's pre-flight auth check may take to load its start page. */
@@ -238,21 +368,12 @@ async function recoverOrphans(
   self: { readonly pid: number; readonly host: string },
   now: () => string,
 ): Promise<RecoveredMission[]> {
-  const isAlive = opts.isAlive ?? processAlive;
-  const orphanAfterMs = opts.orphanAfterMs ?? ORPHAN_AFTER_MS;
   const out: RecoveredMission[] = [];
   for (const m of await opts.queue.list()) {
     if (m.status !== "running") continue;
     const owner = await opts.queue.claimOwner(m.id);
-    if (owner !== null && owner.host === self.host && owner.pid === self.pid) continue; // this drain's own
-    const checkable = owner !== null && owner.host === self.host;
-    const startedMs = Date.parse(m.startedAtIso ?? owner?.claimedAtIso ?? m.enqueuedAtIso);
-    const dead = checkable ? !isAlive(owner.pid) : Date.parse(now()) - startedMs > orphanAfterMs;
-    if (!dead) continue;
-    const who = owner === null ? "its drain" : `its drain (pid ${owner.pid} on ${owner.host})`;
-    const error = checkable
-      ? `${who} stopped without finishing it; it was not re-run, since it may already have sent writes — enqueue it again to retry`
-      : `${who} has not finished it after ${Math.round(orphanAfterMs / 3_600_000)}h; recorded failed, not re-run, since it may already have sent writes — enqueue it again to retry`;
+    const error = orphanError(owner, m.startedAtIso ?? owner?.claimedAtIso ?? m.enqueuedAtIso, opts, self, now);
+    if (error === undefined) continue; // this drain's own, or possibly still running
     await opts.queue.update({ ...m, status: "failed", finishedAtIso: now(), error });
     out.push({ missionId: m.id, error });
   }
@@ -292,6 +413,10 @@ export interface RealExecutorOptions {
   readonly targetsFile?: string;
   /** 0.30.0 §5: `.jevitate/environments.json` (default: the project's). */
   readonly environmentsFile?: string;
+  /** #800: the catalog a queued goal mission's `job` is read from (default: the project's `.jevitate/`). */
+  readonly catalogDir?: string | null;
+  /** #800: the Journeys dir the catalog is resolved beside (default: the project's). */
+  readonly journeysDir?: string;
 }
 
 /** The operator-declared auth for one queued mission's target (#175). */
@@ -585,6 +710,10 @@ function runQueuedMission(opts: RealExecutorOptions): (job: Parameters<QueuedMis
     );
     let goal = mission.goal!;
     checkSetupRefs({ goal }, fx);
+    // #800 (GAPS 12): the done-check policy, as `explore --goal` decides it (--require-done-check over
+    // project.json over `require`); an unreadable project.json fails the mission before any browser.
+    const catalogDir = opts.catalogDir === undefined ? resolveCatalogDir(undefined) : opts.catalogDir;
+    const doneCheckPolicy = exploreDoneCheckPolicy(catalogDir, mission.requireDoneCheck);
     try {
       // A failed setup throws (`fixture setup failed: …`, redacted): the mission is recorded
       // `failed` and never runs on unknown state.
@@ -592,8 +721,26 @@ function runQueuedMission(opts: RealExecutorOptions): (job: Parameters<QueuedMis
         await fx.setup();
         goal = substituteSetupRefs(goal, fx.bindings(), { where: "goal" });
       }
+      // #800 (GAPS 12): a queued `job` is resolved now, from the drain's catalog, exactly as `explore --job`:
+      // its done check read in a fresh context before the run and after each proposed done. An unknown job
+      // fails the mission (nothing explored).
+      const jobCheck =
+        mission.job === undefined
+          ? undefined
+          : await prepareJobDoneCheck({
+              jobId: mission.job,
+              catalogDir,
+              journeysDir: opts.journeysDir ?? resolveLayout({}, { dirMeaning: "journeys" }).journeysDir,
+              startUrl: target.baseUrl,
+              ...(auth.storageState === undefined ? {} : { storageState: auth.storageState }),
+              ...((browserPortFactory ?? opts.browserPortFactory) === undefined ? {} : { sessionPortFactory: browserPortFactory ?? opts.browserPortFactory }),
+            });
+      if (jobCheck !== undefined && !jobCheck.ok) throw Object.assign(new Error(`${jobCheck.code}: ${jobCheck.message}`), { code: jobCheck.code });
       const r = await runExploration({
         ...common,
+        ...(jobCheck?.ok !== true ? {} : jobCheck.reader !== undefined ? { doneCheck: jobCheck.reader } : { doneCheckBasis: jobCheck.basis }),
+        doneCheckPolicy,
+        ...(mission.requireDoneCheck === true ? { requireDoneCheck: true } : {}),
         url: target.baseUrl,
         goal,
         ...(mission.successAssertion === undefined ? {} : { successAssertion: mission.successAssertion }),
@@ -649,4 +796,121 @@ export async function runQueuedJourneyCall(call: QueuedJourneyCall, deps: Queued
     expectedHash: call.journey.hash,
     run: (decision) => deps.run({ id: call.journey.id, params: { ...(call.params ?? {}) }, environment, decision }),
   });
+}
+
+export interface RealJourneyExecutorOptions {
+  readonly journeysDir: string;
+  /** 0.30.0 §5: `~/.jevitate/targets.json` (default), for the target's trust, the #789 guard and its `secretFields`. */
+  readonly targetsFile?: string | undefined;
+  readonly environmentsFile?: string | undefined;
+  /** The site-policy database (pacing, budget, quiet hours), as `run_journey` uses it. */
+  readonly sitePolicyDbPath?: string | undefined;
+  /** Where the run record and its `evidence.json` go (default: the project's logs). */
+  readonly logsRoot?: string | undefined;
+  /** The evidence digest's key (default `~/.jevitate/verify-checkpoint.key`). Testing seam. */
+  readonly evidenceKeyFile?: string | undefined;
+  readonly browserPortFactory?: (() => BrowserPort) | undefined;
+  readonly browser?: BrowserLaunchOptions | undefined;
+  /** Where a target's `secretFields` `env:` sources are read (default `process.env`). */
+  readonly secretEnv?: Readonly<Record<string, string | undefined>> | undefined;
+  /** GAPS 21: the catalog dir the job done check is read from (default: the project's `.jevitate/`). */
+  readonly catalogDir?: string | undefined;
+}
+
+/**
+ * #797: the real executor of a queued Journey call. It runs exactly as `run_journey` does — as an MCP
+ * invocation (the call may have been queued by an agent, so the promotion check, the run-mode rules and
+ * the #789 guard are run_journey's), through `runQueuedJourneyCall` (`runGuardedJourney`, plus the hash
+ * the call was queued against) — and its run record and evidence say channel `queue`. A secret the
+ * Journey needs is met by the run's secret mode: the target's `targets.json` `secretFields` on its own
+ * origin, else a hold a person completes (`outcome: held`, exit 2). The call itself never carries one.
+ */
+export function realQueuedJourneyExecutor(opts: RealJourneyExecutorOptions): QueuedJourneyExecutor {
+  return async (call) => {
+    const { runJourneyProgrammatically } = await import("./journey-api.js");
+    const { runWithDoneCheck } = await import("./journey-done-check-hook.js");
+    const { resolveCatalogDir } = await import("./catalog-api.js");
+    // The run's id: its record's key, which names its evidence directory (`journey-evidence-<runId>`).
+    let runId: string | undefined;
+    try {
+      const result = await runAsMcpInvocation(() =>
+        withJourneyRunRecord({ channel: "queue", id: call.journey.id, params: call.params ?? {}, logsRoot: opts.logsRoot, evidenceKeyFile: opts.evidenceKeyFile }, (runRecorder) => {
+          const dir = runRecorder.evidenceDir();
+          runId = dir === undefined ? undefined : basename(dir).replace(/^journey-evidence-/, "");
+          return withSiteGate(opts.sitePolicyDbPath, (siteGate) =>
+            runQueuedJourneyCall(call, {
+              journeysDir: opts.journeysDir,
+              environmentsFile: opts.environmentsFile,
+              targetsFile: opts.targetsFile,
+              run: async ({ id, params, environment, decision }) => {
+                // §5.3: what the call leaves out, from the operator's secretFields for the run's origin only.
+                const fields = decision?.target.targetConfig?.secretFields ?? [];
+                const bound =
+                  decision !== undefined && fields.length > 0 && missingSecretParams(decision.journey, params).length > 0
+                    ? withSecretParamsFor(decision.journey, { id, params, flags: [], targetFields: fields, targetOrigin: decision.target.origin, env: opts.secretEnv ?? process.env })
+                    : { params };
+                // GAPS 21 (#800): the linked job's done check, read as `journey run` reads it.
+                return runWithDoneCheck({
+                  catalogDir: resolveCatalogDir(opts.catalogDir),
+                  journeysDir: opts.journeysDir,
+                  ...(environment?.baseUrl === undefined ? {} : { origin: environment.baseUrl }),
+                  ...(environment?.storageState === undefined ? {} : { storageState: environment.storageState }),
+                  ...(opts.browserPortFactory === undefined ? {} : { sessionPortFactory: opts.browserPortFactory }),
+                  // #800: the call's own done-check flags, as `journey run` takes them.
+                  ...(call.noDoneCheck === true ? { skip: true } : {}),
+                }, () => runJourneyProgrammatically({
+                  dir: opts.journeysDir,
+                  id,
+                  params: bound.params,
+                  runRecorder,
+                  assertRunnable: (stored) => assertMcpRunnable(stored, opts.journeysDir),
+                  ...(opts.targetsFile === undefined ? {} : { runGuardTargetsFile: opts.targetsFile }),
+                  policy: safeRunPolicy(),
+                  ...(environment?.storageState === undefined ? {} : { storageState: environment.storageState }),
+                  ...(siteGate === undefined ? {} : { siteGate }),
+                  ...(environment === undefined ? {} : { environment }),
+                  ...(opts.browser === undefined ? {} : { browser: opts.browser }),
+                  ...("bound" in bound && bound.bound !== undefined ? { boundSecretParams: bound.bound } : {}),
+                  ...(opts.secretEnv === undefined ? {} : { secretEnv: opts.secretEnv }),
+                  ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
+                }), call.requireDoneCheck === true ? "require" : undefined);
+              },
+            }),
+          );
+        }),
+      );
+      const withRun = runId === undefined ? {} : { runId };
+      const outcome = (result as { outcome?: unknown } | null)?.outcome;
+      if (typeof outcome !== "string") return { outcome: "inconclusive", exitCode: 2, ...withRun };
+      // GAPS 21: a run with a job verdict carries the exit code its done check gives (withJobVerdict).
+      const job = (result as { job?: { attainment: string; basis: string } }).job;
+      const given = (result as { exitCode?: unknown }).exitCode;
+      const exitCode = job !== undefined && typeof given === "number" ? given : (JOURNEY_RUN_OUTCOMES as readonly string[]).includes(outcome) ? journeyExitCode(outcome as JourneyRunOutcome) : 2;
+      return { outcome, exitCode, ...withRun, ...(job === undefined ? {} : { job: { attainment: job.attainment, basis: job.basis } }) };
+    } catch (err) {
+      // 0.30.0 §5.4: held for a person (`jevitate inbox approve <holdId>`, then `inbox resume`): it proves nothing yet.
+      const held = heldOutcomeOf(err);
+      if (held !== undefined) return { outcome: "held", exitCode: 2, ...(runId === undefined ? {} : { runId }), ...(typeof held.code === "string" ? { code: held.code } : {}) };
+      throw err;
+    }
+  };
+}
+
+/**
+ * GAPS 23: `mission run`'s exit code. A claimed mission that could not run at all, or a Journey call that
+ * could not run, is `inconclusive` (2): it proves nothing, so never 1 (exit-codes.ts). A mission that ran
+ * counts whatever its own outcome (unchanged). A drained Journey call that ran counts its own exit code
+ * (0 ok · 1 defects/not-achieved · 2 unverified under `require`, held · 5 pending review), and the worst
+ * wins by the missions' severity order (`combineOutcomes`, @jevitate/domain mission-outcome.ts).
+ */
+export function drainExitCode(report: Pick<DrainReport, "ran" | "journeys">): number {
+  const byCode = new Map<number, MissionOutcome>();
+  for (const o of MISSION_OUTCOMES) if (!byCode.has(MISSION_EXIT_CODES[o])) byCode.set(MISSION_EXIT_CODES[o], o);
+  const outcomes: MissionOutcome[] = [];
+  if (report.ran.some((m) => m.status === "failed")) outcomes.push("inconclusive");
+  for (const j of report.journeys ?? []) {
+    if (j.status === "failed") outcomes.push("inconclusive");
+    else outcomes.push(j.exitCode === undefined ? "inconclusive" : (byCode.get(j.exitCode) ?? "inconclusive"));
+  }
+  return MISSION_EXIT_CODES[combineOutcomes(outcomes)];
 }

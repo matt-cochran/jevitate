@@ -7,7 +7,7 @@ import { redactText } from "@jevitate/ai-core";
 import { BrowseTheWebToken } from "@jevitate/screenplay";
 import { parseSecretField, secretFieldSecrets } from "@jevitate/explore";
 import type { Locator } from "playwright";
-import { secretParamNamesArgvWarning, secretParamsCarriedBy } from "./secret-params.js";
+import { secretParamNamesArgvWarning, secretParamsCarriedBy, specsBinding, withCommandSecretParams, withSecretParamsFor } from "./secret-params.js";
 import { runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 
 /**
@@ -44,6 +44,13 @@ export interface MigrateLabelsRequest {
   readonly params?: Readonly<Record<string, string>>;
   /** #809: where the argv secret warning (secret `--param` names, never values) goes: stderr. */
   readonly warn?: (line: string) => void;
+  /**
+   * #827: `--secret-field` bindings: each Journey's secret parameters from the environment, off the command
+   * line (with the environment's `targets.json` `secretFields`). A binding must bind some Journey's.
+   */
+  readonly secretFields?: readonly string[];
+  /** Where a binding's `env:` source is read (default `process.env`). */
+  readonly secretEnv?: Readonly<Record<string, string | undefined>>;
   /** How long a step's target may take to appear before it is left unlabelled. Default 5s. */
   readonly targetTimeoutMs?: number;
   /**
@@ -183,7 +190,12 @@ async function migrateOne(store: FsJourneyStore, journey: Journey, req: MigrateL
   const id = journey.metadata.id;
   // The request's params serve every Journey: each replay gets only the ones it declares.
   const declared = new Set([...journey.metadata.params, ...(journey.metadata.parameters ?? []).map((p) => p.name)]);
-  const params = Object.fromEntries(Object.entries(req.params ?? {}).filter(([k]) => declared.has(k)));
+  const given = Object.fromEntries(Object.entries(req.params ?? {}).filter(([k]) => declared.has(k)));
+  // #827: what a binding supplies, bound to its origin; its values are refused in a label like any secret's.
+  const env = req.secretEnv ?? process.env;
+  const supplied = withSecretParamsFor(journey, { id, params: given, flags: specsBinding(journey, req.secretFields ?? [], env), targetFields: req.run?.environment?.secretFields, targetOrigin: req.run?.environment?.baseUrl, env });
+  const params = supplied.params;
+  const boundOption = supplied.bound === undefined ? {} : { boundSecretParams: supplied.bound };
   const secrets = [...secretParamValues(journey, params), ...runSecrets(req)];
   const timeoutMs = req.targetTimeoutMs ?? DEFAULT_TARGET_TIMEOUT_MS;
   const flat = flatJourneySteps(journey);
@@ -223,7 +235,7 @@ async function migrateOne(store: FsJourneyStore, journey: Journey, req: MigrateL
 
   let replay: LabelledJourney["replay"];
   try {
-    const run = await runJourneyProgrammatically({ ...(req.run ?? {}), dir: req.journeysDir, id, params, observer });
+    const run = await runJourneyProgrammatically({ ...(req.run ?? {}), ...boundOption, dir: req.journeysDir, id, params, observer });
     replay = run.outcome === "ok" || run.outcome === "healed-pending-review"
       ? { outcome: "ok" }
       : { outcome: "stopped", reason: redactText(run.reason, secrets).slice(0, 2000) };
@@ -255,9 +267,11 @@ async function migrateOne(store: FsJourneyStore, journey: Journey, req: MigrateL
 /** Backfills step labels by replaying each Journey (see the module doc). Journeys run one at a time. */
 export async function migrateLabels(req: MigrateLabelsRequest): Promise<MigrateLabelsResult> {
   const onArgv = secretParamsCarriedBy(null, req.params ?? {});
-  if (onArgv.length > 0) req.warn?.(secretParamNamesArgvWarning(onArgv));
+  if (onArgv.length > 0) req.warn?.(secretParamNamesArgvWarning(onArgv, "journey migrate --labels"));
   const store = new FsJourneyStore(req.journeysDir);
   const ids = req.ids ?? (await store.list()).map((m) => m.id);
+  // #827: a binding that binds none of the Journeys is a mistake the operator typed, refused before any replay.
+  if ((req.secretFields ?? []).length > 0) await withCommandSecretParams({ dir: req.journeysDir, ids, params: req.params ?? {}, flags: req.secretFields ?? [], env: req.secretEnv ?? process.env });
   const journeys: LabelledJourney[] = [];
   for (const id of ids) {
     const journey = await store.get(id);

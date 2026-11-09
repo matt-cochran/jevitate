@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -85,6 +86,17 @@ function expectOpenWriteEvidence(report: JourneyVerifyReport): void {
   expect((mutated?.writes.openAtClose as { value?: number } | undefined)?.value).toBeGreaterThanOrEqual(1);
 }
 
+/** #812: with this set to a directory, every proof records its evidence as `dropped-write-<test>-<digest>.evidence.json` (the H1/H2 fixtures of packages/adjudicator/fixtures). */
+const RECORD_EVIDENCE = process.env["JEVITATE_RECORD_EVIDENCE"];
+function record(e: RunEvidence): void {
+  evidence = e;
+  if (RECORD_EVIDENCE === undefined) return;
+  const name = expect.getState().currentTestName ?? "unnamed";
+  const slug = name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100);
+  mkdirSync(RECORD_EVIDENCE, { recursive: true });
+  writeFileSync(join(RECORD_EVIDENCE, `dropped-write-${slug}-${createHash("sha256").update(name).digest("hex").slice(0, 8)}.evidence.json`), `${JSON.stringify(e, null, 2)}\n`);
+}
+
 /** A proof whose first mutated replay does `during` on its browser, then closes it. */
 async function proveWith(during: (browser: Browser) => void, thenThrow: boolean | Error = false, resume?: boolean, atReplay = 3): Promise<JourneyVerifyReport> {
   let replay = 0;
@@ -116,7 +128,7 @@ async function proveWith(during: (browser: Browser) => void, thenThrow: boolean 
   }) as unknown as Run;
   const checkpoint = resume === undefined ? {} : { checkpoint: { path: progressPath(), keyFile: join(dir, "k.key"), resume, build: { version: "t", commit: "c", builtAt: "b", tree: "tr" }, config: { hook: {}, origin: {}, browser: {} } } };
   evidence = undefined;
-  const proving = verifyJourneyMutations({ dir, id: ID, params: {}, browserPortFactory, ...checkpoint, onEvidence: (e) => void (evidence = e) }, run);
+  const proving = verifyJourneyMutations({ dir, id: ID, params: {}, browserPortFactory, ...checkpoint, onEvidence: record }, run);
   let done = false;
   const ended = proving.finally(() => void (done = true));
   ended.catch(() => undefined);

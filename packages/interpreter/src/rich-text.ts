@@ -1,4 +1,4 @@
-import type { Locator, Page } from "playwright";
+import type { ElementHandle, Locator, Page } from "playwright";
 import type { TextAnchor, TextEdit, TextFormat } from "@jevitate/recording";
 
 /**
@@ -21,7 +21,21 @@ const FORMAT_KEYS: Readonly<Record<TextFormat, string>> = {
   underline: "ControlOrMeta+u",
 };
 
-type Placement = { readonly ok: true; readonly text: string } | { readonly ok: false; readonly reason: string };
+type Placement =
+  | { readonly ok: true; readonly text: string; readonly full: string; readonly start: number; readonly end: number; readonly html: string }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * F4: an edit that did not land — the editor rejected the input, or the anchor sat in a part of the
+ * element that is not editable — fails typed instead of reporting ok. The message never carries a value.
+ */
+export class TextEditNotAppliedError extends Error {
+  readonly code = "E_EDIT_NOT_APPLIED";
+  constructor(detail: string) {
+    super(`E_EDIT_NOT_APPLIED: editText ${detail}; the target's text read back afterwards does not hold the edit (the editor rejected the input, or the anchor is not editable)`);
+    this.name = "TextEditNotAppliedError";
+  }
+}
 
 /**
  * BROWSER CODE — places the selection for `anchor` inside `el` (collapsed to its start/end when
@@ -102,7 +116,65 @@ function placeSelection(
   if (selection === null) return { ok: false, reason: "no selection API" };
   selection.removeAllRanges();
   selection.addRange(range);
-  return { ok: true, text: text.slice(start, end) };
+  return { ok: true, text: text.slice(start, end), full: text, start, end, html: host.innerHTML };
+}
+
+/**
+ * BROWSER CODE — the element's text, collapsed exactly as `placeSelection` collapses it, and its markup.
+ * No imports, no closure over module scope.
+ */
+function readEdited(el: Element): { text: string; html: string } {
+  let text = "";
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) {
+    const data = (n as Text).data;
+    for (let i = 0; i < data.length; i++) {
+      const ch = data[i] ?? "";
+      if (/\s/.test(ch)) {
+        if (text === "" || text.endsWith(" ")) continue;
+        text += " ";
+      } else {
+        text += ch;
+      }
+    }
+  }
+  return { text, html: (el as HTMLElement).innerHTML };
+}
+
+const collapse = (s: string): string => s.replace(/\s+/g, " ");
+
+function occurrences(haystack: string, needle: string): number {
+  let n = 0;
+  for (let i = haystack.indexOf(needle); i !== -1; i = haystack.indexOf(needle, i + 1)) n++;
+  return n;
+}
+
+/**
+ * Whether the text read back holds the edit (F4). `before` is the element's collapsed text when the
+ * selection was placed, `[start, end)` the selected range in it. A change that should alter the text
+ * must alter it, and the inserted text must occur in the result at least as often as it would after
+ * the edit (a count, so text already in the element is no proof). Exported for the unit test.
+ */
+export function editLanded(before: string, start: number, end: number, value: string, after: string): boolean {
+  const expected = collapse(before.slice(0, start) + value + before.slice(end));
+  if (expected !== before && after === before) return false;
+  const needle = collapse(value).trim();
+  if (needle === "") return true;
+  return occurrences(after, needle) >= occurrences(expected, needle);
+}
+
+/** Reads the edit back a few times (each a round trip, so an editor that applies input in a microtask has applied it). */
+async function readBack(handle: ElementHandle | null, locator: Locator | null, accept: (r: { text: string; html: string }) => boolean): Promise<boolean | "unreadable"> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    let read: { text: string; html: string } | null = null;
+    // The element edited (a target found by its text no longer matches once its text changed); a
+    // framework that replaced the element is read through the locator instead, when one is allowed.
+    if (handle !== null) read = await handle.evaluate(readEdited).catch(() => null);
+    if (read === null && locator !== null) read = await locator.evaluate(readEdited, undefined, { timeout: 2_000 }).catch(() => null);
+    if (read === null) return "unreadable";
+    if (accept(read)) return true;
+  }
+  return false;
 }
 
 /**
@@ -112,24 +184,40 @@ function placeSelection(
 export async function applyTextEdit(page: Page, locator: Locator, edit: TextEdit & { readonly beforeType?: () => void; readonly boundSecret?: boolean }): Promise<void> {
   const caret: "start" | "end" | null = edit.action === "insertBefore" ? "start" : edit.action === "insertAfter" ? "end" : null;
   // A bound secret stays on this element's document: a handle dies with it, where a locator would find the next page's.
-  const bound = edit.boundSecret === true ? await locator.elementHandle() : null;
+  const bound: ElementHandle | null = edit.boundSecret === true ? await locator.elementHandle() : null;
   const placed = bound !== null ? await bound.evaluate(placeSelection, { anchor: edit.anchor, caret }) : await locator.evaluate(placeSelection, { anchor: edit.anchor, caret });
   if (!placed.ok) throw new Error(`editText refused: ${placed.reason}`);
+  // F4: every path reads the element back — through the same handle for a bound secret — and fails
+  // typed when the change did not land, rather than reporting ok with nothing typed.
+  // A bound secret is read back on its own document only (never through a locator that could find the next page's).
+  const handle = bound ?? (await locator.elementHandle({ timeout: 2_000 }).catch(() => null));
+  const verify = async (detail: string, accept: (r: { text: string; html: string }) => boolean): Promise<void> => {
+    const landed = await readBack(handle, bound !== null ? null : locator, accept);
+    if (landed === "unreadable") throw new TextEditNotAppliedError(`${detail} could not be read back`);
+    if (!landed) throw new TextEditNotAppliedError(detail);
+  };
   if (edit.action === "format") {
     if (edit.format === undefined) throw new Error("editText refused: format has no `format`");
     await page.keyboard.press(FORMAT_KEYS[edit.format]);
+    // Formatting changes markup, not text: a format that changed nothing did not land.
+    if (placed.text !== "") await verify(`format ${edit.format}`, (r) => r.html !== placed.html);
     return;
   }
   const value = edit.value;
   if (value === undefined) throw new Error(`editText refused: ${edit.action} has no value`);
   if (value === "") {
     // A deletion: removes the selected range (an empty insert is a no-op).
-    if (edit.action === "replace" && placed.text !== "") await page.keyboard.press("Delete");
+    if (edit.action === "replace" && placed.text !== "") {
+      await page.keyboard.press("Delete");
+      await verify("deletion", (r) => editLanded(placed.full, placed.start, placed.end, "", r.text));
+    }
     return;
   }
+  const typed = (r: { text: string }): boolean => editLanded(placed.full, placed.start, placed.end, value, r.text);
   edit.beforeType?.();
   if (edit.boundSecret !== true) {
     await page.keyboard.type(value);
+    await verify(edit.action, typed);
     return;
   }
   // Real keys, so the app sees real input, one at a time, each only while this element's document is
@@ -141,6 +229,7 @@ export async function applyTextEdit(page: Page, locator: Locator, edit: TextEdit
     if (!here) throw new Error("editText refused: the page left before a secret parameter was all typed; the rest was not");
     await page.keyboard.type(key);
   }
+  await verify(edit.action, typed);
 }
 
 /** BROWSER CODE — is `el` still in its document, with the focus in it? */

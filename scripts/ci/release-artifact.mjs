@@ -131,7 +131,8 @@ function requireFrozenInstall(root) {
 }
 
 /**
- * Runs the packed cli tarball's `--version` and checks it against the manifest (#784). No unpinned
+ * Runs the packed cli tarball's `--version` and checks it against the manifest (#784), then imports its
+ * root export as a user would (#815) and checks its exact-pinned dependencies (#825). No unpinned
  * code runs (H1): nothing is installed. The tarball is extracted to a throwaway prefix laid out like
  * an install, whose node_modules holds only links to the dependencies the tarball declares, each the
  * copy the frozen lockfile installed in `root`. An undeclared import therefore fails as it would for
@@ -156,14 +157,57 @@ export function verifyPackedIdentity(dir, { root = REPO_ROOT } = {}) {
       mkdirSync(dirname(link), { recursive: true });
       symlinkSync(lockfileInstalled(root, dep), link);
     }
+    requireExactPins(dependencies, (dep) => lockfileInstalled(root, dep));
     const binPath = realpathSync(join(packed, bin.jevitate));
     if (!binPath.startsWith(realpathSync(packed) + sep)) throw new Error(`${name}'s bin ${bin.jevitate} is outside the tarball`);
     const { NODE_PATH: _ignored, ...env } = process.env;
     const line = execFileSync(process.execPath, [binPath, "--version"], { cwd: prefix, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-    return checkVersionIdentity(line, manifest);
+    const identity = checkVersionIdentity(line, manifest);
+    checkRootExport(prefix, env, line);
+    return identity;
   } finally {
     rmSync(prefix, { recursive: true, force: true });
   }
+}
+
+/**
+ * Dependencies the release gate tests at one version (#825): the packed cli must declare each as the
+ * exact version the frozen lockfile installed, or a fresh install floats to one no gate ran.
+ */
+export const EXACT_DEPENDENCIES = ["playwright"];
+
+/** The documented functions the package's root export must carry (#815). */
+export const ROOT_EXPORTS = ["buildProgram", "versionString"];
+
+/** Throws unless each exact-pinned dependency the packed cli declares is the version `installed` holds. */
+function requireExactPins(dependencies, installed) {
+  for (const dep of EXACT_DEPENDENCIES) {
+    const spec = dependencies?.[dep];
+    if (spec === undefined) continue;
+    const { version } = JSON.parse(readFileSync(join(installed(dep), "package.json"), "utf8"));
+    if (spec !== version) throw new Error(`the packed cli depends on ${dep} ${JSON.stringify(spec)}, not the exact ${version} the release gate tested`);
+  }
+}
+
+/**
+ * Imports the package's root export from `prefix` the way a user does (`import("@jevitate/cli")`)
+ * and checks it carries the documented functions and reports the bin's identity (#815). Throws on
+ * an import that fails, such as one reaching a private workspace package the tarball cannot declare.
+ */
+function checkRootExport(prefix, env, binLine) {
+  const probe = `const m = await import(${JSON.stringify(PACKAGES[0].name)});
+const missing = ${JSON.stringify(ROOT_EXPORTS)}.filter((n) => typeof m[n] !== "function");
+console.log(JSON.stringify({ missing, version: missing.includes("versionString") ? null : m.versionString() }));`;
+  let out;
+  try {
+    out = execFileSync(process.execPath, ["--input-type=module", "-e", probe], { cwd: prefix, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  } catch (err) {
+    const stderr = String(err.stderr ?? err.message);
+    throw new Error(`the packed cli's root export does not import: ${(/^\w*Error\b.*$/m.exec(stderr)?.[0] ?? stderr).trim()}`);
+  }
+  const { missing, version } = JSON.parse(out.trim().split("\n").at(-1));
+  if (missing.length > 0) throw new Error(`the packed cli's root export lacks ${missing.join(", ")}`);
+  if (version !== binLine) throw new Error(`the packed cli's root export reports ${version}, its bin ${binLine}`);
 }
 
 /** The real directory of a dependency the frozen install gave the cli; throws if it has none. */

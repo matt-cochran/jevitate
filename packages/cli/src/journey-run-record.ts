@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { clock } from "@jevitate/domain";
-import { flatJourneySteps, type Journey } from "@jevitate/journey";
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { clock, isJobAttainment, JOB_BASES, type JobVerdict } from "@jevitate/domain";
+import { flatJourneySteps, journeyProofHash, type Journey } from "@jevitate/journey";
 import type { BrowserSession } from "@jevitate/playwright";
 import type { BrowserContext, Request } from "playwright";
 import type { JourneyRunEvidenceWriter } from "./journey-run-evidence.js";
@@ -34,7 +34,8 @@ import { logDateOf, logsRoot } from "./project-dir.js";
  * what the evidence writer saw (`deriveFrom`), so the two never disagree about what was sent.
  */
 
-export type RunChannel = "mcp" | "cli";
+/** #797: `queue` — a queued Journey call drained by `jevitate mission run`. */
+export type RunChannel = "mcp" | "cli" | "queue";
 
 const READS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
 /** What a record names a method by. A method is the page's own text, so anything else is `OTHER`, never stored. */
@@ -98,10 +99,17 @@ export interface JourneyRunRecord {
   readonly kind: "journey-run";
   readonly version: 1;
   readonly channel: RunChannel;
-  readonly journey: { readonly id: string; readonly hash?: string };
+  /** `hash`: the Journey's review hash. `proofHash` (0.30.0, optional): its executable identity, which rewording leaves alone. */
+  readonly journey: { readonly id: string; readonly hash?: string; readonly proofHash?: string };
   readonly origin?: string;
   /** The run's outcome, or `refused` / `error` when it ended without one. */
   readonly outcome: string;
+  /**
+   * 0.30.0 (owner decision "Proof role"): the run's job verdict, as the done check decided it. Code tokens
+   * only. Absent when no done-check scope decided one (a record written before 0.30.0 has none): read as
+   * `unverified`.
+   */
+  readonly job?: JobVerdict;
   /** The typed code of a refusal or error. */
   readonly code?: string;
   /** The step the run stopped at, 1-based. */
@@ -121,6 +129,7 @@ export interface JourneyRunRecord {
 /** How a run ended. `output` only masks its values from the write shapes; none of it is stored. */
 interface RunEnd {
   readonly outcome: string;
+  readonly job?: JobVerdict | undefined;
   readonly code?: string;
   readonly stoppedAtStep?: number;
   readonly output?: unknown;
@@ -134,6 +143,7 @@ export class JourneyRunRecorder {
   readonly #startedAt = clock.nowIso();
   readonly #writes = new Map<Request, SeenWrite>();
   #hash: string | undefined;
+  #proofHash: string | undefined;
   #stepCount: number | undefined;
   #origin: string | undefined;
   #literals: ReadonlySet<string> = new Set();
@@ -180,6 +190,7 @@ export class JourneyRunRecorder {
   noteJourney(journey: Journey): void {
     try {
       this.#hash ??= journeyReviewHash(journey);
+      this.#proofHash ??= journeyProofHash(journey);
       this.#stepCount ??= flatJourneySteps(journey).length;
       this.#origin = new URL(journey.recording.site).origin;
       this.#literals = journeyRouteLiterals(journey);
@@ -243,9 +254,10 @@ export class JourneyRunRecorder {
       kind: "journey-run",
       version: 1,
       channel: this.#channel,
-      journey: { id: this.#id, ...(this.#hash === undefined ? {} : { hash: this.#hash }) },
+      journey: { id: this.#id, ...(this.#hash === undefined ? {} : { hash: this.#hash }), ...(this.#proofHash === undefined ? {} : { proofHash: this.#proofHash }) },
       ...(this.#origin === undefined ? {} : { origin: this.#origin }),
       outcome: end.outcome,
+      ...(end.job === undefined ? {} : { job: { attainment: end.job.attainment, basis: end.job.basis } }),
       ...(end.code === undefined ? {} : { code: end.code }),
       ...(end.stoppedAtStep === undefined ? {} : { stoppedAtStep: end.stoppedAtStep }),
       ...(this.#stepCount === undefined ? {} : { stepCount: this.#stepCount }),
@@ -298,19 +310,29 @@ function endOfError(err: unknown): { readonly outcome: string; readonly code?: s
  * Runs one Journey with its record: `runRecordError` on the result when the record could not be written,
  * and on the error when the run itself threw (the caller reports it; the run's outcome is not touched).
  */
-export async function withJourneyRunRecord<T>(req: ConstructorParameters<typeof JourneyRunRecorder>[0], run: (recorder: JourneyRunRecorder) => Promise<T>): Promise<T & { runRecordError?: string }> {
+export async function withJourneyRunRecord<T>(
+  req: ConstructorParameters<typeof JourneyRunRecorder>[0] & {
+    /** The job verdict of a done-check scope this record runs inside (`journey run` wraps its record in one). */
+    readonly job?: () => JobVerdict | undefined;
+  },
+  run: (recorder: JourneyRunRecorder) => Promise<T>,
+): Promise<T & { runRecordError?: string }> {
   const recorder = new JourneyRunRecorder(req);
   let result: T;
   try {
     result = await run(recorder);
   } catch (err) {
-    const problem = recorder.finish(endOfError(err));
+    const job = jobVerdictOf(req.job?.());
+    const problem = recorder.finish({ ...endOfError(err), ...(job === undefined ? {} : { job }) });
     if (problem !== undefined && err !== null && typeof err === "object") (err as { runRecordError?: string }).runRecordError = problem;
     throw err;
   }
-  const r = result as { outcome?: unknown; at?: unknown; output?: unknown };
+  const r = result as { outcome?: unknown; at?: unknown; output?: unknown; job?: unknown };
+  // A run inside a done-check scope (`run_journey`, a queued call) returns its verdict; `journey run` hands its scope's.
+  const job = jobVerdictOf(r?.job) ?? jobVerdictOf(req.job?.());
   const problem = recorder.finish({
     outcome: typeof r?.outcome === "string" ? r.outcome : "unknown",
+    ...(job === undefined ? {} : { job }),
     ...(typeof r?.at === "number" ? { stoppedAtStep: r.at + 1 } : {}),
     output: r?.output,
   });
@@ -321,4 +343,74 @@ export async function withJourneyRunRecord<T>(req: ConstructorParameters<typeof 
 export function runRecordErrorOf(err: unknown): string | undefined {
   const v = err !== null && typeof err === "object" ? (err as { runRecordError?: unknown }).runRecordError : undefined;
   return typeof v === "string" ? v : undefined;
+}
+
+/** A job verdict of code tokens only, or undefined: nothing else is ever copied into a record. */
+export function jobVerdictOf(value: unknown): JobVerdict | undefined {
+  if (value === null || typeof value !== "object") return undefined;
+  const { attainment, basis } = value as { attainment?: unknown; basis?: unknown };
+  return isJobAttainment(attainment) && typeof basis === "string" && (JOB_BASES as readonly string[]).includes(basis) ? { attainment, basis: basis as JobVerdict["basis"] } : undefined;
+}
+
+/** The logs root a Journeys dir's runs record into: `<data dir>/logs`, beside `<data dir>/journeys`. */
+export function journeyRunLogsRoot(journeysDir: string): string {
+  return join(dirname(journeysDir), "logs");
+}
+
+/** The latest run of one Journey, as its record says: when it ran, how it ended, and its job verdict. */
+export interface LatestJourneyRun {
+  readonly at: string;
+  readonly outcome: string;
+  /** Absent on a record written before 0.30.0, or by a run no done-check scope decided: reads `unverified`. */
+  readonly job?: JobVerdict;
+  /** Whether the run was of the Journey as it stands (its executable identity, else its review hash). */
+  readonly current: boolean;
+}
+
+/**
+ * 0.30.0 (owner decision "Proof role"): the newest `journey-run` record of `id` under `logsRoot`
+ * (`<date>/journey-run-<stamp>-<suffix>.json`, newest first), or undefined when there is none. A record
+ * that cannot be read is skipped. `journey` is the Journey as it stands, to say whether the run was of it.
+ */
+export function latestJourneyRun(logsRoot: string, id: string, journey?: Journey): LatestJourneyRun | undefined {
+  let dates: string[];
+  try {
+    dates = readdirSync(logsRoot).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort().reverse();
+  } catch {
+    return undefined;
+  }
+  for (const date of dates) {
+    let names: string[];
+    try {
+      names = readdirSync(join(logsRoot, date)).filter((n) => n.startsWith("journey-run-") && n.endsWith(".json")).sort().reverse();
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      let rec: Partial<JourneyRunRecord>;
+      try {
+        rec = JSON.parse(readFileSync(join(logsRoot, date, name), "utf8")) as Partial<JourneyRunRecord>;
+      } catch {
+        continue;
+      }
+      if (rec?.kind !== "journey-run" || rec.journey?.id !== id || typeof rec.startedAt !== "string") continue;
+      const job = jobVerdictOf(rec.job);
+      return {
+        at: typeof rec.endedAt === "string" ? rec.endedAt : rec.startedAt,
+        outcome: typeof rec.outcome === "string" ? rec.outcome : "unknown",
+        ...(job === undefined ? {} : { job }),
+        current: journey === undefined ? true : runIsOf(rec.journey, journey),
+      };
+    }
+  }
+  return undefined;
+}
+
+function runIsOf(recorded: { readonly hash?: string; readonly proofHash?: string }, journey: Journey): boolean {
+  try {
+    if (recorded.proofHash !== undefined) return recorded.proofHash === journeyProofHash(journey);
+    return recorded.hash !== undefined && recorded.hash === journeyReviewHash(journey);
+  } catch {
+    return false;
+  }
 }

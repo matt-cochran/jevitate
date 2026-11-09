@@ -79,6 +79,15 @@ export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
     ctx.incomplete = `${missing}; ${incompleteReason(ctx.stop, ctx.incomplete, ctx.failure, ctx.hang, ctx.tracker)}`;
   }
 
+  // #826 — the decision budget ran out on the turn straight after a refused (or deferred) `blocked`:
+  // the model's next decision, the one the refusal asked for, was never taken. Said so, with the refusal.
+  if (ctx.stop === "exhausted" && ctx.refusedTurn && ctx.answer === undefined && ctx.failure === undefined && ctx.incomplete === null) {
+    const refusal = [...ctx.history].reverse().find((l) => /^blocked (?:refused|deferred)|deferred \(|recovery turn/.test(l));
+    ctx.incomplete =
+      `decision budget ran out straight after a refused blocked (${ctx.tracker.decisions} decisions, ${ctx.tracker.actions} actions) — ` +
+      `the decision the refusal asked for was never taken${refusal === undefined ? "" : `: ${quote(refusal, 240)}`}`;
+  }
+
   await ctx.readOnly?.disarm();
   ctx.page.off("request", ctx.onRequestSeen);
   ctx.page.off("response", ctx.onDocumentResponse);

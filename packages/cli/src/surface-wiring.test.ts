@@ -97,13 +97,17 @@ const HOLD_RESUME = {
   heldSecretParams: "set only by `jevitate inbox resume` for a secret hold (journey-hold.ts resumeHold)",
 } as const;
 const SECRET_MODE_AUTO = "the secret mode is `auto` (journey-secret-mode.ts); only `journey run --secret-mode` narrows it";
+const QUEUED_JOURNEY_CALL = "#797: a queued Journey call carries only id, hash, non-secret params and env (QueuedJourneyCall, a closed schema): no emulation, fixtures or self-heal; run_journey takes those directly";
 const SECRET_ENV_PROCESS = "a target's secretFields `env:` sources are read from this process's environment (the default)";
+
+const TRUST_FROM_RUN_MODE = "#802: the target trust defaults to the run mode the surface decided (run-metadata `runMode`, `run.target.trust`); the option is a seam";
 
 const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // ── explore CLI: the reference surface ──────────────────────────────────────────────────────
-  "goal-strategy.ts runExploration": { hostHealth: SEAM, successAssertion: "the CLI passes --success as successChecks", nowIso: SEAM },
+  "goal-strategy.ts runExploration": { hostHealth: SEAM, successAssertion: "the CLI passes --success as successChecks", nowIso: SEAM, targetTrust: TRUST_FROM_RUN_MODE },
   // #369: every explore-author-journey take is explore's goal run — what authoring leaves out, and why.
   "explore-author.ts runExploration": {
+    targetTrust: TRUST_FROM_RUN_MODE,
     hostHealth: SEAM,
     nowIso: SEAM,
     successAssertion: "authorJourney hands every check (successAssertion included) to the take as successChecks",
@@ -191,7 +195,6 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "journey-prefix.ts runJourneyProgrammatically": {
     ...HOLD_RESUME, secretMode: SECRET_MODE_AUTO, secretEnv: SECRET_ENV_PROCESS,
     onRawOutput: "only `journey chain` hands a run's output on to a page",
-    boundSecretParams: "only `journey run` resolves a secret from an operator binding; this path takes values through params",
     assertRunnable: MCP_RUN_GATE,
     runGuardTargetsFile: GUARD_TARGETS_SEAM,
     runRecorder: RUN_RECORD_ELSEWHERE,
@@ -244,6 +247,24 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     session: WHOLE_JOURNEY,
     stopAfterStep: WHOLE_JOURNEY,
   },
+  // #801: every shortest-path candidate is a full replay of the Journey as recorded, less the removed steps.
+  "journey-shorten.ts runJourneyProgrammatically": {
+    resumeAtStep: "#801: every candidate is a full replay from step 1; a hold's resume is `jevitate inbox resume`",
+    heldSecretParams: "#801: a candidate is a proof replay (asProof) and never holds for a person, so nothing resumes typing a secret",
+    stopAfterStep: "#801: every candidate is a full replay; a prefix is an anchored mission's (journey-prefix.ts)",
+    session: "#801: every candidate opens a fresh browser of its own; an already-open session would carry the last candidate's state into the next",
+    heal: "#801: a candidate must replay as recorded; a healed step would hide a dropped one, so it has no change context",
+    selfHealer: "#801: a candidate must replay as recorded; a healed step would hide a dropped one (policy is safeRunPolicy())",
+    assertRunnable: MCP_RUN_GATE,
+    runRecorder: "#801: a candidate is a search probe, not a run; the report (and the draft) is the record",
+    onRawOutput: "only `journey chain` hands a run's output on to a page",
+    screenshots: "#801: a candidate only needs its done-check verdict; capture is `journey run --screenshots` on the draft",
+    observer: OBSERVER_INTERNAL,
+    interpreter: ANNOTATE_OBSERVER,
+    mask: MASK_INTERNAL,
+    actionDeltas: NO_DELTAS_HERE,
+    fixtureBaseDir: FIXTURE_BASE_DIR,
+  },
   "load-cli.ts runJourneyLoadTest": { policy: "a load run replays with the fail-closed safeRunPolicy()" },
   "mcp-api.ts runJourneyProgrammatically": {
     ...HOLD_RESUME, secretMode: SECRET_MODE_AUTO,
@@ -257,10 +278,29 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     session: WHOLE_JOURNEY,
     stopAfterStep: WHOLE_JOURNEY,
   },
+  // #797: a queued Journey call (queue_journey / `journey queue`), drained by `mission run` as run_journey runs it.
+  "mission-queue-runner.ts runJourneyProgrammatically": {
+    ...HOLD_RESUME, secretMode: SECRET_MODE_AUTO,
+    onRawOutput: "only `journey chain` hands a run's output on to a page",
+    allow: REPLAY_ALLOW,
+    fixtureBaseDir: FIXTURE_BASE_DIR,
+    mask: MASK_INTERNAL,
+    observer: OBSERVER_INTERNAL,
+    account: SITE_ACCOUNT,
+    interpreter: ANNOTATE_OBSERVER,
+    session: WHOLE_JOURNEY,
+    stopAfterStep: WHOLE_JOURNEY,
+    stepResponseTimeoutMs: STEP_RESPONSE_DEFAULT,
+    actionDeltas: NO_DELTAS_HERE,
+    screenshots: NO_SCREENSHOTS_HERE,
+    emulation: QUEUED_JOURNEY_CALL,
+    fixtures: QUEUED_JOURNEY_CALL,
+    heal: QUEUED_JOURNEY_CALL,
+    selfHealer: QUEUED_JOURNEY_CALL,
+  },
   "check-execute.ts runJourneyProgrammatically": {
     ...HOLD_RESUME, secretMode: SECRET_MODE_AUTO, secretEnv: SECRET_ENV_PROCESS,
     onRawOutput: "only `journey chain` hands a run's output on to a page",
-    boundSecretParams: "only `journey run` resolves a secret from an operator binding; this path takes values through params",
     assertRunnable: MCP_RUN_GATE,
     runGuardTargetsFile: GUARD_TARGETS_SEAM,
     runRecorder: RUN_RECORD_ELSEWHERE,
@@ -278,10 +318,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
 
   // ── mission run queue (MCP queue_exploration) ───────────────────────────────────────────────
   "mission-queue-runner.ts runExploration": {
-    doneCheck: "#800 0.30.0 GAPS item 12: queue_exploration does not carry a job yet; closed in wave E",
-    doneCheckBasis: "#800 0.30.0 GAPS item 12: queue_exploration does not carry a job yet; closed in wave E",
-    doneCheckPolicy: "#800 0.30.0 GAPS item 12: queue_exploration does not carry a job yet; closed in wave E",
-    requireDoneCheck: "#800 0.30.0 GAPS item 12: queue_exploration does not carry a job yet; closed in wave E",
+    targetTrust: TRUST_FROM_RUN_MODE,
     blockOffAllowlistNavigation: QUEUE_NARROW,
     secretCommand: "#324: a cmd: secret source runs an operator command — explore --allow-secret-cmd only, never a queued or suite mission",
     secretCommandAttempts: "#359: the bound on a cmd: secret source's command runs — goes with secretCommand (explore --allow-secret-cmd only)",
@@ -342,6 +379,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
 
   // ── check suites ────────────────────────────────────────────────────────────────────────────
   "check-execute.ts runExploration": {
+    targetTrust: TRUST_FROM_RUN_MODE,
     doneCheck: "#800: a suite item takes no --job (suite-explore-options excludes it); a suite gates on its items' --success checks",
     doneCheckBasis: "#800: a suite item takes no --job (suite-explore-options excludes it); a suite gates on its items' --success checks",
     doneCheckPolicy: "#800: a suite item takes no --job (suite-explore-options excludes it); a suite gates on its items' --success checks",

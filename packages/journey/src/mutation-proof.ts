@@ -1205,6 +1205,40 @@ function relaxStepSites(journey: Journey, from: Journey, keys: readonly string[]
 }
 
 /**
+ * #817: a check that asserts an absence (`count` with `max: 0`, an `attr` with `absent: true`), page or
+ * after reload. It holds on a page or view that has not loaded as well as on one the write emptied.
+ */
+function isAbsenceCheck(check: JourneyAssertionSite["check"]): boolean {
+  const a = check.kind === "page" || check.kind === "reloadThen" ? check.assertion : check;
+  if (a.kind === "count") return a.max === 0 && (a.min ?? 0) === 0;
+  if (a.kind === "attr") return a.absent === true;
+  return false;
+}
+
+/**
+ * #817 — static, before any browser: an end-state absence check that shares its paired mutations with
+ * sibling end-state checks. End-state checks are judged independently and a targeted proof never relaxes
+ * one, so if it holds while its siblings fail (as an absence does on a view that has not loaded) its
+ * cascade is final. A note only: it never changes a pairing or a verdict.
+ */
+export function endStateIsolationNotes(journey: Journey, plan: MutationPlan): readonly { readonly site: string; readonly note: string }[] {
+  const notes: { site: string; note: string }[] = [];
+  for (const site of journeyAssertions(journey)) {
+    if (site.where !== "end-state" || !isAbsenceCheck(site.check)) continue;
+    const key = assertionSiteKey(site);
+    const mine = [...new Set(plan.pairs.filter((p) => p.site === key).map((p) => p.mutation))].sort();
+    const shared = mine.filter((id) => plan.pairs.some((p) => p.mutation === id && p.site !== key && p.site.startsWith("end-state:")));
+    if (shared.length === 0) continue;
+    const siblings = [...new Set(plan.pairs.filter((p) => shared.includes(p.mutation) && p.site !== key && p.site.startsWith("end-state:")).map((p) => p.site))].sort((a, b) => Number(a.slice(10)) - Number(b.slice(10)));
+    notes.push({
+      site: key,
+      note: `${key} checks an absence (it also holds on a page or view that has not loaded) and shares ${shared.join(", ")} with sibling end-state checks ${siblings.join(", ")}: if it holds while they fail, no targeted proof can isolate it (sibling end-state checks are never relaxed) and it stays a cascade; first wait for content that shows the view loaded`,
+    });
+  }
+  return notes;
+}
+
+/**
  * #609 — the next earlier postcondition a targeted proof should weaken to reach `targetSiteKey`, or
  * `{refuse}` when there is no defensible one, or null when the target is no longer a cascade. A
  * relaxable failure is the FIRST failed site, either a page postcondition or request assertion, at
@@ -1227,7 +1261,20 @@ export function nextTargetedRelaxation(
   if (first.where === "unevaluable") return { refuse: "unevaluable end state" };
   // What a target that held under this mutation can do about it: it is not this mutation's to prove as it stands.
   const heldAdvice = (): string => (target.where === "end-state" ? `pair ${targetSiteKey} with the mutation of the step whose write it reads` : `make ${targetSiteKey}'s own check read what ${m.id} removes`);
-  if (first.where === "end-state") return { refuse: `${failedSiteKey(first)} is not an earlier step assertion: only ${failedSiteKey(first)} failed, so ${targetSiteKey} held under ${m.id} and cannot show what it changes; ${heldAdvice()}, or remove ${targetSiteKey}'s claim` };
+  if (first.where === "end-state") {
+    const siblings = result.failedSites.flatMap((f) => (f.where === "end-state" ? [failedSiteKey(f)] : []));
+    // #817: end-state checks are all judged, independently: the target was read and held, so no sibling blocked it.
+    if (target.where === "end-state") {
+      const absence = isAbsenceCheck(target.check);
+      return {
+        refuse:
+          `${targetSiteKey} was judged and held under ${m.id} while its sibling end-state checks ${siblings.join(", ")} failed: end-state checks are judged independently, so no sibling is relaxed to isolate it (unsupported, and it would change nothing); ` +
+          `the base passed ${targetSiteKey} as well, so it holds with and without what ${m.id} removes${absence ? ", and as an absence check it also holds on a page or view that has not loaded" : ""}; ` +
+          `make ${targetSiteKey} read state ${m.id} removes${absence ? " (for an absence check, first wait for content that shows the view loaded)" : ""}, or remove ${targetSiteKey}'s claim`,
+      };
+    }
+    return { refuse: `${failedSiteKey(first)} is not an earlier step assertion: ${siblings.length === 1 ? `only ${siblings[0]} failed` : `${siblings.join(", ")} failed`}, so ${targetSiteKey} held under ${m.id} and cannot show what it changes; ${heldAdvice()}, or remove ${targetSiteKey}'s claim` };
+  }
   const key = failedSiteKey(first);
   if (first.where === "step" && !first.postcondition) return { refuse: `${key} action failed (not a postcondition)` };
   if (first.step < m.step) return { refuse: "failure before the mutated step" };
@@ -1451,8 +1498,8 @@ export function controlCanChangeVerdict(journey: Journey, plan: MutationPlan, re
 }
 
 /**
- * #402: the proof's verdict as `journey verify` reports it today — exit 0 `proven`, 1 `insensitive`,
- * 2 `inconclusive` (docs/ci.md). The adjudicator's word for `proven` is `sensitive` (0.30.0 §6.1); the
- * report keeps `proven` until d-vocab-migration renames it.
+ * #402: the proof's verdict as `journey verify` reports it — exit 0 `sensitive`, 1 `insensitive`,
+ * 2 `inconclusive` (docs/ci.md). 0.30.0 §6.1 renamed 0.29.0's `proven` to the adjudicator's `sensitive`;
+ * the CLI report carries the old word as `verdictLegacy` until 0.32.0.
  */
-export type MutationProofVerdict = "proven" | "insensitive" | "inconclusive";
+export type { MutationProofVerdict } from "@jevitate/domain";

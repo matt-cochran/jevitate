@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isDoneCheckPolicy, type DoneCheckPolicy } from "@jevitate/domain";
+import { isMutationProofPolicySetting, normalizeMutationProofPolicy, type MutationProofPolicyMode } from "./mutation-proof-policy.js";
 
 /**
  * The project's own settings: `<repo>/.jevitate/project.json`, committed with the app (unlike the
@@ -36,7 +37,8 @@ export class ProjectConfigError extends Error {
 
 export interface ProjectConfig {
   readonly testIdAttributes: readonly string[];
-  readonly mutationProofPolicy?: "advisory" | "require-attempt" | "require-proven";
+  /** Default `advisory` (owner decision "Proof role"). 0.29.0's alias for `require-sensitive` is read as it, with one warning per process. */
+  readonly mutationProofPolicy?: MutationProofPolicyMode;
   /** #800: absent means the default, `require` (`DEFAULT_DONE_CHECK_POLICY`). */
   readonly doneCheckPolicy?: DoneCheckPolicy;
 }
@@ -85,8 +87,8 @@ export function loadProjectConfig(projectDir: string | null): ProjectConfig {
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new ProjectConfigError(`${path}: must be a JSON object`);
   const value = (parsed as Record<string, unknown>).testIdAttributes;
   const policy = (parsed as Record<string, unknown>).mutationProofPolicy;
-  if (policy !== undefined && policy !== "advisory" && policy !== "require-attempt" && policy !== "require-proven") {
-    throw new ProjectConfigError(`${path}: mutationProofPolicy must be advisory, require-attempt or require-proven`);
+  if (policy !== undefined && !isMutationProofPolicySetting(policy)) {
+    throw new ProjectConfigError(`${path}: mutationProofPolicy must be advisory, require-attempt or require-sensitive`);
   }
   const doneCheckPolicy = (parsed as Record<string, unknown>).doneCheckPolicy;
   if (doneCheckPolicy !== undefined && !isDoneCheckPolicy(doneCheckPolicy)) {
@@ -94,7 +96,7 @@ export function loadProjectConfig(projectDir: string | null): ProjectConfig {
   }
   return {
     testIdAttributes: value === undefined ? DEFAULT_TEST_ID_ATTRIBUTES : parseTestIdAttributes(value, path),
-    ...(policy === undefined ? {} : { mutationProofPolicy: policy }),
+    ...(policy === undefined ? {} : { mutationProofPolicy: normalizeMutationProofPolicy(policy) }),
     ...(doneCheckPolicy === undefined ? {} : { doneCheckPolicy }),
   };
 }

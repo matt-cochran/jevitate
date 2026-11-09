@@ -2,8 +2,8 @@ import { existsSync, writeFileSync } from "node:fs";
 import { mkdir, open, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isNodeError, safeChildPath } from "@jevitate/domain";
-import type { QueuedMission } from "./schema.js";
-import { QueuedMissionSchema } from "./schema.js";
+import type { QueuedJourneyRecord, QueuedMission } from "./schema.js";
+import { QueuedJourneyRecordSchema, QueuedMissionSchema } from "./schema.js";
 
 /** Structural shape `enqueueMission` needs from its backing store. */
 export interface MissionQueueStore {
@@ -154,5 +154,112 @@ export class FsMissionQueueStore implements DrainableMissionQueueStore {
       }
     }
     return results;
+  }
+}
+
+/** #797: the subdirectory of a mission queue directory that holds queued Journey calls. */
+export const JOURNEY_CALLS_SUBDIR = "journeys";
+
+/** What `queue_journey` / `journey queue` write and `jevitate mission run` drains (#797). */
+export interface JourneyCallQueueStore {
+  enqueue(r: QueuedJourneyRecord): Promise<void>;
+  get(id: string): Promise<QueuedJourneyRecord | null>;
+  list(): Promise<QueuedJourneyRecord[]>;
+  /** Atomically claims `id` for one drain; false when another drain already holds it (never removed). */
+  claim(id: string, owner: ClaimOwner): Promise<boolean>;
+  /** Who claimed `id`, or null (GAPS 20: a drain tells a call whose drain died from one still running). */
+  claimOwner(id: string): Promise<ClaimOwner | null>;
+  update(r: QueuedJourneyRecord): Promise<void>;
+}
+
+/**
+ * #797: queued Journey calls, filesystem-backed, in `<queue dir>/journeys/` (so `FsMissionQueueStore`
+ * over the same queue dir never reads one as a mission). Each record is validated BEFORE any disk I/O,
+ * so a call carrying a secret-named param is refused with nothing written (not even the directory).
+ */
+export class FsJourneyCallQueueStore implements JourneyCallQueueStore {
+  private readonly dir: string;
+  constructor(queueDir: string) {
+    this.dir = join(queueDir, JOURNEY_CALLS_SUBDIR);
+  }
+
+  private pathFor(id: string, suffix = ".json"): string {
+    return safeChildPath(this.dir, id, { what: "journey call id", suffix });
+  }
+
+  async enqueue(r: QueuedJourneyRecord): Promise<void> {
+    const validated = QueuedJourneyRecordSchema.parse(r);
+    const path = this.pathFor(validated.id);
+    await mkdir(this.dir, { recursive: true, mode: 0o700 });
+    await writeFile(path, JSON.stringify(validated), { mode: 0o600, flag: "wx" });
+  }
+
+  async claim(id: string, owner: ClaimOwner): Promise<boolean> {
+    await mkdir(this.dir, { recursive: true, mode: 0o700 });
+    try {
+      const fh = await open(this.pathFor(id, ".claim"), "wx", 0o600);
+      try {
+        await fh.writeFile(JSON.stringify(owner));
+      } finally {
+        await fh.close();
+      }
+      return true;
+    } catch (err) {
+      if (isNodeError(err, "EEXIST")) return false;
+      throw err;
+    }
+  }
+
+  async claimOwner(id: string): Promise<ClaimOwner | null> {
+    let raw: string;
+    try {
+      raw = await readFile(this.pathFor(id, ".claim"), "utf8");
+    } catch (err) {
+      if (isNodeError(err, "ENOENT")) return null;
+      throw err;
+    }
+    try {
+      const o = JSON.parse(raw) as Partial<ClaimOwner>;
+      return typeof o.pid === "number" && typeof o.host === "string" && typeof o.claimedAtIso === "string" ? { pid: o.pid, host: o.host, claimedAtIso: o.claimedAtIso } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async update(r: QueuedJourneyRecord): Promise<void> {
+    const validated = QueuedJourneyRecordSchema.parse(r);
+    if ((await this.get(validated.id)) === null) throw new Error(`cannot update unknown journey call '${validated.id}'`);
+    await writeFile(this.pathFor(validated.id), JSON.stringify(validated), { mode: 0o600 });
+  }
+
+  async get(id: string): Promise<QueuedJourneyRecord | null> {
+    let raw: string;
+    try {
+      raw = await readFile(this.pathFor(id), "utf8");
+    } catch (err) {
+      if (isNodeError(err, "ENOENT")) return null;
+      throw err;
+    }
+    return QueuedJourneyRecordSchema.parse(JSON.parse(raw));
+  }
+
+  async list(): Promise<QueuedJourneyRecord[]> {
+    let entries: string[];
+    try {
+      entries = await readdir(this.dir);
+    } catch (err) {
+      if (isNodeError(err, "ENOENT")) return [];
+      throw err;
+    }
+    const out: QueuedJourneyRecord[] = [];
+    for (const entry of entries) {
+      if (!entry.endsWith(".json")) continue;
+      try {
+        out.push(QueuedJourneyRecordSchema.parse(JSON.parse(await readFile(join(this.dir, entry), "utf8"))));
+      } catch {
+        continue; // as FsMissionQueueStore.list: one unreadable file never hides the rest
+      }
+    }
+    return out;
   }
 }

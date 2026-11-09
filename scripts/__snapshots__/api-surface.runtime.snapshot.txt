@@ -846,7 +846,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (205 exports)
+# @jevitate/journey (207 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -967,6 +967,7 @@
   describeStep: function
   doneCheckPlaceholders: function
   doneCheckScope: function
+  endStateIsolationNotes: function
   flatJourneySteps: function
   formatAnnotationChanges: function
   handoffKey: function
@@ -994,6 +995,7 @@
   journeyWriteSteps: function
   lintDoneCheck: function
   lintJourney: function
+  lintJourneyDoneCheck: function
   lintUploadFixtures: function
   listJourneyAnchors: function
   loadRefusedParamNames: function
@@ -1063,10 +1065,12 @@
   percentile: function
   runLoadTest: function
 
-# @jevitate/mcp-facade (24 exports)
+# @jevitate/mcp-facade (29 exports)
   ALLOWED_TOOLS: array
   FORBIDDEN_TOOLS: array
   JourneyRunRefusedError: class
+  QUEUE_JOURNEY_SECRET_CODE: const (string)
+  QueueJourneyRefusedError: class
   aiGenerateText: function
   assertJourneyRunnable: function
   facadeApproveAction: function
@@ -1079,20 +1083,25 @@
   facadeQueueRetrieval: function
   findCapabilities: function
   isMissionResultId: function
+  isQueuedJourneyCallId: function
   isQueuedMissionId: function
   listNamedJourneyTools: function
   listToolNames: function
   missionResultFileName: function
   missionStatus: function
   parseMissionOutcome: function
+  parseQueueJourneyArgs: function
   parseResultOutcome: function
   queueExploration: function
+  queueJourney: function
   runJourney: function
 
-# @jevitate/missions (19 exports)
+# @jevitate/missions (22 exports)
   BudgetExceedsCeilingError: class
+  FsJourneyCallQueueStore: class
   FsMissionQueueStore: class
   FsMissionTargetStore: class
+  JOURNEY_CALLS_SUBDIR: const (string)
   MISSION_BOUNDS_CEILING: object
   MISSION_STRATEGIES: array
   MissionRequestSchema: object
@@ -1102,6 +1111,7 @@
   QUEUED_SCREENSHOT_MODES: array
   QueuedEntrySchema: object
   QueuedJourneyCallSchema: object
+  QueuedJourneyRecordSchema: object
   QueuedMissionSchema: object
   SAFE_ID_RE: object
   SECRET_FIELD_SPEC_RE: object
@@ -1372,7 +1382,8 @@
   walkExpression: function
   writeClassifier: function
 
-# @jevitate/regression (16 exports)
+# @jevitate/regression (21 exports)
+  DEFAULT_SHORTEN_BUDGET: const (number)
   FlakyNotCommittableError: class
   NeverFailedError: class
   appendOracleStep: function
@@ -1381,14 +1392,18 @@
   fingerprintFailure: function
   fixtureOptions: function
   flattenWithUrls: function
+  isConfirmationStep: function
+  keepSteps: function
   loadRegressions: function
   makeSingleShotReproduces: function
   matchesFingerprint: function
   minimizeRecording: function
   oracleFromAssertion: function
+  refuseShortening: function
   replayRegression: function
   reproduceFailure: function
   reproduceFailureAt: function
+  shortenRecording: function
 
 # @jevitate/runtime (33 exports)
   DEFAULT_HEAL_BUDGET: object

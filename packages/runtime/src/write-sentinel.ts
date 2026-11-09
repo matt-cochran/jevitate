@@ -41,7 +41,8 @@ export const SENTINEL_NOTE_UNAVAILABLE = "jev-unavailable";
 const QUESTIONS = {
   "write.destructive": {
     kind: "noul" as const,
-    instructions: "Would this pending write destroy, delete or irreversibly change data?",
+    // GAPS 17: about the control's effect, not the job (x-sentinel-measure ablation: P 1.00 / R 0.75 at 0.5).
+    instructions: "Does clicking this control delete, erase, overwrite, revoke or cancel saved data or access?",
   },
   "write.outside-intent": {
     kind: "noul" as const,

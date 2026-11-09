@@ -1333,7 +1333,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (339 exports)
+# @jevitate/journey (341 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1432,6 +1432,7 @@
   E_DONE_CHECK_SECRET_REF: variable
   E_DONE_CHECK_SHAPE: variable
   E_DONE_CHECK_SYNTAX: variable
+  endStateIsolationNotes: function
   EXTENSION_NAMESPACE_RE: variable
   Extensions: type-alias
   ExtensionsSchema: variable
@@ -1551,6 +1552,7 @@
   JudgmentUsageSchema: variable
   lintDoneCheck: function
   lintJourney: function
+  lintJourneyDoneCheck: function
   lintUploadFixtures: function
   listJourneyAnchors: function
   loadRefusedParamNames: function
@@ -1569,7 +1571,7 @@
   mutationPlanSites: function
   MutationProofPolicyResult: type-alias
   MutationProofPolicyResultSchema: variable
-  MutationProofVerdict: type-alias
+  MutationProofVerdict: other
   mutationReplay: function
   MutationReplay: interface
   MutationReplayOptions: type-alias
@@ -1692,7 +1694,7 @@
   RunModeledCapacityConfig: interface
   UnauthorizedLoadTargetError: class
 
-# @jevitate/mcp-facade (38 exports)
+# @jevitate/mcp-facade (45 exports)
   aiGenerateText: function
   AiGenerateTextArgs: interface
   AiGenerateTextResult: interface
@@ -1714,6 +1716,7 @@
   InternalError: interface
   InvalidArgsError: interface
   isMissionResultId: function
+  isQueuedJourneyCallId: function
   isQueuedMissionId: function
   JourneyApprovalState: type-alias
   JourneyRunRefusalCode: type-alias
@@ -1726,21 +1729,30 @@
   NamedJourneyTool: interface
   NotFoundError: interface
   parseMissionOutcome: function
+  parseQueueJourneyArgs: function
   parseResultOutcome: function
+  QUEUE_JOURNEY_SECRET_CODE: variable
   QueuedResult: interface
   queueExploration: function
   QueueExplorationResult: interface
+  queueJourney: function
+  QueueJourneyArgs: interface
+  QueueJourneyRefusedError: class
+  QueueJourneyResult: interface
   runJourney: function
 
-# @jevitate/missions (31 exports)
+# @jevitate/missions (36 exports)
   Budget: type-alias
   BudgetExceedsCeilingError: class
   ClaimOwner: interface
   DrainableMissionQueueStore: interface
   enqueueMission: function
+  FsJourneyCallQueueStore: class
   FsMissionQueueStore: class
   FsMissionTargetStore: class
   isHttpOrigin: function
+  JOURNEY_CALLS_SUBDIR: variable
+  JourneyCallQueueStore: interface
   MISSION_BOUNDS_CEILING: variable
   MISSION_STRATEGIES: variable
   MissionQueueStore: interface
@@ -1757,6 +1769,8 @@
   QueuedEntrySchema: variable
   QueuedJourneyCall: interface
   QueuedJourneyCallSchema: variable
+  QueuedJourneyRecord: interface
+  QueuedJourneyRecordSchema: variable
   QueuedMission: interface
   QueuedMissionSchema: variable
   QueuedMissionStatus: type-alias
@@ -2189,9 +2203,10 @@
   WriteClassifier: type-alias
   WriteClassifierOptions: interface
 
-# @jevitate/regression (27 exports)
+# @jevitate/regression (37 exports)
   appendOracleStep: function
   commitRegression: function
+  DEFAULT_SHORTEN_BUDGET: variable
   DerivedOracle: interface
   deriveOracleFromTranscript: function
   FailureFingerprint: interface
@@ -2199,6 +2214,8 @@
   fixtureOptions: function
   FlakyNotCommittableError: class
   flattenWithUrls: function
+  isConfirmationStep: function
+  keepSteps: function
   loadRegressions: function
   makeSingleShotReproduces: function
   matchesFingerprint: function
@@ -2208,6 +2225,7 @@
   NetworkStatusSpec: type-alias
   NeverFailedError: class
   oracleFromAssertion: function
+  refuseShortening: function
   RegressionCase: interface
   RegressionMeta: interface
   RegressionOracle: type-alias
@@ -2217,6 +2235,12 @@
   reproduceFailureAt: function
   Reproduces: type-alias
   ReproductionReport: interface
+  ShortenCandidate: interface
+  ShortenOptions: interface
+  shortenRecording: function
+  ShortenRefusal: type-alias
+  ShortenReport: interface
+  ShortenVerdict: type-alias
 
 # @jevitate/runtime (74 exports)
   anchorValues: function

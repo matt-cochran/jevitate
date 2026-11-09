@@ -185,6 +185,34 @@ function assertBoundSecretOrigin(actor: Actor, value: ValueOrVar, bound: Readonl
   }
 }
 
+/**
+ * #819: a navigate URL that carries a bound secret parameter goes only to an origin its binding names,
+ * checked against the URL as resolved (a relative one against the page it is on). The message names the
+ * parameter and the origins, never the value or the URL with it.
+ */
+function assertBoundNavigateOrigin(actor: Actor, template: string, resolved: string, bound: ReadonlyMap<string, readonly string[]> | undefined, base: string | undefined): void {
+  if (bound === undefined) return;
+  const names = navigateUrlParams(template).filter((n) => bound.has(n));
+  if (names.length === 0) return;
+  // A relative URL goes to the page's origin; from a page with none yet (about:blank), to the session's baseURL.
+  const here = actor.ability(BrowseTheWebToken).session.page.url();
+  let origin: string;
+  try {
+    origin = new URL(resolved, /^https?:/i.test(here) ? here : base).origin;
+  } catch {
+    origin = "an unknown origin";
+  }
+  for (const name of names) {
+    const origins = bound.get(name) ?? [];
+    if (!origins.includes(origin)) {
+      throw new Error(
+        `E_SECRET_ORIGIN_REFUSED: secret parameter ${name} was not sent: navigate to ${describeNavigateUrl(template)} goes to ${origin}, and its binding is for ${origins.join(", ") || "no origin"}. ` +
+          `Bind it for that origin (targets.json["${origin}"].secretFields 'param=${name}=env:<VAR>'), or run it on the CLI with journey run --secret-field and --allow ${origin}`,
+      );
+    }
+  }
+}
+
 function isBoundSecret(value: ValueOrVar, bound: ReadonlyMap<string, readonly string[]> | undefined): value is Extract<ValueOrVar, { var: string }> {
   return bound !== undefined && "var" in value && bound.has(value.var);
 }
@@ -302,7 +330,7 @@ export async function runStep(
   rec: RecordedStep,
   vars: Map<string, string>,
   index = 0,
-  targetOpts: ResolveTargetOptions & StepWaitHooks & StepRefOptions & { readonly fixtureBaseDir?: string; readonly boundSecretParams?: ReadonlyMap<string, readonly string[]>; readonly selectAlternative?: (index: number) => SelectAlternative | undefined; readonly actionGuard?: ReplayActionGuard; readonly onExtracted?: (value: string, name?: string) => void | Promise<void> } = {},
+  targetOpts: ResolveTargetOptions & StepWaitHooks & StepRefOptions & { readonly fixtureBaseDir?: string; readonly boundSecretParams?: ReadonlyMap<string, readonly string[]>; readonly navigateBase?: string; readonly selectAlternative?: (index: number) => SelectAlternative | undefined; readonly actionGuard?: ReplayActionGuard; readonly onExtracted?: (value: string, name?: string) => void | Promise<void> } = {},
 ): Promise<StepOutcome> {
   const step = rec.step;
   // #562/#565: an expectation's `${name}` / `{ var }` operands resolve as it is checked — after this
@@ -319,6 +347,8 @@ export async function runStep(
       // navigation error never echoes a substituted value, and the postcondition names the template.
       for (const name of navigateUrlParams(step.url)) assertNotMasked(name, vars.get(name) ?? "");
       const url = resolveNavigateUrl(step.url, vars);
+      // #819: a bound secret in the URL goes only to its binding's origin (a relative URL: the page's own).
+      assertBoundNavigateOrigin(actor, step.url, url, targetOpts.boundSecretParams, targetOpts.navigateBase);
       try {
         await Navigate.to(url).performAs(actor);
       } catch (err) {

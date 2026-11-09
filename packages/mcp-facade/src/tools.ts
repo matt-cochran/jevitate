@@ -50,6 +50,16 @@ export const ALLOWED_TOOLS = [
   // is not an approval: a draft entry stays a draft, and a promoted Journey's approval goes stale
   // (a person re-approves), exactly like journey_anchor_add.
   "journey_link",
+  // 0.30.0 #797 — enqueue a call of a PROMOTED Journey (id, the
+  // content hash it binds to, non-secret params, env or baseUrl); `jevitate mission run` drains it through
+  // the same gate as run_journey. A secret-named param is refused by name before anything is written
+  // (E_SECRET_PARAM_OVER_MCP): a queued call never stores a secret value. Never runs anything itself.
+  "queue_journey",
+  // 0.30.0 #801 (owner decision) — the authoring-time shortest-path search (`journey shorten`): DRAFT Journeys
+  // only (a promoted one is refused), every candidate replay under run_journey's run-mode gate and run guard,
+  // decided by the job's done check; a secret param is refused by name (E_SECRET_PARAM_OVER_MCP). It writes a
+  // NEW unpromoted draft and never promotes or approves.
+  "shorten_journey",
 ] as const;
 
 export const FORBIDDEN_TOOLS = [

@@ -22,6 +22,7 @@ import { ParameterEnumSchema, ParameterTypeSchema, parameterTypeIssues, type Par
 import { ApprovalProposalSchema } from "./proposal-schema.js";
 import { ApprovalProvenanceSchema, type ApprovalProvenance } from "./approval-schema.js";
 import { anchorRuleIssues } from "./anchor-rules.js";
+import { DoneCheckSpecSchema, type DoneCheckSpec } from "./done-check.js";
 import { handoffSchemaIssues, JourneyInputsSchema, JourneyOutputsSchema, type HandoffInputsDecl, type HandoffOutputsDecl } from "./handoff.js";
 
 export { ANCHOR_NAME_RE } from "./anchor-rules.js";
@@ -76,6 +77,12 @@ export interface JourneyMetadata {
    * `--accept-unvetted`). Additive: an unlinked Journey promotes exactly as before.
    */
   job?: string;
+  /**
+   * 0.30.0 (design §3.1): a done check of the Journey's own, for a Journey that links no job: the
+   * jobs.json `done` shape, read in a fresh session before step 1 and after the end state. A Journey
+   * that links a job reads the job's check; lint refuses `done` beside a `job`.
+   */
+  done?: DoneCheckSpec;
   /** The account role it runs as — the environment's session it needs (e.g. `admin`, `buyer`). */
   role?: string;
   /** The seed data and login it needs, linked to fixtures and hooks. */
@@ -424,6 +431,8 @@ export const JourneySchema: ZodType<Journey> = z.object({
     persona: z.string().max(500).optional(),
     role: z.string().max(200).optional(),
     job: z.string().regex(SAFE_ID_RE, "job: a job id from .jevitate/jobs.json").max(64).optional(),
+    // 0.30.0 (design §3.1): shape only here, as jobs.json's; lintJourneyDoneCheck refuses secret and path-bound references.
+    done: DoneCheckSpecSchema.optional(),
     preconditions: z.array(JourneyPreconditionSchema).max(50).optional(),
     successCriteria: z.array(JourneySuccessCriterionSchema).max(50).optional(),
     parameters: z

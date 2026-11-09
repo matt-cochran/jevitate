@@ -136,6 +136,18 @@ export const ReviewVerifySchema = z.discriminatedUnion("status", [
       /** True when the Journey changed after this proof ran (the verdict is for other content). */
       stale: z.boolean(),
       reason: z.string().optional(),
+      /** 0.30.0 §5.1: whether the proof's target trust lets it count for a strict gate. Absent on a receipt written before 0.30.0 (which counts for none). */
+      countsForGate: z.boolean().optional(),
+      /**
+       * #816: why a stale proof is stale, when `stale` is true. `journey-changed`: the Journey's executable
+       * content differs. `engine`: the Journey is the one the proof ran on, but this engine computes its proof
+       * identity differently (another jevitate version recorded it; the receipt names it). `engine-unknown`: the
+       * same, but the receipt names no engine (before 0.30.0). `read-policy`: the target's
+       * `safety.readRequests` changed. `no-planner-identity`: the receipt predates proof identity (0.14.0). Additive.
+       */
+      staleCause: z.enum(["journey-changed", "engine", "engine-unknown", "read-policy", "no-planner-identity"]).optional(),
+      /** #816: the engine the receipt says recorded the proof (version and commit). Absent on a receipt that names none. Additive. */
+      recordedBy: z.object({ version: z.string(), commit: z.string() }).strict().optional(),
       summary: z.record(z.string(), z.number()),
       /** #616: a reviewable declared targeted-proof plan the automatic bound refused (names only). */
       suggestedTargetedProofs: z.array(z.object({ check: z.string(), mustFailWhen: z.string(), relax: z.array(z.string()) }).strict()).optional(),
@@ -147,7 +159,8 @@ const DiffSchema = z.object({ added: z.array(z.string()), removed: z.array(z.str
 
 /** #708: stable, code-computed policy identity, also consumed by evidence-reuse keys. */
 export const MutationProofPolicyResultSchema = z.object({
-  mode: z.enum(["advisory", "require-attempt", "require-proven"]),
+  /** 0.30.0: `require-sensitive` replaces `require-proven`; the CLI reads the old name as an alias, so a sheet never carries it. */
+  mode: z.enum(["advisory", "require-attempt", "require-sensitive"]),
   verdict: z.string(),
   freshness: z.enum(["missing", "stale", "fresh"]),
   reason: z.string(),
@@ -253,6 +266,8 @@ export const JourneyReviewSchema = z
         acceptedWeak: z.object({ reason: z.string(), rules: z.array(z.string()) }).strict().optional(),
         /** #616: the declared targeted-proof plans (`metadata.targetedProofs`) a reviewer approves with the Journey. Additive. */
         targetedProofs: z.array(z.object({ check: z.string(), mustFailWhen: z.string(), relax: z.array(z.string()) }).strict()).optional(),
+        /** 0.30.0 design §3.1: the Journey's own done check (`metadata.done`), as stored: placeholders, never values. Additive. */
+        doneCheck: z.object({ source: z.literal("journey"), at: z.string(), check: z.string(), distinguishedBy: z.array(z.string()).optional() }).strict().optional(),
         verify: ReviewVerifySchema,
         policy: MutationProofPolicyResultSchema.optional(),
       })
@@ -286,6 +301,25 @@ export const JourneyReviewSchema = z
     anchors: z.array(z.object({ name: z.string(), step: z.number().int().min(1) }).strict()).optional(),
     /** #765: the pending annotation draft's status and next command, never the drafted text. Additive. */
     annotationDraft: z.object({ status: z.enum(["current", "stale"]), path: z.string(), next: z.string() }).strict().optional(),
+    /**
+     * 0.30.0 (owner decision "Proof role"): the latest run's job verdict, which the sheet leads with. The
+     * strict gate is `attainment`; `doneCheckPolicy` says how an `unverified` one gates. `basis` is the
+     * run's (`done-check`, `already-true`, `reading-unknown`, `no-check`, `harness`), or `no-run` (no run
+     * recorded), `not-recorded` (a run record from before 0.30.0) or `earlier-version` (the latest run was
+     * of other executable content), each `unverified`. Code tokens only. Additive.
+     */
+    job: z
+      .object({
+        attainment: z.enum(["achieved", "not-achieved", "unverified"]),
+        basis: z.string().regex(/^[a-z-]{1,40}$/),
+        doneCheckPolicy: z.enum(["require", "advisory"]),
+        /** When the run it was read from ended. */
+        at: z.string().optional(),
+        /** That run's outcome. */
+        outcome: z.string().regex(/^[a-z-]{1,40}$/).optional(),
+      })
+      .strict()
+      .optional(),
     /** Everything that needs a decision, ordered by severity; empty means every gate is clear. Additive. */
     attention: z.array(ReviewAttentionSchema).optional(),
     /** `journeyReviewHash`: what `journey promote --reviewed-hash` binds an approval to. */

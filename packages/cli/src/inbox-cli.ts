@@ -12,7 +12,8 @@ import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags } from "
 import { journeyExitCode } from "@jevitate/domain";
 import { EXIT_CODES, exitCodeForError } from "./exit-codes.js";
 import { resolveCatalogDir } from "./catalog-api.js";
-import { approveHoldAtTerminal, holdApprovalInteractive, HoldError, isHoldId, resumeHold, type ResumeHoldResult } from "./journey-hold.js";
+import { approveHoldAtTerminal, holdApprovalInteractive, holdChainOf, HoldError, isHoldId, resumeHold, type ResumeHoldResult } from "./journey-hold.js";
+import { chainSucceeded, JourneyChainError, resumeChainHold, type JourneyChainResult } from "./journey-chain.js";
 import { callMcpTool, mcpErrorOf, mcpToolDeps, refusalFor } from "./mcp-cli-bridge.js";
 
 /**
@@ -295,10 +296,11 @@ export function registerInboxCommands(program: Command, deps: CliDeps): void {
     .action(async function (this: Command, id: string) {
       const o = this.opts<InboxOpts & BrowserLaunchFlags & { journeysDir?: string; param: Record<string, string>; storageState?: string; headed?: boolean; holdsDir?: string; env?: string; baseUrl?: string }>();
       let resumed: ResumeHoldResult;
+      let chained: JourneyChainResult | undefined;
       try {
         const browser = browserRunFromFlags(o, deps.explore?.env ?? process.env);
         const environment = environmentFromFlags({ ...(o.env === undefined ? {} : { env: o.env }), ...(o.baseUrl === undefined ? {} : { baseUrl: o.baseUrl }) }, environmentSeams(deps));
-        resumed = await resumeHold({
+        const resumeReq: Parameters<typeof resumeHold>[0] = {
           id,
           journeysDir: resolveJourneysDir(deps, o.journeysDir),
           params: o.param,
@@ -312,8 +314,16 @@ export function registerInboxCommands(program: Command, deps: CliDeps): void {
           ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),
           // §5.3: a handback or secret hold is completed by the person at this terminal.
           ...(deps.approval === undefined ? {} : { approval: deps.approval }),
-        });
+        };
+        // #827 (§5.3): a hold a chain's producer reached resumes the whole chain, not only the producer.
+        const chain = holdChainOf(id, o.holdsDir === undefined ? {} : { holdsDir: o.holdsDir });
+        if (chain === undefined) resumed = await resumeHold(resumeReq);
+        else ({ resumed, chain: chained } = await resumeChainHold(resumeReq, chain));
       } catch (err) {
+        if (err instanceof JourneyChainError) {
+          emitJsonOrRefusal(program, fail(err.code, err.message));
+          return;
+        }
         if (isEnvironmentError(err)) {
           emitJsonOrRefusal(program, fail("E_INBOX_RESUME_ARGS", err.message));
           return;
@@ -340,12 +350,14 @@ export function registerInboxCommands(program: Command, deps: CliDeps): void {
         ...("at" in r && typeof r.at === "number" ? { at: r.at } : {}),
         ...("error" in r && typeof r.error === "string" ? { error: r.error } : {}),
         ...(r.evidenceError === undefined ? {} : { evidenceError: r.evidenceError }),
+        // #827: the rest of the chain the hold belonged to, as `journey chain` reports it (values redacted there).
+        ...(chained === undefined ? {} : { chain: chained }),
       };
       emitEnvelope(program, ok(data), {
         json: o.json === true,
         command: commandPath(this),
-        exitCode: journeyExitCode(r.outcome),
-        human: () => `${id}: resumed from step ${resumed.fromStep}: ${r.outcome}\n`,
+        exitCode: chained === undefined ? journeyExitCode(r.outcome) : chainSucceeded(chained) ? 0 : 1,
+        human: () => `${id}: resumed from step ${resumed.fromStep}: ${r.outcome}${chained === undefined ? "" : `; the chain ran ${chained.runs.length} consumer run(s), ${chainSucceeded(chained) ? "all ok" : "not all ok"}`}\n`,
       });
     });
 }

@@ -12,6 +12,7 @@ import { FakeGenerationGateway, type Answer, type JudgmentPort } from "@jevitate
 import { DEMO_OVERLAY_ATTR, GOAL_ALREADY_MET_QUESTION, GOAL_MET_QUESTION } from "@jevitate/explore";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
+import { advisoryCatalogDir } from "./done-check-policy.testkit.js";
 import { demoJourney } from "./journey-demo-api.js";
 import type { CaptureLayer } from "./demo-capture.js";
 import { useSkippingTime } from "../../explore/src/testkit.js";
@@ -101,6 +102,7 @@ async function cli(journeysDir: string, judge: JudgmentPort, args: string[]): Pr
     profiles: new ProfileManager("/unused"),
     journeysDir,
     dbPath: join(dir, "no-site-policy.sqlite"),
+    catalogDir: advisoryCatalogDir(dir),
     environmentsFile: envFile,
     explore: { judge, gen: new FakeGenerationGateway(), browserPortFactory: () => new PlaywrightBrowserPort(), targetsConfigPath: join(dir, "no-targets.json") },
   });

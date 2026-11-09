@@ -1,5 +1,5 @@
 import { contentHash } from "@jevitate/domain";
-import { journeyProofHash, type Journey } from "@jevitate/journey";
+import { journeyLegacyReviewHash, journeyProofHash, journeyReviewHash, type Journey } from "@jevitate/journey";
 import type { EmulationSpec } from "@jevitate/playwright";
 import { z } from "zod";
 import type { BrowserRunOptions } from "./browser-run-options.js";
@@ -78,6 +78,25 @@ export function currentJourneyProof(journey: Journey, record: { readonly journey
     record.proofHash === currentJourneyProofHash(journey, record.proofContext, readRequests);
 }
 
+
+/** #816: why a receipt is not current (see `ReviewVerifySchema.staleCause`). */
+export type JourneyProofStaleCause = "journey-changed" | "engine" | "engine-unknown" | "read-policy" | "no-planner-identity";
+
+/**
+ * #816: why a receipt that `currentJourneyProof` refuses is stale. A Journey is only said to have changed
+ * when its content differs from what the receipt bound. A receipt whose review hash still matches, under
+ * the same read requests, is `engine` when it names the engine that recorded it (0.30.0 receipts do), and
+ * `engine-unknown` when it names none.
+ */
+export function journeyProofStaleCause(journey: Journey, record: { readonly journeyId: string; readonly contentHash: string; readonly proofHash?: string; readonly proofContext?: JourneyProofContext; readonly engine?: { readonly version: string; readonly commit: string } }, readRequests: readonly string[] | undefined): JourneyProofStaleCause {
+  if (record.journeyId !== journey.metadata.id) return "journey-changed";
+  if (record.proofHash === undefined) return "no-planner-identity";
+  if (JSON.stringify(canonicalReadRequests(record.proofContext?.readRequests) ?? null) !== JSON.stringify(canonicalReadRequests(readRequests) ?? null)) return "read-policy";
+  const unchanged = record.contentHash === journeyReviewHash(journey) || record.contentHash === journeyLegacyReviewHash(journey);
+  if (!unchanged) return "journey-changed";
+  // Grounded in the receipt's stored producer; a receipt that names none cannot say the engine differed.
+  return typeof record.engine?.version === "string" && typeof record.engine.commit === "string" ? "engine" : "engine-unknown";
+}
 
 /** Native executable identity only: neither a successful proof nor owner approval. */
 export interface JourneyExecutionIdentity {

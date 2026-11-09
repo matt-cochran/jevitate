@@ -1,9 +1,9 @@
-import { NOT_A_CREDENTIAL_WAY_OUT, fixtureSecretNeeds, secretBoundNeeds, type BoundSecretParams } from "./secret-params.js";
+import { NOT_A_CREDENTIAL_WAY_OUT, currentBoundSecretParams, fixtureSecretNeeds, isCredentialExtractName, secretBoundNeeds, type BoundSecretParams } from "./secret-params.js";
 import type { JourneyRunRecorder } from "./journey-run-record.js";
 import { JourneyRunEvidenceWriter, type WriteReceipt } from "./journey-run-evidence.js";
 import { hasRunHooks, resolveRunMode, runReadDoneCheckHooks, runValidateParamsHooks, withRunHookGuard, type RunHookContext, type RunMode } from "./journey-run-hooks.js";
 import { allowedOriginSet, offAllowlistWriteOrigin, prepareMcpRunGuard } from "./mcp-run-guard.js";
-import { FsJourneyStore, JourneyRegistry, ParamValidationError, declaredNonSecretParams, describeStep, isSecretName, loadRefusedParamNames, flatJourneySteps, journeyEndState, journeyParamSchema, journeyPrefix, lintJourney, lintUploadFixtures, secretNamedValues, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, ParamValidationError, declaredNonSecretParams, describeStep, loadRefusedParamNames, flatJourneySteps, journeyEndState, journeyParamSchema, journeyPrefix, lintJourney, lintJourneyDoneCheck, lintUploadFixtures, secretNamedValues, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
 import { assertHttpChecksAllowed, createHttpProbe, httpCheckRefs } from "./http-probe.js";
 import { inMcpInvocation, programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
 import { planSecretRun, secretHandbackHandler, secretOriginRefusalOf, withSecretHandbacks, type SecretModeFlag } from "./journey-secret-mode.js";
@@ -379,15 +379,16 @@ export async function lintJourneyById(
   };
   // #498: with no project, every literal upload fixture is refused at run time — say so here too.
   const noRoot = baseDir === undefined ? lintUploadFixtures(journey, undefined) : [];
-  // #800: the linked job's done-check findings (missing / invalid / cannot be false), about this Journey.
+  // #800: the linked job's done-check findings (missing / invalid / cannot be false), about this Journey, and
+  // (design §3.1) those of its own metadata.done, by the same rules.
   const doneFindings: JourneyLintFinding[] = [];
+  const ownDone = journey.metadata.job === undefined ? lintJourneyDoneCheck(journey, lintOpts) : [];
   if (journey.metadata.job !== undefined) {
     const catalogDir = opts.catalogDir === undefined ? resolveCatalogDir(undefined) : opts.catalogDir;
     const catalog = await loadCatalog(catalogDir, dir);
-    for (const f of journeyDoneCheckFindings(catalog, journey)) {
-      doneFindings.push({ rule: f.rule, level: f.level, message: f.message, ...(f.fix === undefined ? {} : { fix: f.fix }) });
-    }
+    ownDone.push(...journeyDoneCheckFindings(catalog, journey));
   }
+  for (const f of ownDone) doneFindings.push({ rule: f.rule, level: f.level, message: f.message, ...(f.fix === undefined ? {} : { fix: f.fix }) });
   const findings = [...lintJourney(journey, lintOpts), ...noRoot, ...refLintFindings(refIssues), ...doneFindings];
   return {
     id,
@@ -710,8 +711,8 @@ function runEvidenceFor(opts: RunJourneyProgrammaticallyOptions, stored: Journey
 
 async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutation: MutationReplayOptions, stored: Journey, evidence: RunEvidenceScope | undefined): Promise<RunJourneyResult> {
   await opts.assertRunnable?.(stored);
-  // #247: onto the chosen environment (a step on an origin it does not allow is refused here).
-  let full = applyJourneyEnvironment(stored, opts.environment);
+  // #247: onto the chosen environment (a step on an origin neither it nor #803 `--allow` allows is refused here).
+  let full = applyJourneyEnvironment(stored, opts.environment, opts.allow);
   // #293: only the prefix up to the anchor runs (its params are the ones those steps take).
   let journey = opts.stopAfterStep === undefined ? full : journeyPrefix(full, opts.stopAfterStep);
   opts.runRecorder?.noteJourney(journey);
@@ -740,12 +741,14 @@ async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutatio
   const inputParams = journey === full ? opts.params : prefixParams(full, journey, opts.params);
   mode = await resolveRunMode(hookCtx());
   if (mode !== undefined) evidence?.writer.noteMode(mode);
+  // #827: a command's bound secrets (verify, chain, demo, an exploration's prefix) reach each of its replays.
+  const givenBound = opts.boundSecretParams ?? currentBoundSecretParams();
   // 0.30.0 §5.3: a human step or a secret nobody supplied — vault-autofill, a hold, or a refusal, before anything opens.
   const secretPlan = planSecretRun({
     stored,
     journey,
     params: inputParams,
-    bound: opts.boundSecretParams,
+    bound: givenBound,
     origin: target.origin,
     environment: opts.environment,
     targetsFile: opts.runGuardTargetsFile,
@@ -763,7 +766,7 @@ async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutatio
     journey = wasFull ? full : withSecretHandbacks(journey, secretPlan.heldSecretParams);
   }
   for (const v of secretPlan.values) evidence?.writer.noteValue(v);
-  const boundSecretParams = secretPlan.bound === undefined ? opts.boundSecretParams : { ...opts.boundSecretParams, ...secretPlan.bound };
+  const boundSecretParams = secretPlan.bound === undefined ? givenBound : { ...givenBound, ...secretPlan.bound };
   validateParams(journeyParamSchema(journey), { ...secretPlan.params, ...inputParams });
   await runValidateParamsHooks(hookCtx());
   // #402: the mutated copy replays (and is judged); the stored Journey still names, redacts and gates.
@@ -905,7 +908,7 @@ async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutatio
       const onExtracted = async (value: string, name?: string): Promise<void> => {
         opts.runRecorder?.noteValue(value);
         evidence?.writer.noteValue(value);
-        if (name === undefined || !isSecretName(name) || nonSecretParams.has(name) || value.trim() === "") return;
+        if (name === undefined || !isCredentialExtractName(name) || nonSecretParams.has(name) || value.trim() === "") return;
         extractedCredentials.add(value);
         await mask.addSecret(value);
       };

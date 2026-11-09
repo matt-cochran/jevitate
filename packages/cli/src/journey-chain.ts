@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resumeHold, withHoldChainContext, type HoldChainContext, type ResumeHoldRequest, type ResumeHoldResult } from "./journey-hold.js";
 import {
   FsJourneyStore,
   JourneyRegistry,
@@ -29,6 +31,7 @@ import type { BrowserRunOptions } from "./browser-run-options.js";
 import type { ResolvedJourneyEnvironment } from "./environments.js";
 import { redactSecretValues, runJourneyProgrammatically, UnknownJourneyError, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import { inMcpInvocation } from "./approval-provenance.js";
+import { missingSecretParams } from "./secret-params.js";
 import { assertMcpRunnable } from "./journey-stale-api.js";
 import { RunGuardRefusedError } from "./mcp-run-guard.js";
 
@@ -267,6 +270,10 @@ export interface RunJourneyChainOptions {
    * runs. The CLI sets it unless `--allow-draft`; MCP can never unset it (promoted-only, as run_journey).
    */
   readonly requirePromoted?: boolean;
+  /** #827 (§5.3): the requests file's path, so a hold the producer reaches resumes the whole chain. */
+  readonly requestsPath?: string;
+  /** A held producer being resumed: its secret parameters are the person's to type, not missing params. */
+  readonly resuming?: boolean;
 }
 
 function sharedRunOptions(opts: RunJourneyChainOptions): Partial<RunJourneyProgrammaticallyOptions> & { dir: string } {
@@ -437,8 +444,12 @@ export async function runJourneyChain(opts: RunJourneyChainOptions, deps: Journe
   // #608: the producing Journey's params are explicit and validated with `validateParams`' exact
   // missing/unknown semantics BEFORE any runner — so a mismatch never opens a browser.
   const producerParams: Record<string, string> = { ...(opts.params ?? {}) };
+  // #827: over MCP a secret parameter the call leaves out is met by the run's secret mode (the operator's
+  // targets.json binding, or a hold), never the call's arguments, so it is not a missing param here.
+  const leftToSecretMode = inMcpInvocation() || opts.resuming === true ? new Set(missingSecretParams(fromJourney, producerParams)) : new Set<string>();
   try {
-    validateParams(journeyParamSchema(fromJourney), producerParams);
+    const schema = journeyParamSchema(fromJourney);
+    validateParams({ ...schema, required: schema.required.filter((n) => !leftToSecretMode.has(n)) }, producerParams);
   } catch (err) {
     if (err instanceof ParamValidationError) throw new JourneyChainError("E_CHAIN_PARAMS", err.message);
     throw err;
@@ -468,7 +479,9 @@ export async function runJourneyChain(opts: RunJourneyChainOptions, deps: Journe
   const requests = handoff === undefined ? parseChainRequests(opts.requests) : undefined;
 
   let rawOutput: unknown;
-  const fromResult = await runner({ ...shared, id: opts.from, params: producerParams, onRawOutput: (o) => { rawOutput = o; } });
+  // #827 (§5.3): a hold the producer reaches records the chain, so `inbox resume` continues all of it.
+  const chainContext = opts.requestsPath === undefined ? undefined : { to: opts.to, requests: opts.requestsPath, ...(opts.requirePromoted === true ? {} : { allowDraft: true }) };
+  const fromResult = await withHoldChainContext(chainContext, () => runner({ ...shared, id: opts.from, params: producerParams, onRawOutput: (o) => { rawOutput = o; } }));
   if (fromResult.outcome !== "ok") {
     const reason = "reason" in fromResult ? redactProducerParams(fromResult.reason, opts.params) : undefined;
     throw new JourneyChainError(
@@ -528,4 +541,53 @@ export async function runJourneyChain(opts: RunJourneyChainOptions, deps: Journe
   }
 
   return { from: { journey: opts.from, outcome: "ok", records: count }, runs, unmatched, requests: { total: (requests ?? []).length, ran } };
+}
+
+
+class ChainResumeHeldError extends Error {}
+
+/**
+ * #827 (§5.3): `jevitate inbox resume <id>` for a hold a chain's producer reached: the producer resumes
+ * from its held step (every binding checked, as any resume), then the chain goes on from its records, one
+ * consumer run per matched request in the file the chain was given. Held again: the resume's own answer.
+ */
+export async function resumeChainHold(req: ResumeHoldRequest, chain: HoldChainContext & { readonly from: string }): Promise<{ readonly resumed: ResumeHoldResult; readonly chain?: JourneyChainResult }> {
+  let resumed: ResumeHoldResult | undefined;
+  const runner: JourneyChainRunner = async (o) => {
+    if (resumed === undefined && o.id === chain.from) {
+      resumed = await resumeHold({ ...req, run: { ...req.run, ...(o.onRawOutput === undefined ? {} : { onRawOutput: o.onRawOutput }) } });
+      if (resumed.outcome === "held") throw new ChainResumeHeldError();
+      return resumed.result;
+    }
+    return runJourneyProgrammatically(o);
+  };
+  let requests: string;
+  try {
+    requests = readFileSync(chain.requests, "utf8");
+  } catch (err) {
+    throw new JourneyChainError("E_CHAIN_REQUEST", `the chain's requests file ${chain.requests} cannot be read for the resume: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  try {
+    const result = await runJourneyChain(
+      {
+        from: chain.from,
+        to: chain.to,
+        requests,
+        requestsPath: chain.requests,
+        params: req.params,
+        dir: req.journeysDir,
+        requirePromoted: chain.allowDraft !== true,
+        resuming: true,
+        ...(req.environment === undefined ? {} : { environment: req.environment }),
+        ...(req.storageState === undefined ? {} : { storageState: req.storageState }),
+        ...(req.browser === undefined ? {} : { browser: req.browser }),
+        ...(req.browserPortFactory === undefined ? {} : { browserPortFactory: req.browserPortFactory }),
+      },
+      { runJourney: runner },
+    );
+    return { resumed: resumed!, chain: result };
+  } catch (err) {
+    if (err instanceof ChainResumeHeldError && resumed !== undefined) return { resumed };
+    throw err;
+  }
 }

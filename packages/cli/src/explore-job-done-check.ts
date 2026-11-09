@@ -1,4 +1,5 @@
-import { DEFAULT_DONE_CHECK_POLICY, type DoneCheckPolicy, type JobBasis } from "@jevitate/domain";
+import { DEFAULT_DONE_CHECK_POLICY, type DoneCheckPolicy, type JobBasis, type JobVerdict } from "@jevitate/domain";
+import type { TargetTrust } from "./run-mode.js";
 import { isDoneCheckIssues, parseDoneCheck } from "@jevitate/journey";
 import { PlaywrightDoneCheckPort } from "./journey-done-check-hook.js";
 import { readDoneCheck, type BrowserPort } from "./journey-done-check.js";
@@ -74,3 +75,54 @@ export function exploreDoneCheckPolicy(catalogDir: string | null, requireDoneChe
 }
 
 export { ProjectConfigError };
+
+/** What a goal run knows when it decides its job verdict (explore-goal.ts, after the mission). */
+export interface GoalJobInput {
+  /** The run's outcome is `completed` (code accepted a `done`, a `--success`, or a grounded answer). */
+  readonly completed: boolean;
+  /** The verdict the goal loop attached to that completion (only when a done-check reader was configured). */
+  readonly loopJob?: JobVerdict | undefined;
+  /** How the completion was verified (`success-condition`, `grounded-answer`, `grounded-judgment`, …). */
+  readonly verifiedBy?: string | undefined;
+  /** A fresh-context done-check reader was configured (`--job` with a usable check that read false before). */
+  readonly hasReader: boolean;
+  /** What that reader last said (false: a proposed `done` was rejected by it). */
+  readonly lastReading?: boolean | null | undefined;
+  /** Why nothing fresh decides the job when there is no reader (`already-true`, `reading-unknown`, `no-check`). */
+  readonly basis?: JobBasis | undefined;
+  readonly goalOutcome: string;
+  /** The folded mission outcome before the decision-3 fold. */
+  readonly foldedOutcome: string;
+  /** The done-check policy (absent: the result is reported, the exit is not folded). */
+  readonly policy?: DoneCheckPolicy | undefined;
+  readonly requireDoneCheck?: boolean | undefined;
+  /** The target's trust, as the run mode decided it (`run.target.trust`). */
+  readonly trust?: TargetTrust | undefined;
+}
+
+/**
+ * The goal run's job verdict, and whether decision 3 folds its pass to `inconclusive` (exit 2).
+ *  - A done check's reading decides the job; otherwise nothing fresh was read (`unverified`).
+ *  - #802 (owner, exit-codes.md "Harness"): on a trust `harness` target a reading decides nothing:
+ *    `unverified`/`harness`, and the pass is not folded (exit 0), as `journey run` (`doneCheckExitInput`).
+ *  - Decision 3 (2026-11-09 clarification): it applies only to a run that claims an end state. A find-out
+ *    run's grounded answer (`grounded-answer`) and an independent `--success` check (`success-condition`)
+ *    are the run's own verification, so they stand unless `--require-done-check` asks for a done check.
+ */
+export function goalJobDecision(i: GoalJobInput): { readonly job: JobVerdict | undefined; readonly unverifiedPass: boolean } {
+  let job: JobVerdict | undefined =
+    i.completed && i.loopJob !== undefined
+      ? i.loopJob
+      : i.hasReader && i.lastReading === false
+        ? { attainment: "not-achieved", basis: "done-check" }
+        : i.goalOutcome === "succeeded" || i.hasReader || i.basis !== undefined
+          ? { attainment: "unverified", basis: i.basis ?? (i.hasReader ? "reading-unknown" : "no-check") }
+          : undefined;
+  // As the journey hook: on a harness, any reading of a valid check (true, false, already true) decides nothing.
+  if (i.trust === "harness" && job !== undefined && (i.hasReader || job.basis === "already-true")) job = { attainment: "unverified", basis: "harness" };
+  const ownVerification = i.verifiedBy === "success-condition" || i.verifiedBy === "grounded-answer";
+  const folds = i.policy === "require" || i.requireDoneCheck === true;
+  const unverifiedPass =
+    folds && i.foldedOutcome === "clean" && job?.attainment === "unverified" && job.basis !== "harness" && (i.requireDoneCheck === true || !ownVerification);
+  return { job, unverifiedPass };
+}
