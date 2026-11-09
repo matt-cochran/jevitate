@@ -75,7 +75,7 @@ export function registerJourneyReadiness(journey: Command, program: Command, dep
       if (mode !== "report") {
         try {
           const environment = envName === undefined && baseUrl === undefined ? undefined : environmentFromFlags({ ...(envName === undefined ? {} : { env: envName }), ...(baseUrl === undefined ? {} : { baseUrl }) }, environmentSeams(deps));
-          ({ params: runParams } = await withCommandSecretParams({ dir: layout.journeysDir, ids: [id, withId], params: param, flags: secretField, environment, env: deps.explore?.env ?? process.env }));
+          ({ params: runParams } = await withCommandSecretParams({ dir: layout.journeysDir, ids: [id, withId], params: param, flags: secretField, environment, env: deps.explore?.env ?? process.env, seams: environmentSeams(deps) }));
         } catch (err) {
           // An environment error is left to readiness, which refuses in its own order (E_READINESS_TARGET first).
           if (!isEnvironmentError(err)) {

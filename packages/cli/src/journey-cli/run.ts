@@ -223,6 +223,8 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
         ...(storageState === undefined ? {} : { storageState }),
         skip: !doneCheck,
         ...(deps.explore?.browserPortFactory === undefined ? {} : { sessionPortFactory: deps.explore.browserPortFactory }),
+        // H5: a self-heal run's result record folds its job with the same policy as this exit.
+        policy: doneCheckPolicy,
       });
       // #795: a retry reads the job's done check first (fresh session); a job already done is not run again.
       // A job with no done check proceeds as before.
@@ -413,7 +415,7 @@ export function registerJourneyRun(journey: Command, program: Command, deps: Cli
           process.exitCode = 2;
         } else if (err instanceof FixtureSpecError || err instanceof UnboundSetupRefError) {
           emitJson(program, fail(err.code, err.message));
-        } else if (err instanceof BoundaryNoHealError) {
+        } else if (err instanceof BoundaryNoHealError || err instanceof BoundSecretOutsideFieldError) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof ParamValidationError) {
           emitJson(program, fail("E_INVALID_PARAMS", String(err.message)));

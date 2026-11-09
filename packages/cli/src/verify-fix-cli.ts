@@ -1,4 +1,5 @@
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
+import { isSecretName } from "@jevitate/journey";
 import { warnParamNamesOnArgv } from "./regression-cli.js";
 import { REPLAY_SECRET_FIELD_HELP, collectSecretField } from "./secret-params.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
@@ -35,7 +36,18 @@ import {
   resolveDbPath,
 } from "./cli-shared.js";
 
-const MIN_MASKED_PARAM_LENGTH = 6;
+/**
+ * The credential guard's short-secret floor (credential-guard.ts `MIN_EMBEDDED_SECRET_LENGTH`): from 3
+ * characters a registered secret is matched by the guard's short-secret rule (a whole run of its own
+ * kind, or anywhere when it mixes letters and digits), so masking a `--param` from 3 never turns
+ * "Timeout" into "Ti«redacted»out" for `me`. A credential-named `--param` is masked at any length.
+ */
+const MIN_MASKED_PARAM_LENGTH = 3;
+
+/** The `--param` values a verify-fix run masks: any credential-named one, and every other from the guard's short-secret floor. */
+export function maskedVerifyFixParams(params: Readonly<Record<string, string>>): string[] {
+  return Object.entries(params).flatMap(([name, v]) => (v.trim() !== "" && (isSecretName(name) || v.length >= MIN_MASKED_PARAM_LENGTH) ? [v] : []));
+}
 
 /**
  * #767: how long one replay may run without a progress report. Progress comes only when a replay
@@ -159,8 +171,8 @@ export function registerVerifyFixCommands(
         return;
       }
       // `--secret` is the channel for a secret. A `--param` may still hold one by mistake, so it's masked
-      // too, unless it's too short to be one: masking "acme" or "1" everywhere ruins the diagnosis.
-      const secrets = [...o.secret, ...Object.values(o.param).filter((v) => v.length >= MIN_MASKED_PARAM_LENGTH)];
+      // too, by the credential guard's short-secret rule (`maskedVerifyFixParams`): "1" is left alone, a PIN is not.
+      const secrets = [...o.secret, ...maskedVerifyFixParams(o.param)];
       // What this run's own error messages mask: `secrets`, plus what the run learns as it goes.
       const known = [...secrets];
       let verifyFixEmulation: EmulationSpec | undefined;

@@ -41,7 +41,11 @@ import {
 import { withProjectFlags } from "../project-layout.js";
 import { TargetConfigError } from "../target-config.js";
 import { journeyTargetSafety } from "../journey-target-policy.js";
-import { DEPRECATED_DIR_HELP, journeyLayout, targetsOpts } from "./shared.js";
+import { DEPRECATED_DIR_HELP, flaggedCatalogDir, journeyLayout, targetsOpts } from "./shared.js";
+import { appVersionFlagProblem, envAppVersion } from "../app-version.js";
+import { resolveCatalogDir } from "../catalog-api.js";
+import { loadProjectConfig, ProjectConfigError } from "../project-config.js";
+import { normalizeMutationProofPolicy, type MutationProofPolicyMode } from "../mutation-proof-policy.js";
 
 /** Test seams: the replay `verifyJourneyMutations` runs, and the terminal layer's process. */
 export interface JourneyVerifySeams {
@@ -69,6 +73,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option("--secret-field <binding>", REPLAY_SECRET_FIELD_HELP, collectSecretField, [] as string[])
     .option("--storage-state <file>", "Playwright storageState JSON to start each replay authenticated (as journey run)")
+    .option("--app-version <label>", "the app's release label the proof runs against, bound into its receipt (1-64 of [A-Za-z0-9._+-]); also JEVITATE_APP_VERSION. A reader that sets another reads the proof stale")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
       const locationFlags = this.opts<{ dir?: string; project?: string; journeysDir?: string }>();
@@ -159,11 +164,27 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
       let runParams: Record<string, string>;
       let bound: BoundSecretParams | undefined;
       try {
-        ({ params: runParams, bound } = await withCommandSecretParams({ dir: verifyJourneysDir, ids: [id], params: param, flags: secretField, environment, env: deps.explore?.env ?? process.env }));
+        ({ params: runParams, bound } = await withCommandSecretParams({ dir: verifyJourneysDir, ids: [id], params: param, flags: secretField, environment, env: deps.explore?.env ?? process.env, seams: environmentSeams(deps) }));
       } catch (err) {
         const e = secretFieldErrorOf(err, "E_JOURNEY_VERIFY_ARGS");
         if (e === undefined) throw err;
         emitJson(program, fail(e.code, e.message));
+        return;
+      }
+      // M5: the app version the receipt binds; the Low: the proof policy decides whether an uncounted sensitive proof exits 0.
+      const appVersionFlag = this.opts<{ appVersion?: string }>().appVersion;
+      const appVersionProblem = appVersionFlag === undefined ? undefined : appVersionFlagProblem(appVersionFlag);
+      if (appVersionProblem !== undefined) {
+        emitJson(program, fail("E_JOURNEY_VERIFY_ARGS", appVersionProblem));
+        return;
+      }
+      const appVersion = appVersionFlag ?? envAppVersion(deps.explore?.env ?? process.env, (line) => program.configureOutput().writeErr?.(line));
+      let proofMode: MutationProofPolicyMode;
+      try {
+        proofMode = normalizeMutationProofPolicy(loadProjectConfig(resolveCatalogDir(deps.catalogDir, flaggedCatalogDir(layout))).mutationProofPolicy, (line) => program.configureOutput().writeErr?.(line));
+      } catch (err) {
+        if (!(err instanceof ProjectConfigError)) throw err;
+        emitJson(program, fail(err.code, err.message));
         return;
       }
       const storageState = storageStateFlag ?? environment?.storageState;
@@ -205,6 +226,7 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
                 if (problem !== undefined) program.configureOutput().writeErr?.(`${problem}\n`);
               },
               ...(readRequests === undefined ? {} : { readRequests }),
+              ...(appVersion === undefined ? {} : { appVersion }),
               onProgress: ({ replay, mutation }) => progress.progress({ phase: mutation === undefined ? "as recorded" : undefined, replay, mutation }),
               browserPortFactory: deps.explore?.browserPortFactory,
               checkpoint: {
@@ -244,7 +266,8 @@ export function registerJourneyVerify(journey: Command, program: Command, deps: 
             seams.run,
           )),
         );
-        const code = verifyExitCode(report.verdict);
+        // Proof role (owner 2026-11-09): under require-sensitive only a countsForGate proof counts, so only it exits 0.
+        const code = verifyExitCode(report.verdict, { countsForGate: report.countsForGate, mode: proofMode });
         // #818: the report was persisted (or why not) before this output; a failure is never silent.
         if (report.nativeReportError !== undefined) program.configureOutput().writeErr?.(`warning: ${report.nativeReportError}\n`);
         const noReset = resetDeclared(proved, recorded.flags, environment) ? undefined : verifyNoResetLine((await planJourneyVerification({ dir: verifyJourneysDir, id, params: param, ...(readRequests === undefined ? {} : { readRequests }) })).summary);

@@ -117,8 +117,8 @@ describe("#708 shared mutation proof policy", () => {
   it("only fresh sensitive receipts that count for the gate, and name their engine (#816), satisfy require-sensitive", () => {
     const j = journey(); const h = journeyReviewHash(j);
     const engine = { version: "0.30.0", commit: "abc1234" };
-    expect(evaluateMutationProofPolicy({ journey: j, contentHash: h, mode: "require-sensitive", record: { ...record(), verdict: "sensitive", countsForGate: true, engine } }).passed).toBe(true);
-    for (const r of [null, { ...record(), verdict: "sensitive", countsForGate: true }, { ...record(), verdict: "insensitive" }, { ...record(), verdict: "sensitive", countsForGate: true, proofHash: "f".repeat(64) }, { ...record(), verdict: "sensitive", countsForGate: false }]) expect(evaluateMutationProofPolicy({ journey: j, contentHash: h, mode: "require-sensitive", record: r, waiver: waiver() }).passed).toBe(false);
+    expect(evaluateMutationProofPolicy({ journey: j, contentHash: h, mode: "require-sensitive", record: { ...record(), verdict: "sensitive", countsForGate: true, engine, target: { origin: new URL(j.recording.site).origin } } }).passed).toBe(true);
+    for (const r of [null, { ...record(), verdict: "sensitive", countsForGate: true }, { ...record(), verdict: "insensitive" }, { ...record(), verdict: "sensitive", countsForGate: true, proofHash: "f".repeat(64) }, { ...record(), verdict: "sensitive", countsForGate: false }, { ...record(), verdict: "sensitive", countsForGate: true, engine }]) expect(evaluateMutationProofPolicy({ journey: j, contentHash: h, mode: "require-sensitive", record: r, waiver: waiver() }).passed).toBe(false);
   });
   it("review and policy both reject a receipt recorded for another Journey", () => {
     const review = buildJourneyReview(journey(), { proofPolicy: "require-sensitive", lastVerify: { ...record(), journeyId: "other", verdict: "sensitive" } });

@@ -550,7 +550,8 @@ function distLoosenings(path: string, was: DistParams | undefined, now: DistPara
   const out: string[] = [];
   if (now.mean < was.mean) out.push(`${path}.mean`);
   if (was.min !== undefined && (now.min === undefined || now.min < was.min)) out.push(`${path}.min`);
-  if (was.max !== undefined && now.max !== undefined && now.max < was.max) out.push(`${path}.max`);
+  // Compare EFFECTIVE ceilings: no max is an infinite one, so adding a max (or lowering it) cuts the pause.
+  if ((now.max ?? Infinity) < (was.max ?? Infinity)) out.push(`${path}.max`);
   return out;
 }
 
@@ -594,7 +595,8 @@ export function policyLoosenings(effective: SitePolicy | null, proposed: SitePol
       out.push(...distLoosenings("interaction.interInteractionMs", pace.interInteractionMs, now.interInteractionMs));
       out.push(...floor("interaction.readingMsPerChar", pace.readingMsPerChar, now.readingMsPerChar));
       // A reading cap: a lower one reads faster. No cap at all is the slowest.
-      if (pace.maxReadingMs !== undefined && now.maxReadingMs !== undefined && now.maxReadingMs < pace.maxReadingMs) out.push("interaction.maxReadingMs");
+      // Effective cap: absent is infinite, so adding a cap loosens whenever the effective policy reads at all.
+      if ((pace.readingMsPerChar ?? 0) > 0 && (now.maxReadingMs ?? Infinity) < (pace.maxReadingMs ?? Infinity)) out.push("interaction.maxReadingMs");
       const typing = pace.typing;
       if (typing !== undefined) {
         const t = now.typing;

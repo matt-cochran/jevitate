@@ -13,7 +13,7 @@ import { GatewaySelectionError, buildExploreGateways, resolveJourneysDir } from 
 import { resolveJourneyPrefix } from "../journey-prefix.js";
 import { GoalRunFlagError, successWhenFromFlags } from "../goal-run-flags.js";
 import { resolveCatalogDir } from "../catalog-api.js";
-import { exploreDoneCheckPolicy, prepareJobDoneCheck, ProjectConfigError, type ExploreJobCheck } from "../explore-job-done-check.js";
+import { exploreDoneCheckPolicy, jobCheckRunOptions, prepareJobDoneCheck, ProjectConfigError, type ExploreJobCheck } from "../explore-job-done-check.js";
 import type { DoneCheckPolicy } from "@jevitate/domain";
 import type { ExploreRunContext } from "./shared.js";
 
@@ -156,7 +156,7 @@ export async function runGoalStrategy(ctx: ExploreRunContext): Promise<void> {
   try {
     const result = await runExploration({
         ...(target === undefined ? {} : { target }),
-      ...(jobCheck?.ok !== true ? {} : jobCheck.reader !== undefined ? { doneCheck: jobCheck.reader } : { doneCheckBasis: jobCheck.basis }),
+      ...jobCheckRunOptions(jobCheck),
       doneCheckPolicy,
       ...(o.requireDoneCheck === true ? { requireDoneCheck: true } : {}),
       url,

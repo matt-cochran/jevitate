@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { DEFAULT_DONE_CHECK_POLICY, JOURNEY_RUN_OUTCOMES, journeyExitCode, type DoneCheckPolicy, type JourneyRunOutcome } from "@jevitate/domain";
 import { randomUUID } from "node:crypto";
 import { judgeDoneCheck, type DoneCheckEvidence, type DoneReading, type JobVerdict } from "@jevitate/adjudicator";
@@ -13,7 +12,8 @@ import { createHttpProbe } from "./http-probe.js";
 import { DONE_CHECK_FAILED_MESSAGE, doneCheckExitInput, readDoneCheck, type BrowserPort, type DoneCheckSession } from "./journey-done-check.js";
 import { loadProjectConfig } from "./project-config.js";
 import { trustOfRunContext } from "./journey-run-mode-gate.js";
-import { hasRunHookOwner, registerRunHooks } from "./journey-run-hooks.js";
+import { hasRunHookOwner, registerRunHooks, type RunHooks } from "./journey-run-hooks.js";
+import { doneCheckScopeStorage, type DoneCheckScopeState } from "./journey-done-check-scope.js";
 
 /**
  * #800 (design 0.30.0 §3.1, owner exit-code decisions 2/3): `journey run` reads the linked job's done
@@ -50,6 +50,8 @@ export interface DoneCheckRunRequest {
   readonly sessionPortFactory?: (() => SessionPort) | undefined;
   /** #801 `journey shorten --job`: read this catalog job's done check instead of the one the Journey links. */
   readonly jobId?: string | undefined;
+  /** H5: the policy the verdict folds with (`--require-done-check`); default project.json's (`doneCheckPolicyOf`). */
+  readonly policy?: DoneCheckPolicy | undefined;
 }
 
 interface PendingCheck {
@@ -62,15 +64,22 @@ interface PendingCheck {
 }
 
 /** One run's done-check scope: the request in, the verdict out. */
-export class DoneCheckRun {
+export class DoneCheckRun implements DoneCheckScopeState {
   #job: JobVerdict | undefined;
+  #policy: DoneCheckPolicy | undefined;
   readonly pending = new WeakMap<Journey, PendingCheck>();
 
   constructor(readonly request: DoneCheckRunRequest) {}
 
   /** Runs `fn` inside this scope: every run it starts reads its done check through this request. */
   run<T>(fn: () => Promise<T>): Promise<T> {
-    return scope.run(this, fn);
+    return doneCheckScopeStorage.run(this, fn);
+  }
+
+  /** The policy the verdict folds with: the request's, else project.json's (read once). */
+  get policy(): DoneCheckPolicy {
+    this.#policy ??= this.request.policy ?? doneCheckPolicyOf(this.request.catalogDir);
+    return this.#policy;
   }
 
   /** The verdict the hooks decided; undefined when no hook ran (none registered, or the run threw first). */
@@ -84,7 +93,11 @@ export class DoneCheckRun {
   }
 }
 
-const scope = new AsyncLocalStorage<DoneCheckRun>();
+/** The scope of the run in progress, when the hook module opened it (a scope is only ever a `DoneCheckRun`). */
+function currentRun(): DoneCheckRun | undefined {
+  const s = doneCheckScopeStorage.getStore();
+  return s instanceof DoneCheckRun ? s : undefined;
+}
 
 function originOf(url: string): string | undefined {
   try {
@@ -126,61 +139,68 @@ function unreadable(at: "pre" | "post"): DoneReading {
   return { value: { known: false, reason: "check-unevaluable" }, session: "fresh", at, durationMs: 0 };
 }
 
+/**
+ * The done check's two readings as run hooks: `validateParams` (before step 1) and `readDoneCheck` (after the
+ * end state). Each reads nothing outside a `DoneCheckRun` scope. H5: a surface whose runner does not go through
+ * `runJourneyProgrammatically` (`source run`) calls these two itself, at the same points.
+ */
+export const doneCheckRunHooks: Required<Pick<RunHooks, "validateParams" | "readDoneCheck">> = {
+  validateParams: async (ctx) => {
+    const run = currentRun();
+    if (run === undefined) return;
+    const req = run.request;
+    if (req.skip === true) {
+      run.decide({ attainment: "unverified", basis: "no-check" });
+      return;
+    }
+    const spec = await specFor(req, ctx.journey);
+    if (spec === undefined) {
+      run.decide({ attainment: "unverified", basis: "no-check" });
+      return;
+    }
+    const origin = req.origin ?? ctx.journey.recording.site;
+    if (spec === "invalid" || originOf(origin) === undefined) {
+      // A check the lint refuses is never read: nothing decides the job (`reading-unknown`).
+      run.decide({ attainment: "unverified", basis: "reading-unknown" });
+      return;
+    }
+    const bound = new Set(doneCheckScope(ctx.journey).bound);
+    const port = req.browserPort ?? new PlaywrightDoneCheckPort({ origin, ...(req.sessionPortFactory === undefined ? {} : { sessionPortFactory: req.sessionPortFactory }) });
+    const auth = { ...(req.storageState === undefined ? {} : { storageState: req.storageState }), ...(req.persona === undefined ? {} : { persona: req.persona }) };
+    const before = await readDoneCheck({ spec, origin, auth, params: boundValues(bound, ctx.params), extracts: {}, browserPort: port, at: "pre" });
+    run.pending.set(ctx.journey, { spec, bound, origin, port, before });
+    // Until the after reading lands, a run that ends early has no after: nothing decides it.
+    run.decide({ attainment: "unverified", basis: "reading-unknown" });
+  },
+  readDoneCheck: async (ctx) => {
+    const run = currentRun();
+    const pending = run?.pending.get(ctx.journey);
+    if (run === undefined || pending === undefined) return;
+    run.pending.delete(ctx.journey);
+    const req = run.request;
+    const auth = { ...(req.storageState === undefined ? {} : { storageState: req.storageState }), ...(req.persona === undefined ? {} : { persona: req.persona }) };
+    const output = "output" in ctx.result ? ctx.result.output : undefined;
+    const after = await readDoneCheck({
+      spec: pending.spec,
+      origin: pending.origin,
+      auth,
+      params: boundValues(pending.bound, ctx.params),
+      extracts: boundValues(pending.bound, output),
+      browserPort: pending.port,
+      at: "post",
+    }).catch(() => unreadable("post"));
+    const evidence: DoneCheckEvidence = { spec: pending.spec, before: pending.before, after };
+    ctx.evidence?.noteDoneCheck(evidence);
+    // #802: a harness target (a UI over a mock backend) shows feasibility only; the reading stays in the evidence.
+    run.decide(trustOfRunContext(ctx) === "harness" ? { attainment: "unverified", basis: "harness" } : judgeDoneCheck(evidence));
+  },
+};
+
 /** Registers the done check's `validateParams` (before) and `readDoneCheck` (after) hooks. Returns the unregistration. */
 export function registerDoneCheckHooks(): () => void {
   // GAPS 21: a second registration (a test after the central one) would read every check twice.
   if (hasRunHookOwner(DONE_CHECK_HOOK_OWNER)) return () => undefined;
-  return registerRunHooks(DONE_CHECK_HOOK_OWNER, {
-    validateParams: async (ctx) => {
-      const run = scope.getStore();
-      if (run === undefined) return;
-      const req = run.request;
-      if (req.skip === true) {
-        run.decide({ attainment: "unverified", basis: "no-check" });
-        return;
-      }
-      const spec = await specFor(req, ctx.journey);
-      if (spec === undefined) {
-        run.decide({ attainment: "unverified", basis: "no-check" });
-        return;
-      }
-      const origin = req.origin ?? ctx.journey.recording.site;
-      if (spec === "invalid" || originOf(origin) === undefined) {
-        // A check the lint refuses is never read: nothing decides the job (`reading-unknown`).
-        run.decide({ attainment: "unverified", basis: "reading-unknown" });
-        return;
-      }
-      const bound = new Set(doneCheckScope(ctx.journey).bound);
-      const port = req.browserPort ?? new PlaywrightDoneCheckPort({ origin, ...(req.sessionPortFactory === undefined ? {} : { sessionPortFactory: req.sessionPortFactory }) });
-      const auth = { ...(req.storageState === undefined ? {} : { storageState: req.storageState }), ...(req.persona === undefined ? {} : { persona: req.persona }) };
-      const before = await readDoneCheck({ spec, origin, auth, params: boundValues(bound, ctx.params), extracts: {}, browserPort: port, at: "pre" });
-      run.pending.set(ctx.journey, { spec, bound, origin, port, before });
-      // Until the after reading lands, a run that ends early has no after: nothing decides it.
-      run.decide({ attainment: "unverified", basis: "reading-unknown" });
-    },
-    readDoneCheck: async (ctx) => {
-      const run = scope.getStore();
-      const pending = run?.pending.get(ctx.journey);
-      if (run === undefined || pending === undefined) return;
-      run.pending.delete(ctx.journey);
-      const req = run.request;
-      const auth = { ...(req.storageState === undefined ? {} : { storageState: req.storageState }), ...(req.persona === undefined ? {} : { persona: req.persona }) };
-      const output = "output" in ctx.result ? ctx.result.output : undefined;
-      const after = await readDoneCheck({
-        spec: pending.spec,
-        origin: pending.origin,
-        auth,
-        params: boundValues(pending.bound, ctx.params),
-        extracts: boundValues(pending.bound, output),
-        browserPort: pending.port,
-        at: "post",
-      }).catch(() => unreadable("post"));
-      const evidence: DoneCheckEvidence = { spec: pending.spec, before: pending.before, after };
-      ctx.evidence?.noteDoneCheck(evidence);
-      // #802: a harness target (a UI over a mock backend) shows feasibility only; the reading stays in the evidence.
-      run.decide(trustOfRunContext(ctx) === "harness" ? { attainment: "unverified", basis: "harness" } : judgeDoneCheck(evidence));
-    },
-  });
+  return registerRunHooks(DONE_CHECK_HOOK_OWNER, doneCheckRunHooks);
 }
 
 /**
@@ -218,9 +238,29 @@ export function withJobVerdict(result: unknown, job: JobVerdict | undefined, pol
  * `policy` (`require` for `requireDoneCheck`, as `journey run --require-done-check`) overrides project.json's.
  */
 export async function runWithDoneCheck(request: DoneCheckRunRequest, fn: () => Promise<unknown>, policy?: DoneCheckPolicy): Promise<unknown> {
+  const run = new DoneCheckRun(policy === undefined ? request : { ...request, policy });
+  const result = await run.run(fn);
+  return withJobVerdict(result, run.job, run.policy);
+}
+
+/** A job verdict a result already carries (a nested scope decided it, as a hold resume inside a chain does). */
+export function jobCarriedBy(result: unknown): JobVerdict | undefined {
+  if (result === null || typeof result !== "object") return undefined;
+  const job = (result as { job?: unknown }).job;
+  if (job === null || typeof job !== "object") return undefined;
+  const { attainment, basis } = job as { attainment?: unknown; basis?: unknown };
+  return typeof attainment === "string" && typeof basis === "string" ? (job as JobVerdict) : undefined;
+}
+
+/**
+ * H5: `fn` (one Journey run) inside a done-check scope, with the verdict it decided and the policy it folds
+ * with. Every surface that runs a Journey and reports its pass goes through this (or `runWithDoneCheck`), so
+ * no pass comes back without a job verdict. A verdict the result already carries (a nested scope) wins.
+ */
+export async function inDoneCheckScope<T>(request: DoneCheckRunRequest, fn: () => Promise<T>): Promise<{ readonly result: T; readonly job: JobVerdict | undefined; readonly policy: DoneCheckPolicy }> {
   const run = new DoneCheckRun(request);
   const result = await run.run(fn);
-  return withJobVerdict(result, run.job, policy ?? doneCheckPolicyOf(request.catalogDir));
+  return { result, job: jobCarriedBy(result) ?? run.job, policy: run.policy };
 }
 
 // --- The real browser: a new Playwright context per reading -------------------------------------------

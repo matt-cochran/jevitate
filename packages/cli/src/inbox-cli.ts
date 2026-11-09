@@ -13,7 +13,8 @@ import { journeyExitCode } from "@jevitate/domain";
 import { EXIT_CODES, exitCodeForError } from "./exit-codes.js";
 import { resolveCatalogDir } from "./catalog-api.js";
 import { approveHoldAtTerminal, holdApprovalInteractive, holdChainOf, HoldError, isHoldId, resumeHold, type ResumeHoldResult } from "./journey-hold.js";
-import { chainSucceeded, JourneyChainError, resumeChainHold, type JourneyChainResult } from "./journey-chain.js";
+import { chainExitCode, chainSucceeded, JourneyChainError, resumeChainHold, type JourneyChainResult } from "./journey-chain.js";
+import { DONE_CHECK_FAILED_MESSAGE, doneCheckExitInput } from "./journey-done-check.js";
 import { callMcpTool, mcpErrorOf, mcpToolDeps, refusalFor } from "./mcp-cli-bridge.js";
 
 /**
@@ -350,13 +351,17 @@ export function registerInboxCommands(program: Command, deps: CliDeps): void {
         ...("at" in r && typeof r.at === "number" ? { at: r.at } : {}),
         ...("error" in r && typeof r.error === "string" ? { error: r.error } : {}),
         ...(r.evidenceError === undefined ? {} : { evidenceError: r.evidenceError }),
+        // H5: the resumed run's job verdict, as `journey run` reports it (owner decisions 2/3).
+        ...(resumed.job === undefined ? {} : { job: resumed.job }),
+        ...(resumed.job?.attainment === "not-achieved" && r.outcome === "ok" ? { failure: { kind: "done-check-failed", message: DONE_CHECK_FAILED_MESSAGE } } : {}),
         // #827: the rest of the chain the hold belonged to, as `journey chain` reports it (values redacted there).
         ...(chained === undefined ? {} : { chain: chained }),
       };
       emitEnvelope(program, ok(data), {
         json: o.json === true,
         command: commandPath(this),
-        exitCode: chained === undefined ? journeyExitCode(r.outcome) : chainSucceeded(chained) ? 0 : 1,
+        // H5: the job verdict folds into the exit, the resumed run's alone or the whole chain's.
+        exitCode: chained === undefined ? journeyExitCode(r.outcome, doneCheckExitInput(resumed.job, resumed.doneCheckPolicy)) : chainExitCode(chained, resumed.doneCheckPolicy),
         human: () => `${id}: resumed from step ${resumed.fromStep}: ${r.outcome}${chained === undefined ? "" : `; the chain ran ${chained.runs.length} consumer run(s), ${chainSucceeded(chained) ? "all ok" : "not all ok"}`}\n`,
       });
     });

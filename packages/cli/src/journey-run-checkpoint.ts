@@ -2,6 +2,8 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
 import { z } from "zod";
+import { secretForms } from "@jevitate/ai-core";
+import { encodeUrlParamValue } from "@jevitate/recording";
 import { canonicalJson } from "./journey-verify-checkpoint.js";
 
 /**
@@ -42,7 +44,7 @@ export const RunCheckpointSchema = z.strictObject({
 });
 export type RunCheckpoint = z.infer<typeof RunCheckpointSchema>;
 
-const PLACEHOLDER = /\{(param|param-enc):([^{}]{1,128})\}/g;
+const PLACEHOLDER = /\{(param|param-enc|param-strict):([^{}]{1,128})\}/g;
 const MASKED = "{masked}";
 
 // --- Signed, atomic files (shared with journey-hold.ts) --------------------------------------------------
@@ -144,35 +146,46 @@ export function readSignedFile<T>(path: string, key: Buffer, label: string, sche
 // --- The page address, value-free ---------------------------------------------------------------------
 
 /**
- * The page address with every parameter value replaced by its name and every extracted value by
- * `{masked}`. Longer values first, so a value inside another is not split. Values under 3 characters
- * are masked too: a short value may be a common substring, and a wrong placeholder only makes the
- * address unrestorable, never leaks.
+ * The page address with every parameter value replaced by its name and every other value the run knows
+ * (extracted, bound from a vault or targets.json, a fixture output) by `{masked}`, in every form a value
+ * takes in a URL (`secretForms`: raw, `encodeURIComponent`, the strict form the navigate step sends,
+ * form encoding, upper- and lowercase hex). Longer values first, so a value inside another is not split.
+ * Values under 3 characters are masked too: a short value may be a common substring, and a wrong
+ * placeholder only makes the address unrestorable, never leaks.
  */
 export function maskCheckpointUrl(url: string, params: Readonly<Record<string, string>>, extracted: readonly string[] = []): string {
   const swaps: { readonly value: string; readonly by: string }[] = [];
   for (const [name, value] of Object.entries(params)) {
     if (value === "") continue;
+    // The forms a resume can put back exactly: raw, `encodeURIComponent`, and the navigate step's strict form.
+    const enc = urlFormOrSelf(encodeURIComponent, value);
+    const strict = urlFormOrSelf(encodeUrlParamValue, value);
     swaps.push({ value, by: `{param:${name}}` });
-    const enc = encodeURIComponent(value);
     if (enc !== value) swaps.push({ value: enc, by: `{param-enc:${name}}` });
-    const form = new URLSearchParams({ v: value }).toString().slice(2);
-    if (form !== value && form !== enc) swaps.push({ value: form, by: MASKED });
+    if (strict !== enc) swaps.push({ value: strict, by: `{param-strict:${name}}` });
+    for (const form of secretForms(value)) swaps.push({ value: form, by: MASKED });
   }
   for (const value of extracted) {
     if (value === "") continue;
-    swaps.push({ value, by: MASKED });
-    const enc = encodeURIComponent(value);
-    if (enc !== value) swaps.push({ value: enc, by: MASKED });
+    for (const form of secretForms(value)) swaps.push({ value: form, by: MASKED });
   }
   if (swaps.length === 0) return url;
   // One pass over the address: a placeholder put in is never matched again (a value `param` would
-  // otherwise hit the text of `{param:x}`). At each position the longest value wins.
+  // otherwise hit the text of `{param:x}`). At each position the longest value wins; for one value,
+  // the first swap (a restorable placeholder) wins.
   swaps.sort((a, b) => b.value.length - a.value.length);
   const by = new Map<string, string>();
   for (const s of swaps) if (!by.has(s.value)) by.set(s.value, s.by);
   const pattern = new RegExp([...by.keys()].map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g");
   return url.replace(pattern, (m) => by.get(m) ?? MASKED);
+}
+
+function urlFormOrSelf(encode: (v: string) => string, value: string): string {
+  try {
+    return encode(value);
+  } catch {
+    return value; // a lone surrogate has no URL form; `secretForms` still masks its raw form
+  }
 }
 
 /** The address with the person's parameters put back, or why it cannot be restored. */
@@ -185,7 +198,7 @@ export function restoreCheckpointUrl(masked: string, params: Readonly<Record<str
       missing.add(name);
       return "";
     }
-    return form === "param-enc" ? encodeURIComponent(value) : value;
+    return form === "param-enc" ? encodeURIComponent(value) : form === "param-strict" ? encodeUrlParamValue(value) : value;
   });
   if (missing.size > 0) return { problem: `the page address needs the parameter(s) ${[...missing].sort().join(", ")}` };
   return { url };

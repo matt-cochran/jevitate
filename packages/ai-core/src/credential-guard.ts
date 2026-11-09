@@ -114,6 +114,42 @@ export function isWeakSecret(secret: string): boolean {
 }
 
 const REGEX_SYNTAX = /[\\^$.*+?()[\]{}|/]/g;
+
+/**
+ * Declared secrets (a Journey's `secret: true` parameters, bound and fixture secrets) are values a person
+ * gave, not ones a heuristic found, so masking one wherever it occurs costs nothing but readability. Only
+ * an all-digit 3-5 character one is held here (a PIN, an OTP): it is the one case the short-secret rule
+ * leaves unmasked inside a longer digit run (F5). Held while a run that declared it lasts, in memory only.
+ */
+const declaredDigitSecrets = new Map<string, number>();
+const DIGITS_ONLY = /^\p{N}+$/u;
+
+/**
+ * Registers a run's declared secret values until `release()`: an all-digit one of 3 to 5 characters is
+ * then masked as a plain substring (`12345` hides `1234`), while a value a run discovered keeps the
+ * short-secret rule of {@link secretPattern}. Other values are not held (the rule already masks them whole).
+ */
+export function registerDeclaredSecrets(values: readonly string[]): { release(): void } {
+  const held = [...new Set(values.filter((v) => typeof v === "string" && isDeclaredDigitCandidate(v)))];
+  for (const v of held) declaredDigitSecrets.set(v, (declaredDigitSecrets.get(v) ?? 0) + 1);
+  let released = false;
+  return {
+    release: () => {
+      if (released) return;
+      released = true;
+      for (const v of held) {
+        const n = (declaredDigitSecrets.get(v) ?? 1) - 1;
+        if (n <= 0) declaredDigitSecrets.delete(v);
+        else declaredDigitSecrets.set(v, n);
+      }
+    },
+  };
+}
+
+function isDeclaredDigitCandidate(v: string): boolean {
+  const n = [...v].length;
+  return n >= MIN_EMBEDDED_SECRET_LENGTH && n < MIN_SUBSTRING_SECRET_LENGTH && DIGITS_ONLY.test(v);
+}
 const LETTER = /\p{L}/u;
 const DIGIT = /\p{N}/u;
 
@@ -130,6 +166,7 @@ function sameKindGuard(ch: string | undefined, side: "before" | "after"): string
  * - {@link MIN_SUBSTRING_SECRET_LENGTH} characters or more: a plain substring.
  * - 3 to 5 characters holding both a letter and a digit (`Pw12x`): a plain substring too (F5), so
  *   `abcPw12xdef` is masked. Such a mix almost never occurs by chance in prose or a number.
+ * - 3 to 5 digits a run declared (`registerDeclaredSecrets`): a plain substring too.
  * - 3 to 5 characters otherwise (all letters, all digits, letters and punctuation): wherever the
  *   occurrence does not continue a run of its own kind — a letter edge not touching another letter,
  *   a digit edge not touching another digit; a punctuation edge has no condition. So `1234` is masked
@@ -148,6 +185,8 @@ export function secretPattern(secret: string): RegExp {
     return new RegExp(`(?<![\\p{L}\\p{N}])(?:${forms.map(esc).join("|")})(?![\\p{L}\\p{N}])`, "gu");
   }
   if (chars.some((c) => LETTER.test(c)) && chars.some((c) => DIGIT.test(c))) return plain();
+  // A declared all-digit secret is a known value: masked inside a longer digit run too.
+  if (declaredDigitSecrets.has(secret)) return plain();
   return new RegExp(
     forms
       .map((f) => {

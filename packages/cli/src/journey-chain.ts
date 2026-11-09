@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { resumeHold, withHoldChainContext, type HoldChainContext, type ResumeHoldRequest, type ResumeHoldResult } from "./journey-hold.js";
+import { holdChainBindingError, holdChainBindingMismatches, resumeHold, withHoldChainContext, type HoldChainContext, type ResumeHoldRequest, type ResumeHoldResult } from "./journey-hold.js";
 import {
   FsJourneyStore,
   JourneyRegistry,
@@ -24,7 +25,11 @@ import {
   secretParamValues,
   type Journey,
 } from "@jevitate/journey";
-import { clock } from "@jevitate/domain";
+import { clock, contentHash, journeyExitCode, type DoneCheckPolicy } from "@jevitate/domain";
+import type { JobVerdict } from "@jevitate/adjudicator";
+import { resolveCatalogDir } from "./catalog-api.js";
+import { inDoneCheckScope, type DoneCheckRunRequest } from "./journey-done-check-hook.js";
+import { DONE_CHECK_FAILED_MESSAGE, doneCheckExitInput } from "./journey-done-check.js";
 import type { JourneyRunResult, SiteGateDeps } from "@jevitate/runtime";
 import type { BrowserPort, EmulationSpec } from "@jevitate/playwright";
 import type { BrowserRunOptions } from "./browser-run-options.js";
@@ -48,8 +53,14 @@ import { RunGuardRefusedError } from "./mcp-run-guard.js";
  * validators and each request is matched on `inputs.request.key` and bound by `bindParams`.
  */
 
-/** The runner `journey run` uses; a testing seam so the chain can be driven without a browser. */
-export type JourneyChainRunner = (options: RunJourneyProgrammaticallyOptions) => Promise<JourneyRunResult>;
+/**
+ * The runner `journey run` uses; a testing seam so the chain can be driven without a browser. A result may
+ * carry the `job` a nested done-check scope decided (a hold resume does); otherwise the chain's scope decides it.
+ */
+export type JourneyChainRunner = (options: RunJourneyProgrammaticallyOptions) => Promise<JourneyRunResult & { readonly job?: JobVerdict }>;
+
+/** One chain run inside its done-check scope: the result and the job verdict it decided. */
+type ScopedRunner = (options: RunJourneyProgrammaticallyOptions) => Promise<{ readonly result: JourneyRunResult; readonly job: JobVerdict | undefined }>;
 
 /** Injectable wiring for `runJourneyChain` (all optional; the real runner is the default). */
 export interface JourneyChainDeps {
@@ -91,6 +102,10 @@ export interface ChainRunResult {
   readonly fingerprint?: string;
   /** §5 (handoff): when the producing run finished (ISO 8601 UTC, from the injectable clock). */
   readonly capturedAt?: string;
+  /** H5: the run's job verdict, as `journey run` reports it (absent while the done-check hooks are not registered). */
+  readonly job?: JobVerdict;
+  /** H5: the steps passed but the job's done check read false (owner decision 2). */
+  readonly failure?: { readonly kind: "done-check-failed"; readonly message: string };
 }
 
 /** One request with no discovered record (§5 result `unmatched[]`). */
@@ -101,7 +116,7 @@ export interface ChainUnmatched {
 
 /** The §5 result: the discover run's summary, one entry per matched request, the unmatched requests. */
 export interface JourneyChainResult {
-  readonly from: { readonly journey: string; readonly outcome: string; readonly records: number };
+  readonly from: { readonly journey: string; readonly outcome: string; readonly records: number; readonly job?: JobVerdict; readonly failure?: ChainRunResult["failure"] };
   readonly runs: readonly ChainRunResult[];
   readonly unmatched: readonly ChainUnmatched[];
   /** §5: `total` counts the valid and rejected request lines; `ran` counts the `--to` runs. */
@@ -242,7 +257,27 @@ function redactProducerParams(reason: string, params: Readonly<Record<string, st
  * (`requests.total` 0) succeeds with no runs.
  */
 export function chainSucceeded(result: JourneyChainResult): boolean {
-  return result.unmatched.length === 0 && (result.rejected?.length ?? 0) === 0 && result.runs.every((run) => run.outcome === "ok");
+  // H5 (owner decision 2): a run whose steps passed while its job's done check read false is a defect, not ok.
+  // A result read back from elsewhere (an older shape, a test double) may carry no `from`: only its runs then.
+  const jobFailed = [result.from as JourneyChainResult["from"] | undefined, ...result.runs].some((r) => r?.job?.attainment === "not-achieved");
+  return !jobFailed && result.unmatched.length === 0 && (result.rejected?.length ?? 0) === 0 && result.runs.every((run) => run.outcome === "ok");
+}
+
+/**
+ * H5: the chain's exit code with every run's job verdict folded in, as `journey run` folds one run's: 1 unless
+ * `chainSucceeded`; else 2 when the producer or any consumer passed with its job unverified under `require`
+ * (owner decision 3; a harness target keeps 0); else 0.
+ */
+export function chainExitCode(result: JourneyChainResult, policy: DoneCheckPolicy): number {
+  if (!chainSucceeded(result)) return 1;
+  const codes = [result.from as JourneyChainResult["from"] | undefined, ...result.runs].map((r) => journeyExitCode("ok", doneCheckExitInput(r?.job, policy)));
+  return codes.find((c) => c !== 0) ?? 0;
+}
+
+/** A run's job verdict and, when it was not achieved over passing steps, the `done-check-failed` failure. */
+function jobFields(outcome: string, job: JobVerdict | undefined): Pick<ChainRunResult, "job" | "failure"> {
+  if (job === undefined) return {};
+  return { job, ...(job.attainment === "not-achieved" && outcome === "ok" ? { failure: { kind: "done-check-failed" as const, message: DONE_CHECK_FAILED_MESSAGE } } : {}) };
 }
 
 /** The flags every run in the chain shares (environment, session, browser, allowlist, site policy). */
@@ -274,6 +309,25 @@ export interface RunJourneyChainOptions {
   readonly requestsPath?: string;
   /** A held producer being resumed: its secret parameters are the person's to type, not missing params. */
   readonly resuming?: boolean;
+  /**
+   * H5: the project data dir holding `jobs.json` and `project.json`: every run in the chain reads its job's done
+   * check in a fresh session, as `journey run` does. Default: the project's (`resolveCatalogDir`).
+   */
+  readonly catalogDir?: string | null;
+  /** H5: the policy the job verdicts fold with (default project.json's `doneCheckPolicy`). */
+  readonly doneCheckPolicy?: DoneCheckPolicy;
+}
+
+/** H5: the done-check scope every run of the chain reads its job's done check in. */
+function chainDoneCheckRequest(opts: RunJourneyChainOptions): DoneCheckRunRequest {
+  return {
+    catalogDir: opts.catalogDir === undefined ? resolveCatalogDir(undefined) : opts.catalogDir,
+    journeysDir: opts.dir,
+    ...(opts.environment?.baseUrl === undefined ? {} : { origin: opts.environment.baseUrl }),
+    ...(opts.storageState === undefined ? {} : { storageState: opts.storageState }),
+    ...(opts.browserPortFactory === undefined ? {} : { sessionPortFactory: opts.browserPortFactory }),
+    ...(opts.doneCheckPolicy === undefined ? {} : { policy: opts.doneCheckPolicy }),
+  };
 }
 
 function sharedRunOptions(opts: RunJourneyChainOptions): Partial<RunJourneyProgrammaticallyOptions> & { dir: string } {
@@ -357,7 +411,8 @@ async function runHandoffChain(
   capturedAt: string,
   opts: RunJourneyChainOptions,
   shared: Partial<RunJourneyProgrammaticallyOptions> & { dir: string },
-  runner: JourneyChainRunner,
+  runner: ScopedRunner,
+  from: JourneyChainResult["from"],
 ): Promise<JourneyChainResult> {
   const ctx: HandoffContext = { allowedOrigins: handoffOrigins(opts, fromJourney) };
   const records = readHandoffRecords(outputs, fromOutput);
@@ -389,12 +444,13 @@ async function runHandoffChain(
     const params = bindParams(inputs, record, request);
     const stamp = { contract: inputs.accepts, fingerprint: recordFingerprint(outputs, record), capturedAt };
     try {
-      const result = await runner({ ...shared, id: opts.to, params });
+      const { result, job } = await runner({ ...shared, id: opts.to, params });
       runs.push({
         ...identity,
         outcome: result.outcome,
         ...stamp,
         ...("reason" in result ? { reason: redactProducerParams(redactReason(result.reason, params, redactors), opts.params) } : {}),
+        ...jobFields(result.outcome, job),
       });
     } catch (err) {
       // #789: a refused run ends the chain: the next request would only be refused again.
@@ -407,7 +463,7 @@ async function runHandoffChain(
   }
 
   const total = requestValidation.valid.length + requestValidation.rejected.length;
-  return { from: { journey: opts.from, outcome: "ok", records: records.length }, runs, unmatched, requests: { total, ran: runs.length }, rejected };
+  return { from: { ...from, records: records.length }, runs, unmatched, requests: { total, ran: runs.length }, rejected };
 }
 
 /**
@@ -429,7 +485,10 @@ function recordsOutput(reported: unknown, raw: unknown, journey: Journey, params
 }
 
 export async function runJourneyChain(opts: RunJourneyChainOptions, deps: JourneyChainDeps = {}): Promise<JourneyChainResult> {
-  const runner = deps.runJourney ?? runJourneyProgrammatically;
+  const inner = deps.runJourney ?? runJourneyProgrammatically;
+  // H5: every run (the producer and each consumer) reads its job's done check, as `journey run` does.
+  const doneCheck = chainDoneCheckRequest(opts);
+  const runner: ScopedRunner = (o) => inDoneCheckScope(doneCheck, () => inner(o));
   const shared = sharedRunOptions(opts);
 
   const registry = new JourneyRegistry(new FsJourneyStore(opts.dir));
@@ -480,8 +539,12 @@ export async function runJourneyChain(opts: RunJourneyChainOptions, deps: Journe
 
   let rawOutput: unknown;
   // #827 (§5.3): a hold the producer reaches records the chain, so `inbox resume` continues all of it.
-  const chainContext = opts.requestsPath === undefined ? undefined : { to: opts.to, requests: opts.requestsPath, ...(opts.requirePromoted === true ? {} : { allowDraft: true }) };
-  const fromResult = await withHoldChainContext(chainContext, () => runner({ ...shared, id: opts.from, params: producerParams, onRawOutput: (o) => { rawOutput = o; } }));
+  // M3: the hold binds the consumer's content and the requests' bytes, so a resume refuses either changed.
+  const chainContext: HoldChainContext | undefined =
+    opts.requestsPath === undefined
+      ? undefined
+      : { to: opts.to, toHash: contentHash(toJourney), requests: opts.requestsPath, requestsSha256: requestsDigest(opts.requests), ...(opts.requirePromoted === true ? {} : { allowDraft: true }) };
+  const { result: fromResult, job: fromJob } = await withHoldChainContext(chainContext, () => runner({ ...shared, id: opts.from, params: producerParams, onRawOutput: (o) => { rawOutput = o; } }));
   if (fromResult.outcome !== "ok") {
     const reason = "reason" in fromResult ? redactProducerParams(fromResult.reason, opts.params) : undefined;
     throw new JourneyChainError(
@@ -490,9 +553,11 @@ export async function runJourneyChain(opts: RunJourneyChainOptions, deps: Journe
     );
   }
 
+  const fromSummary = (records: number): JourneyChainResult["from"] => ({ journey: opts.from, outcome: "ok", records, ...jobFields("ok", fromJob) });
+
   if (handoff !== undefined) {
     // §5: `capturedAt` is when the producing run finished, from the injectable clock.
-    return runHandoffChain(handoff.inputs, handoff.outputs, fromJourney as Journey, recordsOutput(fromResult.output, rawOutput, fromJourney as Journey, producerParams), opts.requests, clock.nowIso(), opts, shared, runner);
+    return runHandoffChain(handoff.inputs, handoff.outputs, fromJourney as Journey, recordsOutput(fromResult.output, rawOutput, fromJourney as Journey, producerParams), opts.requests, clock.nowIso(), opts, shared, runner, fromSummary(0));
   }
 
   const { count, records } = readRecords(recordsOutput(fromResult.output, rawOutput, fromJourney as Journey, producerParams));
@@ -521,12 +586,13 @@ export async function runJourneyChain(opts: RunJourneyChainOptions, deps: Journe
     }
     ran += 1;
     try {
-      const result = await runner({ ...shared, id: opts.to, params: mapped.params });
+      const { result, job } = await runner({ ...shared, id: opts.to, params: mapped.params });
       runs.push({
         commentId: request.commentId,
         account: request.account,
         outcome: result.outcome,
         ...("reason" in result ? { reason: redactProducerParams(redactReason(result.reason, mapped.params), opts.params) } : {}),
+        ...jobFields(result.outcome, job),
       });
     } catch (err) {
       // #789: a refused run ends the chain: the next request would only be refused again.
@@ -540,11 +606,16 @@ export async function runJourneyChain(opts: RunJourneyChainOptions, deps: Journe
     }
   }
 
-  return { from: { journey: opts.from, outcome: "ok", records: count }, runs, unmatched, requests: { total: (requests ?? []).length, ran } };
+  return { from: fromSummary(count), runs, unmatched, requests: { total: (requests ?? []).length, ran } };
 }
 
 
 class ChainResumeHeldError extends Error {}
+
+/** M3: the sha256 of the requests a chain was given, as the hold binds it. */
+export function requestsDigest(requests: string): string {
+  return createHash("sha256").update(requests, "utf8").digest("hex");
+}
 
 /**
  * #827 (§5.3): `jevitate inbox resume <id>` for a hold a chain's producer reached: the producer resumes
@@ -557,7 +628,8 @@ export async function resumeChainHold(req: ResumeHoldRequest, chain: HoldChainCo
     if (resumed === undefined && o.id === chain.from) {
       resumed = await resumeHold({ ...req, run: { ...req.run, ...(o.onRawOutput === undefined ? {} : { onRawOutput: o.onRawOutput }) } });
       if (resumed.outcome === "held") throw new ChainResumeHeldError();
-      return resumed.result;
+      // H5: the resume read the producer's done check in its own scope; the chain reports that verdict.
+      return resumed.job === undefined ? resumed.result : { ...resumed.result, job: resumed.job };
     }
     return runJourneyProgrammatically(o);
   };
@@ -567,6 +639,10 @@ export async function resumeChainHold(req: ResumeHoldRequest, chain: HoldChainCo
   } catch (err) {
     throw new JourneyChainError("E_CHAIN_REQUEST", `the chain's requests file ${chain.requests} cannot be read for the resume: ${err instanceof Error ? err.message : String(err)}`);
   }
+  // M3: the consumer and the requests file are the ones the hold was made with, checked before anything opens.
+  const consumer = await new FsJourneyStore(req.journeysDir).get(chain.to);
+  const mismatches = holdChainBindingMismatches(chain, { toHash: consumer === null ? undefined : contentHash(consumer), requestsSha256: requestsDigest(requests) });
+  if (mismatches.length > 0) throw holdChainBindingError(req.id, mismatches);
   try {
     const result = await runJourneyChain(
       {
@@ -578,6 +654,9 @@ export async function resumeChainHold(req: ResumeHoldRequest, chain: HoldChainCo
         dir: req.journeysDir,
         requirePromoted: chain.allowDraft !== true,
         resuming: true,
+        // H5: the consumers read their done checks with the resume's catalog and policy.
+        catalogDir: req.catalogDir ?? null,
+        ...(req.doneCheckPolicy === undefined ? {} : { doneCheckPolicy: req.doneCheckPolicy }),
         ...(req.environment === undefined ? {} : { environment: req.environment }),
         ...(req.storageState === undefined ? {} : { storageState: req.storageState }),
         ...(req.browser === undefined ? {} : { browser: req.browser }),

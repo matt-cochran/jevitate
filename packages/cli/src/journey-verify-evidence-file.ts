@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
+import { containsSecret } from "@jevitate/ai-core";
 import { RunEvidenceSchema, type RunEvidence } from "@jevitate/adjudicator";
 import { EVIDENCE_FILE } from "./journey-run-evidence.js";
 
@@ -43,13 +44,14 @@ const NATIVE_REPORT_FILE = /^[0-9A-Za-z-]+-[0-9a-f]{12}\.json$/;
  * oldest beyond `NATIVE_REPORT_RETENTION` are pruned. Returns the path and the SHA-256 of the exact
  * bytes, or why it could not write: it never throws, and never claims a file it did not write.
  */
-export function writeVerifyNativeReport(dir: string, stamp: string, envelope: unknown): { readonly path: string; readonly sha256: string } | { readonly error: string } {
+export function writeVerifyNativeReport(dir: string, stamp: string, envelope: unknown, root?: string): { readonly path: string; readonly sha256: string } | { readonly error: string } {
   const bytes = Buffer.from(`${JSON.stringify(envelope, null, 2)}\n`, "utf8");
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   const path = join(dir, `${stamp.replace(/[^0-9A-Za-z-]/g, "-")}-${sha256.slice(0, 12)}.json`);
   let tmp: string | undefined;
   try {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    if (root === undefined) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    else mkdirNoFollow(root, dir);
     const parent = lstatSync(dir);
     if (!parent.isDirectory() || parent.isSymbolicLink()) throw Object.assign(new Error("not a directory"), { code: "ENOTDIR" });
     chmodSync(dir, 0o700);
@@ -77,6 +79,42 @@ export function writeVerifyNativeReport(dir: string, stamp: string, envelope: un
   }
   pruneNativeReports(dir, path);
   return { path, sha256 };
+}
+
+/**
+ * Creates `dir` under `root` one component at a time, refusing any component that is a symbolic link
+ * or not a directory, as the other secure writes do (journey-proposal-store.ts `assertNoSymlink`,
+ * journey-review-store.ts): a linked `.verify/reports` would otherwise send the report wherever it points.
+ */
+function mkdirNoFollow(root: string, dir: string): void {
+  const rel = relative(root, dir);
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) throw Object.assign(new Error("not under its root"), { code: "EINVAL" });
+  let cur = root;
+  for (const next of [null, ...rel.split(sep).filter((p) => p !== "")]) {
+    if (next !== null) cur = join(cur, next);
+    try {
+      mkdirSync(cur, { mode: 0o700 });
+    } catch (err) {
+      if (!(err !== null && typeof err === "object" && "code" in err && err.code === "EEXIST")) throw err;
+    }
+    const st = lstatSync(cur);
+    if (st.isSymbolicLink()) throw Object.assign(new Error(`refusing to write through a symbolic link at ${cur}`), { code: "ELOOP" });
+    if (!st.isDirectory()) throw Object.assign(new Error("not a directory"), { code: "ENOTDIR" });
+  }
+}
+
+/**
+ * Whether `text` (a serialized report) carries any of `secrets` in any form: every URL form
+ * (`secretForms`: raw, `encodeURIComponent`, strict, form encoding, lowercase hex), each also as it
+ * reads inside a JSON string. Short secrets follow the same token rule the redaction does (`containsSecret`).
+ */
+export function carriesSecretValue(text: string, secrets: readonly string[]): boolean {
+  return secrets.some((v) => {
+    if (v.trim() === "") return false;
+    if (containsSecret(text, v)) return true;
+    const escaped = JSON.stringify(v).slice(1, -1);
+    return escaped !== v && containsSecret(text, escaped);
+  });
 }
 
 /** Keeps the newest `NATIVE_REPORT_RETENTION` (names sort by their stamp), never the one just written. Best effort. */

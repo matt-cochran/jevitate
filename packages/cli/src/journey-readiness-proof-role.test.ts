@@ -39,11 +39,11 @@ async function proof(verdict: string, over: Partial<JourneyVerifyRecord> = {}): 
 }
 
 /** One recorded run of the Journey as it stands, with this job verdict (as `journey run` writes it). */
-async function ran(job: { attainment: string; basis: string } | undefined): Promise<void> {
+async function ran(job: { attainment: string; basis: string } | undefined, outcome = "ok"): Promise<void> {
   const current = (await new FsJourneyStore(dir).get("sample"))!;
   await withJourneyRunRecord({ channel: "cli", id: "sample", params: {}, logsRoot: join(root, "logs") }, async (recorder) => {
     recorder.noteJourney(current);
-    return { outcome: "ok", ...(job === undefined ? {} : { job }) };
+    return { outcome, ...(job === undefined ? {} : { job }) };
   });
 }
 
@@ -121,6 +121,51 @@ describe("readiness gates on the job (owner decision: job gates)", () => {
     expect(check(r, "job")).toMatchObject({ state: "not-run", advisory: true });
     expect(check(r, "job")!.detail).toMatch(/^unverified \(not-recorded\)/);
     expect(r.verdict).toBe("technically-ready");
+  });
+});
+
+describe("M4: the job counts only from the judged run, and only when its steps passed", () => {
+  type Run = NonNullable<Parameters<typeof runJourneyReadiness>[1]>["run"];
+  const replayWith = (result: Record<string, unknown>) =>
+    runJourneyReadiness({ id: "sample", journeysDir: dir, mode: "replay", baseUrl: "https://example.test", ...opts() }, { cwd: () => root, run: (async () => result) as unknown as Run });
+
+  it("report mode: an achieved job from a run whose steps failed does not pass", async () => {
+    await proof("sensitive");
+    await ran({ attainment: "achieved", basis: "done-check" }, "quarantined");
+    const r = await readiness();
+    expect(check(r, "job")).toMatchObject({ state: "inconclusive" });
+    expect(check(r, "job")!.detail).toMatch(/^unverified \(run-not-passed\)/);
+    expect(r.verdict).not.toBe("technically-ready");
+  });
+
+  it("replay mode: the replay's own not-achieved job decides, not the earlier achieved run", async () => {
+    await proof("sensitive");
+    await ran({ attainment: "achieved", basis: "done-check" });
+    const r = await replayWith({ outcome: "ok", job: { attainment: "not-achieved", basis: "done-check" } });
+    expect(check(r, "job")).toMatchObject({ state: "fail" });
+    expect(r.verdict).toBe("blocked");
+  });
+
+  it("replay mode: a replay with no job verdict never borrows the earlier achieved one", async () => {
+    await proof("sensitive");
+    await ran({ attainment: "achieved", basis: "done-check" });
+    const r = await replayWith({ outcome: "ok" });
+    expect(check(r, "job")).toMatchObject({ state: "inconclusive" });
+    expect(check(r, "job")!.detail).toMatch(/^unverified \(replay-no-verdict\)/);
+    expect(r.verdict).not.toBe("technically-ready");
+  });
+
+  it("replay mode: an achieved job from a replay whose steps failed does not pass", async () => {
+    await proof("sensitive");
+    const r = await replayWith({ outcome: "quarantined", reason: "diverged", job: { attainment: "achieved", basis: "done-check" } });
+    expect(check(r, "job")!.state).not.toBe("pass");
+  });
+
+  it("replay mode: the replay's own achieved job on a passing replay passes", async () => {
+    await proof("sensitive");
+    const r = await replayWith({ outcome: "ok", job: { attainment: "achieved", basis: "done-check" } });
+    expect(check(r, "job")).toMatchObject({ state: "pass" });
+    expect(check(r, "job")!.detail).toContain("this readiness replay");
   });
 });
 
@@ -262,7 +307,9 @@ describe("#816: a proof is blamed on the Journey only when the Journey changed",
     expect(review.proof.policy).toMatchObject({ passed: false });
     expect(review.proof.policy!.reason).toMatch(/does not say which engine recorded it/);
     expect((await readiness()).verdict).not.toBe("technically-ready");
-    await proof("sensitive", { engine: { version: "0.30.0", commit: "abc1234" } });
+    // M5: a 0.30.0 receipt also names the target origin it ran on.
+    const site = (await new FsJourneyStore(dir).get("sample"))!.recording.site;
+    await proof("sensitive", { engine: { version: "0.30.0", commit: "abc1234" }, target: { origin: new URL(site).origin } });
     review = (await reviewJourneyById(dir, "sample", opts())).review;
     expect(review.proof.policy).toMatchObject({ passed: true });
     expect((await readiness()).verdict).toBe("technically-ready");

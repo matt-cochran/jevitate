@@ -285,6 +285,17 @@ of its words are in the goal (`Publish report` for "Publish the Q3 sales report"
 variant of a goal word (`Reports`); one shared word among several does not count. If the decision budget ends
 straight after such a refusal, the run says so ([outcomes](./outcomes.md)).
 
+**No route found.** When a goal run gives up, stalls or runs out of budget after it has covered every control
+it could reach, and none leads toward the goal, it ends `inconclusive` (exit `2`) with
+`goalReason: "no-route-found"`, and its reason lists the pages it opened. Code decides the coverage floor
+from the run's own tracking: every top-level navigation page opened, no untried control left on any page
+seen (a link counts once its destination was opened; three pages of one shape, such as `/customer/1`,
+`/customer/2`, `/customer/3`, cover the rest), no control naming the goal, and nothing clickable on a
+page that the run cannot use (an `onclick` element outside a control, a canvas, a frame). Below the floor
+the run ends as it did before. A role word on the page ("Viewer", "Read-only", "Guest") is named as a
+hint that another role may see more; it is never read as a wall. See
+[no route found](./outcomes.md#no-route-found).
+
 ### Known limits of the hang heuristics
 
 - A request that runs longer than `longPollMs` on an interactive page is treated

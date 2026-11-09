@@ -47,6 +47,7 @@ import {
   targetedMutationReplay,
   thinSites,
   secretParamNames,
+  secretParamValues,
   validateParams,
   type AssertionVerdict,
   type AssertionProof,
@@ -82,11 +83,11 @@ import { journeyContentHash } from "./journey-annotate-api.js";
 import { evidenceParamsDigest } from "./journey-run-evidence.js";
 import { proofEvidenceOf, type LedgerReplay, type ProofGathering } from "./journey-verify-evidence.js";
 import { journeyReviewHash, type JourneyVerifyRecord } from "./journey-review.js";
-import { writeVerifyNativeReport } from "./journey-verify-evidence-file.js";
+import { carriesSecretValue, writeVerifyNativeReport } from "./journey-verify-evidence-file.js";
 import { currentBuildTree, currentEngineInfo } from "./engine.js";
 import { artifactStamp } from "./mission-journal.js";
 import { preflightVerifyRecord, writePreflightedVerifyRecord } from "./journey-review-store.js";
-import { UnknownJourneyError, effectiveAllowedOrigins, redactSecretParams, runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
+import { UnknownJourneyError, effectiveAllowedOrigins, redactSecretValues, runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import type { OutcomeCheckFailure } from "./journey-network-checks.js";
 import { journeyProofContext, journeyExecutionIdentity, type JourneyExecutionIdentity } from "./journey-proof-context.js";
 import {
@@ -110,6 +111,7 @@ import {
 import { composeObservers } from "./run-screenshots.js";
 import { asProof, ProofHoldRefusedError } from "./journey-run-hooks.js";
 import { noteMcpRefusal } from "./approval-provenance.js";
+import { envAppVersion } from "./app-version.js";
 
 /** `journey run`'s options a proof passes through to every replay (params, environment, auth, fixtures, browser, gate). */
 export type VerifyJourneyOptions = Omit<
@@ -118,6 +120,8 @@ export type VerifyJourneyOptions = Omit<
 > & {
   /** Read patterns for the write classifier (as `journey lint`). */
   readonly readRequests?: readonly string[];
+  /** M5: the app's release label the proof runs against (`--app-version`); default `JEVITATE_APP_VERSION` when valid. Bound into the receipt. */
+  readonly appVersion?: string;
   /** Called as each replay starts, in order, targeted proofs' replays included. */
   readonly onProgress?: (progress: JourneyVerifyProgress) => void;
   /** The governor whose machine slot the proof keeps between replays (default: the process-wide one its replays open sessions through). */
@@ -1235,6 +1239,8 @@ interface ConcludeContext {
   readonly resuming: ResumeState | undefined;
   /** A closing replay's restore can still fail, so this is read when it is needed. */
   readonly restoreFailed: () => boolean;
+  /** Independent check M6: every secret the proof's replays knew (params, bindings, fixture and extracted secrets), read when it is needed. */
+  readonly runSecrets: () => readonly string[];
   readonly notIsolated: string | undefined;
   /** #812: what the evidence records beyond the pairs: the replays as they ran, the independence reading, the first taint. */
   readonly gathered: Pick<ProofGathering, "ledger" | "isolation" | "baseOpenAtClose" | "taint">;
@@ -1736,9 +1742,11 @@ async function concludeProof(c: ConcludeContext): Promise<JourneyVerifyReport> {
   // Native digest/id contain no parameter values. Do not corrupt their typed identity if a
   // secret value happens to be a substring of a digest or protocol discriminant.
   const { executionIdentity: identity, ...redactable } = report;
-  const redacted: JourneyVerifyReport = { ...redactSecretParams(redactable, journey, opts.params), executionIdentity: identity };
+  // Independent check M6: every secret the replays knew, not only the secret parameters, in every URL form (`redactText`).
+  const secrets = [...new Set([...secretParamValues(journey, opts.params), ...c.runSecrets()])];
+  const redacted: JourneyVerifyReport = { ...redactSecretValues(redactable, secrets), executionIdentity: identity };
   // #818: the whole redacted report is on disk before anything is returned or printed, and the receipt binds it.
-  const native = persistNativeReport(receiptDestination, journey, opts.params, redacted, proofContext);
+  const native = persistNativeReport(receiptDestination, journey, secrets, redacted, proofContext);
   const nativeBinding = "error" in native ? { nativeReportError: native.error } : { nativeReport: native };
   const receipt: JourneyVerifyRecord & { readonly nativeReport?: { readonly path: string; readonly sha256: string }; readonly nativeReportError?: string } = {
     journeyId: journey.metadata.id,
@@ -1755,6 +1763,8 @@ async function concludeProof(c: ConcludeContext): Promise<JourneyVerifyReport> {
     ...("error" in native ? { nativeReportError: native.error } : { nativeReport: { path: relative(receiptDestination.parent, native.path), sha256: native.sha256 } }),
     // #816: the engine that computed this proof's identity, so a reader can say a mismatch is the engine's, not the Journey's.
     engine: receiptEngine(),
+    // M5: the target and app version the proof ran on; a reader judging another target or app version reads it stale.
+    ...receiptTarget(journey, opts),
     at: clock.nowIso(),
   };
   // #432: the verdict is kept beside the Journey (bound to its review hash) for `journey review`.
@@ -1765,14 +1775,27 @@ async function concludeProof(c: ConcludeContext): Promise<JourneyVerifyReport> {
   return { ...redacted, ...nativeBinding };
 }
 
+/** M5: the receipt's target origin (`--env`/`--base-url`, else the Journey's site) and app version, when known. */
+function receiptTarget(journey: Journey, opts: VerifyJourneyOptions): { target?: { origin: string }; appVersion?: string } {
+  let origin: string | undefined;
+  try {
+    const o = new URL(opts.environment?.baseUrl ?? journey.recording.site).origin;
+    origin = o === "null" ? undefined : o;
+  } catch {
+    origin = undefined;
+  }
+  const appVersion = opts.appVersion ?? envAppVersion(process.env);
+  return { ...(origin === undefined ? {} : { target: { origin } }), ...(appVersion === undefined ? {} : { appVersion }) };
+}
+
 /**
  * #818: the redacted report, with the engine and the immutable bindings that identify the run, under
- * `.verify/reports/<id>/`. A secret parameter's value found anywhere in it withholds the file entirely.
+ * `.verify/reports/<id>/`. A secret the run knew, found anywhere in it in any form, withholds the file entirely.
  */
 function persistNativeReport(
   destination: Awaited<ReturnType<typeof preflightVerifyRecord>>,
   journey: Journey,
-  params: Readonly<Record<string, string>>,
+  secrets: readonly string[],
   report: JourneyVerifyReport,
   proofContext: ReturnType<typeof journeyProofContext>,
 ): { readonly path: string; readonly sha256: string } | { readonly error: string } {
@@ -1789,13 +1812,12 @@ function persistNativeReport(
     at,
     report,
   };
-  const secrets = secretParamNames(journey, params).flatMap((n) => (params[n] === undefined || params[n] === "" ? [] : [params[n]!]));
-  const text = JSON.stringify(envelope);
-  if (secrets.some((v) => text.includes(v) || text.includes(JSON.stringify(v).slice(1, -1)))) {
-    return { error: "the native report could not be written (withheld: it still carried a secret parameter value); the proof's verdict stands, but its full report exists only in this output" };
+  if (carriesSecretValue(JSON.stringify(envelope), secrets)) {
+    return { error: "the native report could not be written (withheld: it still carried a secret value); the proof's verdict stands, but its full report exists only in this output" };
   }
   const dir = join(destination.parent, "reports", basename(destination.path, ".json"));
-  return writeVerifyNativeReport(dir, artifactStamp(at), envelope);
+  // `.verify` was checked by the preflight: nothing under it is written through a symbolic link.
+  return writeVerifyNativeReport(dir, artifactStamp(at), envelope, destination.parent);
 }
 
 /** #816: the version and commit a receipt names as its producer (no build time: it is not identity). */
@@ -1828,12 +1850,16 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
   const resuming = opened.resume;
   // A taint belongs to the whole proof: an earlier run's stands, or a resume could read `proven` where the uninterrupted proof could not.
   if (resuming?.restoreFailed === true) restoreFailed = true;
+  // Independent check M6: the secrets each replay knew, for the report's redaction.
+  const knownSecrets = new Set<string>();
   const boundedRun = (options: Parameters<Run>[0], mutation: NonNullable<Parameters<Run>[1]>, m?: Pick<JourneyMutation, "id">, retry = false, probe?: ReplayProbe): ReturnType<Run> => {
     replays += 1;
     checkpoint?.replayStarted(replays);
     const where: JourneyVerifyProgress = { replay: replays, ...(m === undefined ? {} : { mutation: m.id }), ...(retry ? { retry: true as const } : {}) };
     onProgress?.(retry && m !== undefined ? { ...where, mutation: `${m.id} (retry after error)` } : where);
-    return replayWithinBound((browserPortFactory) => run({ ...options, browserPortFactory }, { ...mutation, onFixtureRestoreFailed: () => {
+    return replayWithinBound((browserPortFactory) => run({ ...options, browserPortFactory }, { ...mutation, onRunSecrets: (secrets) => {
+          for (const v of secrets) if (v !== "") knownSecrets.add(v);
+        }, onFixtureRestoreFailed: () => {
           restoreFailed = true;
           checkpoint?.taint({ restoreFailed: true });
         } }), probe === undefined ? portFactory : probe.wrap(portFactory), where, inactivityMs, () => void (sessionsOpened += 1));
@@ -1889,7 +1915,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
   if (resuming !== undefined) {
     // Nothing is reused against an app whose as-recorded flow no longer passes, or a base it was not paced for.
     if (base.outcome !== "ok") {
-      const why = base.outcome === "quarantined" ? redactSecretParams({ reason: base.reason }, journey, opts.params).reason : base.outcome;
+      const why = base.outcome === "quarantined" ? redactSecretValues({ reason: base.reason }, [...secretParamValues(journey, opts.params), ...knownSecrets]).reason : base.outcome;
       throw new JourneyVerifyResumeRefusedError("base-failed", `the Journey as recorded did not pass the re-run of the base replay (${why})`);
     }
     const refused = resumeRefusalAgainstBase(resuming, plan, sites, pace, baseProbe.writesInFlightAtClose);
@@ -2075,7 +2101,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
 
   return concludeProof({
     opts, runOpts, journey, journeyHash, plan, sites, checkOf, base, baseFields, pace, mutations, suggested, receiptDestination, boundedRun, checkpoint, resuming,
-    restoreFailed: () => restoreFailed, notIsolated,
+    restoreFailed: () => restoreFailed, runSecrets: () => [...knownSecrets], notIsolated,
     gathered: { ledger, isolation, baseOpenAtClose, ...(taintNote === undefined ? {} : { taint: taintNote }) },
   });
 }

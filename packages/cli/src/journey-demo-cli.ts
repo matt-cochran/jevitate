@@ -97,7 +97,7 @@ export function registerJourneyDemoCommand(journey: Command, program: Command, d
       let param: Record<string, string>;
       let bound: BoundSecretParams | undefined;
       try {
-        ({ params: param, bound } = await withCommandSecretParams({ dir: journeysDir, ids: [id], params: paramFlags, flags: secretField, environment, env: deps.explore?.env ?? process.env }));
+        ({ params: param, bound } = await withCommandSecretParams({ dir: journeysDir, ids: [id], params: paramFlags, flags: secretField, environment, env: deps.explore?.env ?? process.env, seams: environmentSeams(deps) }));
       } catch (err) {
         const e = secretFieldErrorOf(err, "E_JOURNEY_DEMO_ARGS");
         if (e === undefined) throw err;

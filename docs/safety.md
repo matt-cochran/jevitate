@@ -423,7 +423,9 @@ built-in verb (`Preview*`, `Recalculate*`, …).
   `param=<name>=env:<VAR>` for any secret parameter by its name. Use `param=` for a token in a `navigate` URL.
   The same specs work in `targets.json` `secretFields`, and a goal run never matches `param=` to a live field.
 - A bound value goes only to its binding's origin. A `targets.json` binding is for the origin it is keyed by,
-  and a `--secret-field` binding is for the run's allowlist. A field's binding is checked as the field is
+  and a `--secret-field` binding is for the origins a person or operator named: the run's own origin (the
+  environment's, else the recorded site), the environment's `allow` and `origins`, and `--allow`. An origin only the
+  Journey's `allowedOrigins` lists never gets it. A field's binding is checked as the field is
   typed, and a navigate URL's as it is navigated, as resolved: a relative URL goes to the page's own origin.
   Anywhere else the run fails with `E_SECRET_ORIGIN_REFUSED`. A `navigate` URL whose literal origin is not the
   binding's is refused before anything runs, and so is an `http` check holding a bound parameter. Over MCP, a
@@ -448,7 +450,10 @@ built-in verb (`Preview*`, `Recalculate*`, …).
   exactly `pass`, `pin`, `pw`, `sid`, `ssn`, `creds` or `key`. A last word that describes rather than
   holds a value (`count`, `type`, `length`, `name`, `label`, `channel`, `banner`, `expires`, …) lifts
   it. So `apiKey`, `authToken`, `session_id`, `user_pass` and `otp` still refuse, and `passengers`,
-  `footprint`, `bypass_cache`, `token_count` and `cookie_banner` heal and annotate. The rule is by name:
+  `footprint`, `bypass_cache`, `token_count` and `cookie_banner` heal and annotate. A name the last word
+  lifts but that still holds a credential term (`apiKey_name`, `session_label`) has its value masked as it
+  binds (pixel mask, redaction set, heal payload) when the value is 6 characters or more, so a real key
+  behind a describing name is still hidden and `token_count = 42` doesn't mask every 42. The rule is by name:
   a credential extracted under a plain name (`note`) is not recognised. The same `"secret": false` way
   out applies to an extract name the rule still takes (`issueKey`, `secretary`).
 - `explore --strategy coverage|exploratory` refuse `--secret`
@@ -468,7 +473,9 @@ built-in verb (`Preview*`, `Recalculate*`, …).
   - 3 to 5 characters of one kind (`1234`, `abc`, `a-b`) is masked where it doesn't continue a run of
     its own kind: `1234` in `pin1234x` but not in `12345`, `bag` not in `cabbage`. So a letters-only
     or digits-only short secret inside a longer word or number of the same kind still reaches the
-    prompt.
+    prompt. The exception is a declared one: a 3 to 5 digit value a Journey run was given (a `secret: true`
+    parameter, a bound or fixture secret) is a known value, so while that run lasts it is masked inside a
+    longer number too (`4821` in `148213`). A value only found during the run keeps the rule above.
   - 1 or 2 characters is masked as a whole token only, never inside a word or number.
 - Redaction is for what a person or a model reads, never for what a page gets: a run that would type or
   navigate with masked text fails (`E_REDACTED_VALUE`), which includes a value that really does contain

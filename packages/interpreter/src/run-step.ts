@@ -299,6 +299,37 @@ async function postcondition(
 }
 
 /**
+ * #488/#498/#695: the upload step past its value: a Journey records only a project-relative fixture path,
+ * confined to the project root (a `../` or symlink that escapes is refused; no root ⇒ refused).
+ */
+async function uploadFile(
+  actor: Actor,
+  step: Extract<Step, { kind: "upload" }>,
+  raw: string,
+  index: number,
+  expect: Assertion,
+  targetOpts: ResolveTargetOptions & StepWaitHooks & { readonly fixtureBaseDir?: string },
+): Promise<StepOutcome> {
+  if (isAbsolute(raw)) {
+    const root = targetOpts.fixtureBaseDir;
+    throw new FixturePathError(
+      "fixture-outside-project",
+      raw,
+      root ?? null,
+      root === undefined
+        ? `upload fixture ${raw} refused: no project root to confine it to — run from a project (a folder holding .jevitate/) and move the fixture into the project`
+        : `upload fixture ${raw} must be project-relative to ${root} — rewrite it as a path inside the project`,
+    );
+  }
+  const file = await confineFixture(raw, targetOpts.fixtureBaseDir);
+  const page = actor.ability(BrowseTheWebToken).session.page;
+  // Residual risk (accepted): the file could be swapped between confineFixture and setInputFiles (TOCTOU).
+  await (await resolveTarget(page, step.target, targetOpts)).setInputFiles(file);
+  await postcondition(actor, expect, step.waitFor, "upload", index, targetOpts);
+  return { kind: "done" };
+}
+
+/**
  * Performs one recorded step's action (if any) and enforces its
  * postcondition, throwing `PostconditionFailed` when the postcondition does
  * not hold. This is the fail-closed guardrail at the heart of RxD replay:
@@ -435,23 +466,21 @@ export async function runStep(
       // Journey contract here before resolving the file. A `../` or symlink that escapes is also refused. No
       // root ⇒ refused (fail-closed): every CLI/MCP run passes `journeyFixtureBaseDir()`.
       const raw = resolveValue(step.file, vars);
-      if (isAbsolute(raw)) {
-        const root = targetOpts.fixtureBaseDir;
-        throw new FixturePathError(
-          "fixture-outside-project",
-          raw,
-          root ?? null,
-          root === undefined
-            ? `upload fixture ${raw} refused: no project root to confine it to — run from a project (a folder holding .jevitate/) and move the fixture into the project`
-            : `upload fixture ${raw} must be project-relative to ${root} — rewrite it as a path inside the project`,
-        );
+      // A path from a secret binding (a declared-secret parameter, a bound one, a credential-like name) is
+      // named by its reference in every refusal, never by its value.
+      const fileVar = "var" in step.file ? step.file.var : undefined;
+      const secretFile = fileVar !== undefined && (targetOpts.boundSecretParams?.has(fileVar) === true || refs(fileVar)?.secret === true || isLoadRefusedName(fileVar));
+      if (secretFile) {
+        try {
+          return await uploadFile(actor, step, raw, index, expected(step.expect), targetOpts);
+        } catch (err) {
+          if (!(err instanceof FixturePathError)) throw err;
+          const shown = `\${${fileVar}}`;
+          // The whole message is rebuilt: a resolved path holds the value even where the raw form isn't a substring.
+          throw new FixturePathError(err.code, shown, err.root, `upload fixture ${shown} was refused (${err.code}${err.root === null ? "" : `, project root ${err.root}`}); a secret binding's path is never shown`);
+        }
       }
-      const file = await confineFixture(raw, targetOpts.fixtureBaseDir);
-      const page = actor.ability(BrowseTheWebToken).session.page;
-      // Residual risk (accepted): the file could be swapped between confineFixture and setInputFiles (TOCTOU).
-      await (await resolveTarget(page, step.target, targetOpts)).setInputFiles(file);
-      await postcondition(actor, expected(step.expect), step.waitFor, "upload", index, targetOpts);
-      return { kind: "done" };
+      return uploadFile(actor, step, raw, index, expected(step.expect), targetOpts);
     }
     case "press": {
       const page = actor.ability(BrowseTheWebToken).session.page;

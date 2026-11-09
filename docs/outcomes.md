@@ -14,6 +14,18 @@ applies to:
 - `journey run` and MCP `run_journey`, when the Journey links no job and has no `metadata.done` of its
   own, or its job has no `done` check;
 - a queued Journey call (`journey queue`, MCP `queue_journey`) when `mission run` drains it;
+- every other surface that replays a Journey and reports its pass: `journey chain` and MCP
+  `chain_journeys` (the producer and each consumer run read their own done check; the chain exits `1` if
+  any job was not achieved, else `2` if any pass is unverified), `inbox resume` (the resumed run, or the
+  whole chain a producer's hold belonged to), and `source run` / MCP `sources run` (the source Journey's
+  `metadata.done`, or the job it links in this project's catalog). Each reports `job` beside the outcome
+  as `journey run` does, and a self-heal run's `*.result.json` keeps `job` and the folded exit;
+- `check` suites and MCP `run_check` (owner decision 2026-11-09, **breaking for CI**): each Journey item
+  reads its job's done check and carries `job` in `check.json`, its `result.json`, JUnit (properties
+  `jevitate.job.attainment`/`jevitate.job.basis`), SARIF (`jobs` run property) and `report.md`. A job not
+  achieved is a gating `done-check-failed` finding (exit `1`); an unverified pass holds the suite at `2`
+  under `require`. `campaign run` / MCP `run_campaign` fold each discovery replay's job the same way. See
+  [Job verdicts in CI](./ci.md#job-verdicts-in-ci-done-checks);
 - a goal run (`explore --goal`, MCP `run_exploration`, a queued goal mission) that passed with neither
   `--success` nor `--job`. Such a pass was accepted by the model's grounded judgment, which is not a
   check code made against the app's state.
@@ -43,7 +55,7 @@ How to migrate:
 4. For goal runs, pass `--success <check>` or `--job <id>` (MCP: `success`, `job`).
 5. In CI, read exit `2` as "could not tell", never as a pass or a defect. `job.basis` says why.
 6. When every job has a check, remove `"advisory"`. To make one run strict under an `advisory` project,
-   pass `--require-done-check` (`journey run`, `explore --goal`, `mission queue`; MCP `requireDoneCheck`
+   pass `--require-done-check` (`journey run`, `check`, `campaign run`, `explore --goal`, `mission queue`; MCP `requireDoneCheck`
    on `run_exploration` and `queue_exploration`).
 
 The other changes to exit codes:
@@ -52,6 +64,8 @@ The other changes to exit codes:
 |---|---|---|
 | a Journey's steps pass but its job's done check reads false after the run | `0` | `1` `defects-found`, `failure.kind: "done-check-failed"` |
 | a goal run stops at a boundary: a wall, a lost session, a link off the allowlist, a new tab | `1` `defects-found` (`blocked`) | `2` `inconclusive`, `goalOutcome: "boundary"` ([boundary outcomes](#boundary-outcomes)) |
+| a goal run covers every control it can reach and none leads toward the goal | `1` `defects-found` (`blocked`, `exhausted`) | `2` `inconclusive`, `goalReason: "no-route-found"` ([no route found](#no-route-found)) |
+| a goal run passes, but its job's done check reads false (`--job`) | `0`, `job.attainment: "not-achieved"` | `1` `defects-found`, `failure.kind: "done-check-failed"` |
 | `journey verify --mutate` with every mutation noticed | `0`, `verdict: "proven"` | `0`, `verdict: "sensitive"`, `verdictLegacy: "proven"` until 0.32.0 ([`proven` is now `sensitive`](#proven-is-now-sensitive)) |
 
 No exit number changes its meaning. Mutation proof is advisory: the job's done check is the gate
@@ -140,8 +154,10 @@ step. From 0.30.0 the word is `sensitive`; the rule behind it is unchanged.
 
 `verdictLegacy` and the `require-proven` alias are removed in 0.32.0. A script that tests
 `verdict === "proven"` breaks in 0.30.0: read `verdictLegacy` until you change it, then read `verdict`.
-A receipt a 0.29.0 proof wrote still reads, as `sensitive`. The exit codes are unchanged: `0` sensitive,
-`1` insensitive, `2` inconclusive.
+A receipt a 0.29.0 proof wrote still reads, as `sensitive`. The exit codes are `0` sensitive,
+`1` insensitive, `2` inconclusive, with one change: under `mutationProofPolicy: "require-sensitive"` a
+`sensitive` proof with `countsForGate: false` exits `2`, since the gate does not count it. Under `advisory`
+(the default) and `require-attempt` it exits `0`.
 
 `countsForGate` is `true` only on a target declared `trust: "test"` or `"harness"`. A proof's strength depends on a target you can reset: it sends
 real writes, including a closing replay, so on a target you cannot reset a `sensitive` reading is
@@ -162,8 +178,12 @@ beside the job verdict, never the job verdict.
 - `require-attempt` and `require-sensitive` are opt-ins for the review and readiness gate (see
   [mutation-proof policy](./journeys.md)). Choose `require-sensitive` only for targets you can reset:
   under it a `sensitive` proof counts only when `countsForGate` is `true` and its receipt names the
-  engine that recorded it (a receipt from before 0.30.0 names none), and no waiver lifts it.
-- `journey readiness` leads with the `job` check: the latest run's `job.attainment`. `not-achieved` exits 1;
+  engine that recorded it, the target origin it ran on and, when one is set, the app version (a receipt
+  from before 0.30.0 names none), and no waiver lifts it. A proof from another target origin or app
+  version is stale (`staleCause: "target"` or `"app-version"`).
+- `journey readiness` leads with the `job` check: the latest run's `job.attainment` (in `replay` and `prove`,
+  the replay it just ran; never an earlier run's). `achieved` counts only when that run's own steps passed;
+  otherwise it reads `unverified` (`run-not-passed`). `not-achieved` exits 1;
   `unverified` exits 2 under `doneCheckPolicy: "require"` and does not gate under `advisory`.
 - Under `advisory`, a missing, stale or insensitive proof neither blocks `journey readiness` nor fails
   `journey review --strict`: it is a ○ checks-strength line. An unwaived `inconclusive` attempt stays
@@ -390,7 +410,7 @@ The check lives on the job in `.jevitate/jobs.json`; its fields are in the
 |---|---|---|
 | `done-check` | `achieved` or `not-achieved` | the before reading was false, and the after reading decided it |
 | `already-true` | `unverified` | the check already read true before the run, so the run proves nothing either way. Make the Journey create its own data and name that parameter in `distinguishedBy` |
-| `reading-unknown` | `unverified` | a reading could not be taken: no fresh session could be opened (a persona with no storageState file), the check names something not on the page, the page was replaced, or the check does not pass its lint and was not read |
+| `reading-unknown` | `unverified` | a reading could not be taken: no fresh session could be opened (a persona with no storageState file), the check names something not on the page, the page was replaced, or the check does not pass its lint and was not read. A goal run's `job.reason` names which (`session-unavailable`, `page-replaced`, `check-unevaluable`) |
 | `no-check` | `unverified` | the Journey links no job, its job has no `done` check, the catalog could not be read, or the run used `--no-done-check` |
 | `harness` | `unverified` | the target is declared `trust: "harness"`, which never gives a job verdict ([harness](./harness.md)) |
 
@@ -445,7 +465,9 @@ Journey; the run's evidence keeps both readings so the author can tell which. A 
 
 A goal run folds the same way: a pass with an `unverified` job is `inconclusive` (exit `2`) under
 `require`, unless an independent `--success` check verified it. `--require-done-check` makes that pass
-`unverified` too.
+`unverified` too. A goal pass whose job is `not-achieved` (the final done-check reading is false) is
+`defects-found`, exit `1`, `failure.kind: "done-check-failed"`, under either policy and whatever verified
+the pass: the find-out exemption covers an `unverified` job only, never a `not-achieved` one.
 
 #### `doneCheckPolicy`, `--require-done-check`, `--no-done-check`
 
@@ -482,8 +504,35 @@ the app is wrong. A mutation proof whose run met a boundary is `inconclusive`.
 
 What is not detected. A run in a canvas or an iframe that gives none of these signals is not reported as
 a boundary. A sign-in page is no boundary when the goal is about signing in. A run that finds no route
-reports what it searched, not that no route exists. A goal that stops for another reason (`exhausted`,
+is not a boundary either: see [no route found](#no-route-found). A goal that stops for another reason (`exhausted`,
 `failed`, `blocked`) keeps its code.
+
+#### No route found
+
+A goal run that gave up, stalled or ran out of budget after covering every control it could reach, with
+none leading toward the goal, ends `goalOutcome: "inconclusive"`, `missionOutcome: "inconclusive"`,
+exit `2`, `goalReason: "no-route-found"` and `failure.kind: "no-route-found"`. Its `reason` lists the
+pages it opened and how many actions it took. It says the run found no route; it does not say none
+exists, and it is never a wall or a permission boundary. When a page shows a role word ("Viewer",
+"Read-only", "Guest"), the reason adds a hint: `the page says you're signed in as a Viewer; a person with
+another role may see more`. Run the goal as another persona to find out.
+
+Code decides the coverage floor, never the model. All of these must hold:
+
+- every top-level navigation destination was opened, and at least 2 distinct pages were seen;
+- no page the run saw still offers an untried control. A link counts once its destination was opened
+  or when it leaves the run's origins; links to many pages of one shape (`/customer/1` … `/customer/30`)
+  count once 3 of them were opened;
+- no control the run saw names the goal, even in part, enabled or disabled. A route that exists and
+  does not work is a finding, not a missing route;
+- no page showed something clickable that is no control the run can use (an `onclick` or pointer-cursor
+  element outside any control, a canvas, a frame, a closed shadow root), and no page's controls were
+  cut by the candidate limit;
+- the run sent no write, saw no 5xx page, and its success checks do not hold.
+
+Below the floor nothing changes: a run that gives up with controls still untried ends as before
+(`insufficient-coverage` when it gave up before trying anything or beside an obvious forward control,
+otherwise `blocked`, exit `1`).
 
 ### Every `outcome`, `stop` and `missionOutcome` value
 
@@ -558,6 +607,7 @@ achieved, decided by code from the run's state, never parsed from `reason`:
 | `vacuous-check` | every failing check was satisfied before the first action |
 | `broken-run` | the run itself broke or proved nothing: a crash, an unreachable or unresponsive app, a starved host, an unreadable `--log-defect` oracle, a kill |
 | `defects` | `goalOutcome: "defects-found"` with no more specific cause |
+| `no-route-found` | `inconclusive` (exit `2`): the run covered every control it could reach, up to the coverage floor, and none led toward the goal ([no route found](#no-route-found)) |
 | `http-401`, `http-403`, `paid-control`, `login-url`, `write-refused`, `tab-opened` | `boundary`: the signal the run stopped at ([boundary outcomes](#boundary-outcomes)) |
 
 The human summary prints both: `GOAL blocked (not-found, stop: blocked)` and `DEFECTS server-log 2`

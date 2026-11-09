@@ -28,7 +28,9 @@ import {
 } from "../environments.js";
 import { fail, ok } from "../envelope.js";
 import { UnknownJourneyError } from "../journey-api.js";
-import { chainSucceeded, JourneyChainError, runJourneyChain } from "../journey-chain.js";
+import { chainExitCode, JourneyChainError, runJourneyChain } from "../journey-chain.js";
+import { resolveCatalogDir } from "../catalog-api.js";
+import { doneCheckPolicyOf } from "../journey-done-check-hook.js";
 import { withSiteGate } from "../site-gate-cli.js";
 import { withProjectFlags } from "../project-layout.js";
 import { DEPRECATED_DIR_HELP, journeyLayout } from "./shared.js";
@@ -85,7 +87,7 @@ export function registerJourneyChain(journey: Command, program: Command, deps: C
       let param: Record<string, string>;
       let bound: BoundSecretParams | undefined;
       try {
-        ({ params: param, bound } = await withCommandSecretParams({ dir: chainJourneysDir, ids: [from], params: paramFlags, flags: secretField, environment, env: deps.explore?.env ?? process.env }));
+        ({ params: param, bound } = await withCommandSecretParams({ dir: chainJourneysDir, ids: [from], params: paramFlags, flags: secretField, environment, env: deps.explore?.env ?? process.env, seams: environmentSeams(deps) }));
       } catch (err) {
         const e = secretFieldErrorOf(err, "E_CHAIN_ARGS");
         if (e === undefined) throw err;
@@ -119,9 +121,12 @@ export function registerJourneyChain(journey: Command, program: Command, deps: C
         return;
       }
 
+      // H5: every run in the chain reads its job's done check, with this project's catalog and policy.
+      const catalogDir = resolveCatalogDir(deps.catalogDir);
       try {
         const result = await withSiteGate(resolveDbPath(deps), (siteGate) => withBoundSecretParams(bound, () =>
           runJourneyChain({
+            catalogDir,
             from,
             to,
             requests,
@@ -142,8 +147,9 @@ export function registerJourneyChain(journey: Command, program: Command, deps: C
         const envelope = ok(result);
         if (json) emitJson(program, envelope);
         else writeRawResult(program, result);
-        // §5 step 5: 0 only when every request matched and every run was `ok`.
-        process.exitCode = chainSucceeded(result) ? 0 : 1;
+        // §5 step 5: 0 only when every request matched and every run was `ok`; H5: with every job verdict folded in
+        // (a job not achieved 1, an unverified pass 2 under `require`, owner decisions 2/3).
+        process.exitCode = chainExitCode(result, doneCheckPolicyOf(catalogDir));
       } catch (err) {
         if (err instanceof JourneyChainError) {
           emitJson(program, fail(err.code, err.message));

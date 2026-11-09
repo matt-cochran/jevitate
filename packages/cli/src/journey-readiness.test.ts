@@ -103,7 +103,7 @@ function reviewEx(overrides: ReviewOverrides = {}): JourneyReview {
     attention: overrides.attention ?? [],
     catalog: overrides.catalog ?? GOOD_CATALOG,
     // Owner decision "Proof role": the job gates (the latest run's verdict); achieved unless a test says otherwise.
-    job: overrides.job ?? { attainment: "achieved", basis: "done-check", doneCheckPolicy: "require" },
+    job: overrides.job ?? { attainment: "achieved", basis: "done-check", doneCheckPolicy: "require", outcome: "ok" },
   } as unknown as JourneyReview;
 }
 
@@ -233,7 +233,7 @@ describe("journey readiness", () => {
 
   it("an inconclusive proof warns on its checks-strength line but does not gate under the advisory default (owner clarification 2026-11-09)", async () => {
     await store.put(journey("publish"));
-    const run = vi.fn(async () => ({ outcome: "ok" }));
+    const run = vi.fn(async () => ({ outcome: "ok", job: { attainment: "achieved", basis: "done-check" } }));
     const r = await receipt(
       { id: "publish", mode: "replay", baseUrl: "https://example.test", journeysDir },
       { review: reviewDep({ verify: { status: "recorded", verdict: "inconclusive", at: "2026-01-01T00:00:00Z", stale: false, reason: "flaky", summary: {} } }), run: run as unknown as Run },

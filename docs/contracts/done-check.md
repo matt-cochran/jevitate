@@ -105,7 +105,7 @@ Journey's review sheet (`journey review`, MCP `review_journey`) shows its own `m
 | Surface | Before | After |
 | --- | --- | --- |
 | `journey run`, MCP `run_journey`, a drained `journey queue` / `queue_journey` call | before step 1, before any fixture and before the run's browser opens | after the last step and the end state |
-| `explore --goal --job <id>`, MCP `run_exploration {job}`, `queue_exploration {job}` | once, before the run | after each `done` the model proposes; a false reading rejects that `done` |
+| `explore --goal --job <id>`, MCP `run_exploration {job}`, `queue_exploration {job}` | once, before the run | after each `done` the model proposes (a false reading rejects that `done`), and once at the end of a run no accepted `done` decided (every `done` rejected, a blocked run, an answer) |
 
 Each reading opens a new headless browser context seeded with the run's storageState, navigates only to
 the run's origin, and polls a page check for up to 3 s (an `http` check waits up to 2 s for the network to
@@ -127,6 +127,13 @@ The verdict (`judgeDoneCheck`, `packages/adjudicator/src/rules-v1.ts`):
 A reading taken on the run's own page (`inRun`) is never the deciding one. On a target declared
 `trust: "harness"` the readings are kept in the evidence, and the job reads `unverified`, `harness`
 whatever they say. A check that does not parse is not read: the job reads `reading-unknown`.
+
+An `http:GET <path>` check is read on the run's origin (the path is resolved against it). A goal run's
+`job` with basis `reading-unknown` also carries `reason`, the token that says why the reading could not be
+taken: `session-unavailable` (no fresh session, or its navigation failed), `page-replaced`, or
+`check-unevaluable` (the check could not be judged there: a placeholder with no value, a URL off the origin,
+a target or a response that could not be read). A `journey run` keeps the same token in its evidence's
+`doneCheck.before`/`after` readings.
 
 ## 5. What it does not do
 

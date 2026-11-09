@@ -414,9 +414,14 @@ doneCheckPolicy, at?, outcome? }` in `--json`. Besides the done check's own base
 `not-recorded` (a run from before 0.30.0) and `earlier-version` (the Journey's executable content changed
 since the run), all `unverified`. A stale proof carries `proof.verify.staleCause` (#816): `journey-changed`,
 `engine` (the Journey is unchanged, but the engine that recorded the proof computes its identity
-differently), `engine-unknown` (a receipt written before 0.30.0), `read-policy` or `no-planner-identity`,
-and `proof.verify.recordedBy: { version, commit }` from the receipt. Every verify receipt stores
-`engine: { version, commit }`; under `require-sensitive` a receipt without it never counts.
+differently), `engine-unknown` (a receipt written before 0.30.0), `read-policy`, `no-planner-identity`,
+`target` (the proof ran on another target origin than the Journey's recorded site) or `app-version` (it ran
+on another app version than `JEVITATE_APP_VERSION` names now), and `proof.verify.recordedBy: { version, commit }`
+from the receipt. Every verify receipt stores `engine: { version, commit }`, the target origin it ran on
+(`target: { origin }`: `--env`/`--base-url`, else the recorded site) and, when known, `appVersion`
+(`journey verify --app-version`, else `JEVITATE_APP_VERSION`). Under `require-sensitive` a receipt without
+the engine or the target, or without the app version while one is set now, never counts; the sheet marks it
+`proof.verify.targetUnknown: true` and, under `advisory`, shows it with a ○ note.
 
 A person can accept a specific inconclusive attempt with
 `jevitate journey waive-proof <id> --reason "<reviewed reason>"` in their own interactive terminal.
@@ -523,8 +528,9 @@ identity, `journeyHash`, `contentHash`, `proofHash`, the proof context and the r
 it as `nativeReport: { path, sha256 }`, with `path` relative to `.verify/`, and `--json` carries the
 same field with an absolute path. A file is never replaced, and the 20 newest per Journey are kept. If
 the report can't be written, `nativeReportError` replaces `nativeReport` in both places and a warning
-goes to stderr. Secret parameter values never reach the file, and a report that still contains one is
-not written. Storage state, provider bodies, raw logs and credentials are never part of the report. The [assertion-strength gate](#assertion-strength) still applies: `--accept-weak` is recorded in the approval too.
+goes to stderr. No secret the proof's replays knew (a secret parameter, a targets.json binding, a fixture
+or extracted credential) reaches the file in any form, raw or URL-encoded, and a report that still contains
+one is not written. The report is never written through a symbolic link under `.verify/`. Storage state, provider bodies, raw logs and credentials are never part of the report. The [assertion-strength gate](#assertion-strength) still applies: `--accept-weak` is recorded in the approval too.
 
 **Catalog links (#433).** A Journey can link the job it does and the persona doing it
 (`metadata.job`, `metadata.persona`: ids from `.jevitate/jobs.json` and `.jevitate/personas.json`,
@@ -1074,7 +1080,8 @@ variable's name) or in the operator's `targets.json`. Over MCP (`run_check`, `ru
 operator's `targets.json` is read, never a binding in a file the call named.
 
 A bound value goes only to the origin its binding applies to: the one the `targets.json` entry is keyed
-by, or for `--secret-field` the run's allowlist. It is checked with the field in hand on `fill`, `select`
+by, or for `--secret-field` the origins a person or operator named (the run's own origin, the environment's
+`allow` and `origins`, `--allow`), never an origin only the Journey's `allowedOrigins` lists. It is checked with the field in hand on `fill`, `select`
 and `editText`, and on `navigate` against the URL as resolved (a relative URL goes to the page's own
 origin). Anywhere else, such as after a redirect, nothing is typed or sent and the step fails with
 `E_SECRET_ORIGIN_REFUSED`. A `navigate` URL whose literal origin is not the binding's, and an `http`

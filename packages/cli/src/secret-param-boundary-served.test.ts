@@ -778,8 +778,8 @@ describe("nothing secret-bound goes to a model: self-heal", { timeout: 120_000 }
     const sent: unknown[] = [];
     const gen = gatewayRecording(sent, () => ({ order: [], control: null }));
     const scope = await readJourneyChangeScope({ selfHeal: "hybrid", changeNotes: ["renamed Nowhere to Elsewhere"] } as never, journeysDir);
-    const { marked = "", ...runExtra } = extra as { marked?: string };
-    showsSecrets = `<button id=minted data-v="ExtractVal5Rt1">Minted</button>${marked}`;
+    const { marked = "", extractValue = "ExtractVal5Rt1", ...runExtra } = extra as { marked?: string; extractValue?: string };
+    showsSecrets = `<button id=minted data-v="${extractValue}">Minted</button>${marked}`;
     const result = await runJourneyProgrammatically({ dir: journeysDir, id, params, policy: { ...safeRunPolicy(), selfHeal: { mode: "hybrid" } } as never, selfHealer: makeEvidenceSelfHealer(gen), heal: { scope }, ...runExtra } as never).finally(() => {
       showsSecrets = "";
     });
@@ -863,11 +863,30 @@ describe("nothing secret-bound goes to a model: self-heal", { timeout: 120_000 }
   });
 
   // Extract naming (0.29.0 accepted limit): an extract's name decides by the narrower credential rule.
-  it.each(["passengers", "token_count", "tokenCount", "session_name", "cookie_banner", "footprint", "bypass_cache"])("an extract named %s only contains a credential fragment or describes one: heals, the model is asked", async (name) => {
+  it.each(["passengers", "footprint", "bypass_cache"])("an extract named %s only contains a credential fragment: heals, the model is asked", async (name) => {
     const id = `heal-extract-${name.replace(/\W+/g, "-")}`;
     const r = await heal(id, noSecretJourney(id, [{ step: { ...extractKey.step, as: name } }]), {});
     expect(r.sent.length).toBeGreaterThan(0);
     expect(r.text).not.toContain("self-heal skipped");
+  });
+
+  // masksExtractedValue (0.30.0): a name that names a credential and ends in a describing word is not
+  // secret-bound by name, so a short value heals; a credential-length value behind it is masked as it
+  // binds, the run then holds an extracted credential, and nothing secret-bound goes to a model.
+  it.each(["token_count", "tokenCount", "session_name", "cookie_banner"])("an extract named %s describes a credential: a short value heals, the model is asked", async (name) => {
+    const id = `heal-extract-short-${name.replace(/\W+/g, "-")}`;
+    const r = await heal(id, noSecretJourney(id, [{ step: { ...extractKey.step, as: name } }]), {}, { extractValue: "42" });
+    expect(r.sent.length).toBeGreaterThan(0);
+    expect(r.text).not.toContain("self-heal skipped");
+  });
+
+  it.each(["token_count", "tokenCount", "session_name", "cookie_banner"])("an extract named %s describes a credential: a credential-length value is held, no model call", async (name) => {
+    const id = `heal-extract-long-${name.replace(/\W+/g, "-")}`;
+    const r = await heal(id, noSecretJourney(id, [{ step: { ...extractKey.step, as: name } }]), {});
+    expect(r.sent).toEqual([]);
+    expect(r.text).toContain("self-heal skipped");
+    expect(r.text).toContain("this run holds a secret");
+    expect(r.text).not.toContain("ExtractVal5Rt1");
   });
 
   it.each(["authToken", "password", "session_id", "csrfToken", "pwd", "otp", "access_key", "authorization", "user_pass", "secretary"])("an extract named %s, a credential name: skipped, no model call", async (name) => {

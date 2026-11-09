@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isSecretName } from "@jevitate/journey";
-import { isCredentialExtractName } from "./secret-params.js";
+import { isCredentialExtractName, masksExtractedValue } from "./secret-params.js";
 
 /** Extract naming (0.29.0 accepted limit): an `extract as` name refuses heal and annotate only when it is a credential's name. */
 describe("isCredentialExtractName", () => {
@@ -25,5 +25,33 @@ describe("isCredentialExtractName", () => {
     for (const name of ["shopping", "keyboard", "author", "pinned", "count", "x", "monkey", "turkey"]) {
       if (!isSecretName(name)) expect(isCredentialExtractName(name)).toBe(false);
     }
+  });
+});
+
+/** Independent check (low): a credential term followed by a describing word is still masked when its value is credential-length. */
+describe("masksExtractedValue", () => {
+  const none = new Set<string>();
+  it.each([
+    ["apiKey_name", "sk_live_51HxQ9Zq"],
+    ["session_label", "a8f3c2d1e9"],
+    ["token_type", "eyJhbGciOi"],
+    ["password", "pw"],
+    ["apiKey", "x"],
+  ])("%s = %s is masked", (name, value) => {
+    expect(masksExtractedValue(name, value, none)).toBe(true);
+  });
+
+  it.each([
+    ["token_count", "42"],
+    ["cookie_banner", "shown"],
+    ["passengers", "Ada Lovelace, Grace Hopper"],
+    ["note", "a8f3c2d1e9"],
+    ["apiKey", "  "],
+  ])("%s = %s is not", (name, value) => {
+    expect(masksExtractedValue(name, value, none)).toBe(false);
+  });
+
+  it("a name declared secret: false is never masked", () => {
+    expect(masksExtractedValue("apiKey", "sk_live_51HxQ9Zq", new Set(["apiKey"]))).toBe(false);
   });
 });

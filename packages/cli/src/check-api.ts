@@ -23,7 +23,10 @@ import { type Planned, type PreparedTarget, errorMessage, plan, prepareSelfHeal,
 import { makeEvidenceSelfHealer } from "./self-heal-adapter.js";
 import type { SelfHealer } from "@jevitate/runtime";
 import { type ExecContext, type Executed, caseDetail, execute } from "./check-execute.js";
-import { clock } from "@jevitate/domain";
+import { clock, journeyMissionOutcome, type JourneyRunOutcome, JOURNEY_RUN_OUTCOMES } from "@jevitate/domain";
+import type { JobVerdict } from "@jevitate/adjudicator";
+import { doneCheckPolicyOf } from "./journey-done-check-hook.js";
+import { DONE_CHECK_FAILED_MESSAGE, doneCheckExitInput } from "./journey-done-check.js";
 import { evidenceKey, reuseDecision } from "./check-evidence.js";
 export { affectedBy } from "./check-plan.js";
 export { BudgetMeter } from "./check-budget.js";
@@ -136,6 +139,27 @@ function sumTrends(trends: readonly LocatorHealthTrend[]): LocatorHealthTrend {
   };
 }
 
+/**
+ * H5 (0.30.0, owner decision 2): a Journey item whose steps passed while its job's done check read false is a
+ * hard finding on that item, `done-check-failed` (exit 1), as `journey run` exits 1 for it.
+ */
+function doneCheckDefect(journeyId: string): ConsolidatedDefect {
+  const identity: FindingIdentity = { category: "journey-assertion", signal: "done-check-failed", control: `journey ${journeyId}` };
+  const key = findingKey(identity);
+  const title = `Journey '${journeyId}': done-check-failed — ${DONE_CHECK_FAILED_MESSAGE}`;
+  return { key, keys: [key], identity, category: "journey-assertion", severity: "hard", title, reproduce: `jevitate journey run ${journeyId}`, fingerprints: [], modes: [], occurrences: 1, runCount: 0, evidence: [], intermittent: false };
+}
+
+/** H5: how a Journey item's job folds into the suite: not achieved (a finding), unverified under require (exit 2), or neither. */
+function jobFold(outcome: string | undefined, job: JobVerdict | undefined, policy: Parameters<typeof doneCheckExitInput>[1]): "not-achieved" | "unverified" | undefined {
+  if (job === undefined || outcome === undefined || !(JOURNEY_RUN_OUTCOMES as readonly string[]).includes(outcome)) return undefined;
+  const run = outcome as JourneyRunOutcome;
+  const folded = journeyMissionOutcome(run, doneCheckExitInput(job, policy));
+  // Never over a run already failing for another reason (journeyMissionOutcome keeps that run's own fold).
+  if (job.attainment === "not-achieved" && (run === "ok" || run === "healed-pending-review")) return "not-achieved";
+  return run === "ok" && folded === "inconclusive" ? "unverified" : undefined;
+}
+
 const LOCATOR_WARNING_RULE = "jevitate/locator-health/brittle-locator";
 
 /**
@@ -223,6 +247,9 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   const usage = async (): Promise<UsageCounts | undefined> => (gw === undefined ? undefined : (await gw).usage.snapshot());
   let n = 0;
   let healer: Promise<SelfHealer> | undefined;
+  // H5 (0.30.0): every Journey item reads its job's done check, folded with the project's doneCheckPolicy.
+  const doneCheckDir = opts.projectDir === undefined ? findProjectDir() : opts.projectDir;
+  const doneCheckPolicy = opts.doneCheck?.policy ?? doneCheckPolicyOf(doneCheckDir);
   const ctx: ExecContext = {
     opts,
     runners,
@@ -230,6 +257,7 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     gateways,
     engine,
     seq: () => String(++n),
+    doneCheck: { catalogDir: doneCheckDir, skip: opts.doneCheck?.skip === true, policy: doneCheckPolicy },
     ...(testIdAttributes === undefined ? {} : { testIdAttributes }),
     ...(heal === undefined ? {} : { heal, healer: () => (healer ??= gateways().then((g) => makeEvidenceSelfHealer(g.gen, { usage: g.usage }))) }),
   };
@@ -285,7 +313,16 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
       }
     });
   }
-  const defects = [...consolidate(runs), ...(approvals?.defects ?? []), ...brittleOf.values()];
+  // H5: a Journey item whose job was not achieved is a hard `done-check-failed` finding on that item.
+  const doneCheckOf = new Map<number, ConsolidatedDefect>();
+  const unverifiedItems = new Set<number>();
+  executed.forEach(({ item, ex }, idx) => {
+    if (item.kind !== "journey" || ex?.status !== "ran") return;
+    const fold = jobFold(ex.outcome, ex.job, doneCheckPolicy);
+    if (fold === "not-achieved") doneCheckOf.set(idx, doneCheckDefect(item.name));
+    else if (fold === "unverified") unverifiedItems.add(idx);
+  });
+  const defects = [...consolidate(runs), ...(approvals?.defects ?? []), ...brittleOf.values(), ...doneCheckOf.values()];
   let diff: FindingsDiff | undefined;
   let baselineRuns: RunRecord[] | undefined;
   if (opts.baseline !== undefined) {
@@ -321,7 +358,9 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     if (ex === undefined) return { ...base, status: "skipped", actions: 0, verdict: "skipped", gating: [] };
     const run = ex.resultPath === undefined ? undefined : runOf.get(ex.resultPath);
     const brittle = brittleOf.get(idx);
+    const doneCheck = doneCheckOf.get(idx);
     const own = [
+      ...(doneCheck !== undefined && gating.includes(doneCheck) ? [doneCheck] : []),
       ...(run === undefined ? [] : gating.filter((d) => d.modes.some((m) => m.runs.some((r) => r.path === run.path)))),
       ...(brittle !== undefined && gating.includes(brittle) ? [brittle] : []),
     ];
@@ -345,6 +384,7 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
       // #469: a baseline only from a clean run — a completed replay with no gating finding.
       ...(ex.baseline === undefined || verdict !== "passed" ? {} : { baseline: ex.baseline }),
       ...(ex.locatorHealth === undefined ? {} : { locatorHealth: ex.locatorHealth }),
+      ...(ex.job === undefined ? {} : { job: ex.job }),
     };
   });
 
@@ -400,8 +440,11 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
   const pendingItems = itemReports.filter((i) => i.verdict === "pending-review");
   const proposals = pendingItems.flatMap((i) => (i.proposal === undefined ? [] : [i.proposal]));
   const gatingFindings = gating.length;
-  // Precedence 1 > 2 > 5 > 0: a defect or exhausted heal, then an item error / budget overrun, then a proposal awaiting review.
-  const exitCode: 0 | 1 | 2 | 5 = gatingFindings > 0 ? 1 : errors > 0 || exceeded !== undefined ? 2 : pendingItems.length > 0 ? 5 : 0;
+  // H5: Journey items that passed with an unverified job under `require` (a passing item, but the suite proved no job).
+  const unverified = [...unverifiedItems].filter((idx) => itemReports[idx]?.verdict === "passed").length;
+  // Precedence 1 > 2 > 5 > 0: a defect or exhausted heal (or a job not achieved), then an item error / budget overrun /
+  // an unverified job under `require`, then a proposal awaiting review.
+  const exitCode: 0 | 1 | 2 | 5 = gatingFindings > 0 ? 1 : errors > 0 || exceeded !== undefined || unverified > 0 ? 2 : pendingItems.length > 0 ? 5 : 0;
   const junitPath = resolve(opts.junitPath ?? join(outDir, "junit.xml"));
   const sarifPath = resolve(opts.sarifPath ?? join(outDir, "jevitate.sarif"));
   const jsonPath = resolve(opts.jsonPath ?? join(outDir, "check.json"));
@@ -431,12 +474,14 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
           }
         : {}),
       ...(i.verdict === "failed" && first !== undefined
-        ? { type: first.category, message: `${own.length} gating finding(s): ${first.title}`, detail: caseDetail(own) }
+        ? { type: first.identity.signal === "done-check-failed" ? "done-check-failed" : first.category, message: `${own.length} gating finding(s): ${first.title}`, detail: caseDetail(own) }
         : {}),
       ...(i.verdict === "error" && i.error !== undefined ? { type: i.error.type, message: i.error.message } : {}),
       ...(i.verdict === "skipped" ? { message: reuse ? "reused matching evidence" : "not affected by --changed-routes" } : {}),
       properties: {
         changedRoutes: JSON.stringify(opts.changedRoutes ?? []),
+        // H5: a Journey item's job verdict, as `jevitate.job.attainment` / `jevitate.job.basis`.
+        ...(i.job === undefined ? {} : { "jevitate.job.attainment": i.job.attainment, "jevitate.job.basis": i.job.basis }),
         ...(evidenceKeyValue === undefined ? {} : { evidenceKey: evidenceKeyValue, evidenceDecision: evidence?.decision ?? "run" }),
       },
     };
@@ -485,7 +530,9 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
       skipped: itemReports.filter((i) => i.verdict === "skipped").length,
       gatingFindings,
       pendingReview: pendingItems.length,
+      unverified,
     },
+    doneCheckPolicy,
     ...(locatorHealth === undefined ? {} : { locatorHealth }),
     ...(slowness === undefined ? {} : { slowness }),
     proposals,
@@ -497,6 +544,7 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
     reportPath,
   };
 
+  const jobRows = itemReports.flatMap((i) => (i.job === undefined ? [] : [{ target: i.target, name: i.name, attainment: i.job.attainment, basis: i.job.basis }]));
   await writeFile(junitPath, renderJUnit(`jevitate check: ${opts.suite.name}`, cases, startedAt), "utf8");
   const sarif = withAppVersion(withLocatorWarnings(renderSarif({
     toolVersion: engine.version,
@@ -512,6 +560,9 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
       ...sarifRun.properties,
       changedRoutes: opts.changedRoutes ?? [],
       ...(evidenceKeyValue === undefined ? {} : { evidenceKey: evidenceKeyValue, evidenceDecision: evidence?.decision ?? "run", evidenceReasons: evidence?.reasons ?? [] }),
+      // H5: every Journey item's job verdict and the policy it folded with (a not-achieved job is also a result).
+      doneCheckPolicy,
+      jobs: jobRows,
     };
   }
   await writeFile(sarifPath, `${JSON.stringify(sarif, null, 2)}\n`, "utf8");
@@ -522,6 +573,11 @@ export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
         ? ""
         : `\n## Proposed Journey revisions\n\nA self-heal re-ran these failed Journeys against the change and proposed a revision. Nothing passes until a person accepts it.\n\n${proposals
             .map((p) => `- \`${p.journeyId}\`${p.proposalId === undefined ? "" : ` — proposal \`${p.proposalId}\``}${p.path === undefined ? "" : ` (${p.path})`}: \`jevitate journey review ${p.journeyId}\``)
+            .join("\n")}\n`) +
+      (jobRows.length === 0
+        ? ""
+        : `\n## Job verdicts\n\nEach Journey item's job, read by its done check (doneCheckPolicy \`${doneCheckPolicy}\`): not-achieved fails the item; unverified holds the check at exit 2 under \`require\` (a harness target excepted).\n\n| target | Journey | job | basis |\n| --- | --- | --- | --- |\n${jobRows
+            .map((j) => `| ${j.target} | ${j.name} | ${j.attainment} | ${j.basis} |`)
             .join("\n")}\n`) +
       (suiteUsage === undefined ? "" : `\n## Model cost\n\n${formatUsageLine(suiteUsage)}\n`),
     "utf8",

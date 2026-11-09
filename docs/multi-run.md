@@ -345,7 +345,10 @@ the same checks as `run_journey`, in this order:
 
 `mission run` checks all of this again from the files as they are at drain time. If the Journey
 changed after the call was queued, the call is recorded `failed` with `E_JOURNEY_APPROVAL_STALE`
-and nothing runs: review the Journey, then queue the call again. The drain runs every call as an
+and nothing runs: review the Journey, then queue the call again. A call whose queue file was edited
+by hand to carry a value for a parameter the Journey declares secret is recorded `failed` with
+`E_SECRET_PARAM_IN_QUEUE`, naming the parameter, before any browser opens. A failed call's `error` is
+masked before it is stored, and again when `get_mission_result` returns it. The drain runs every call as an
 MCP run, whoever queued it. The call's run record and `evidence.json` say `run.channel: "queue"`.
 
 **Secrets at run time.** A secret the Journey needs comes from its secret mode, never from the

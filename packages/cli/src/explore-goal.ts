@@ -12,8 +12,8 @@ import { evidenceOf, withRunEvidence } from "./defect-evidence.js";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
 import { type Assertion, type InvariantSpec, type Recording } from "@jevitate/recording";
 import type { ActionDeltaStats, ActionableControlOutcome, HostHealthSampler, InvariantDefect, InvariantReport, MinEffortRequest, PartialReport, RunDepth, SafetyOverride, SideEffect } from "@jevitate/explore";
-import type { DefectOutcome, DoneCheckPolicy, EnvironmentDegraded, GoalReason, JobBasis, JobVerdict, HostHealthSummary, StartupAttempt } from "@jevitate/domain";
-import { goalJobDecision } from "./explore-job-done-check.js";
+import type { DefectOutcome, DoneCheckPolicy, EnvironmentDegraded, GoalReason, JobBasis, JobUnknownReason, JobVerdict, HostHealthSummary, StartupAttempt } from "@jevitate/domain";
+import { goalJobDecision, goalJobFold } from "./explore-job-done-check.js";
 import { currentRunMetadata } from "./run-metadata.js";
 import type { TargetTrust } from "./run-mode.js";
 import { runGoalBasedMission, assertAuthorizedExploreTarget, type BoundaryEvidence, type Bounds, type GoalBasedOutcome, type StopReason, type TranscriptEntry, type RunAnswer, type RunOutcome, type SuccessCheck, type SuccessCheckResult, type SuccessWhen, type SecretField, type SecretCommandRunner, type TypeFixture, type UploadFixture, type BudgetTrajectory, type CrashReport, type Http5xxDefect, Http5xxOracle, secretFieldSecrets } from "@jevitate/explore";
@@ -200,6 +200,8 @@ export interface RunExplorationOptions {
   readonly doneCheck?: DoneCheckReader;
   /** Why no reading decides the job when `doneCheck` is absent (`already-true`, `reading-unknown`); default `no-check`. */
   readonly doneCheckBasis?: JobBasis;
+  /** rc-030: why the done check's last reading (or, with no reader, its before reading) could not be taken. */
+  readonly doneCheckUnknownReason?: () => JobUnknownReason | undefined;
   /**
    * The done-check policy for an unverified pass (owner decision 3): `require` makes it `inconclusive` (exit 2), `advisory`
    * keeps exit 0. Absent: the result is reported but its exit is not folded (callers that are not `explore --goal`).
@@ -686,20 +688,28 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
     const foldedOutcome = goalMissionOutcome(goalOutcome, defectOutcome.status);
     // 0.30.0 (#800): the job verdict and decision 3's fold (goalJobDecision: harness #802, find-out exempt).
     const verifiedBy = mission.run.outcome.status === "completed" ? mission.run.outcome.verifiedBy : undefined;
+    // rc-030: the loop reads the done check only on a `done` code accepted. A run that ends without that verdict
+    // (the judgment rejected every `done`, the run blocked, or it ended on an answer) takes its after reading
+    // now, in a fresh context, so the job is decided by the app's state, not left `reading-unknown` unread.
+    const loopJob = mission.run.outcome.status === "completed" ? mission.run.outcome.job : undefined;
+    if (doneCheck !== undefined && loopJob === undefined) await doneCheck().catch(() => (lastReading = null));
     const { job, unverifiedPass } = goalJobDecision({
       completed: mission.run.outcome.status === "completed",
-      loopJob: mission.run.outcome.status === "completed" ? mission.run.outcome.job : undefined,
+      loopJob,
       verifiedBy,
       hasReader: opts.doneCheck !== undefined,
       lastReading,
       basis: opts.doneCheckBasis,
+      unknownReason: opts.doneCheckUnknownReason?.(),
       goalOutcome,
       foldedOutcome,
       policy: opts.doneCheckPolicy,
       requireDoneCheck: opts.requireDoneCheck,
       trust: opts.targetTrust ?? currentRunMetadata()?.runMode?.().target.trust,
     });
-    const missionOutcome: MissionOutcome = unverifiedPass ? "inconclusive" : foldedOutcome;
+    // Decision 2: a pass whose done check read false is `defects-found` (exit 1), `done-check-failed`.
+    const jobFold = goalJobFold({ foldedOutcome, job, unverifiedPass });
+    const missionOutcome: MissionOutcome = jobFold.missionOutcome;
     const goalReason = goalReasonOf({
       goalOutcome,
       ...(mission.goalEnding === undefined ? {} : { overridden: mission.goalEnding }),
@@ -804,7 +814,7 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
       // #209: a goal-specific miss (`success-check-failed`, `vacuous-check`) is typed too — after an
       // engine failure or a starved host, which explain the run before the check does.
       ...((): { failure?: MissionFailure } => {
-        const f = failureNow;
+        const f = jobFold.failure ?? failureNow;
         return f === undefined ? {} : { failure: f };
       })(),
       ...(host.failure !== undefined
@@ -815,6 +825,7 @@ async function runGoalExploration(opts: RunExplorationOptions, modelSecrets: Ret
             const parts: string[] = [];
             const own = withServerCause(mission.reason, goalOutcome, serverLogRun?.transcript);
             if (own !== undefined) parts.push(own);
+            if (jobFold.failure !== undefined) parts.push(jobFold.failure.message);
             if (unverifiedPass) parts.push("the goal passed but no done check verified the job (add --success or --job <id>)");
             if (oracleBroken) parts.push(serverLogOutcomeReason("inconclusive", serverLogRun));
             if ((serverLogRun?.defects.length ?? 0) > 0) parts.push(serverLogOutcomeReason("defects-found", serverLogRun));

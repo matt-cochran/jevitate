@@ -44,9 +44,22 @@ function reviewDep(j: Journey, verify: unknown): NonNullable<JourneyReadinessDep
   return (async () => ({ journey: j, review })) as unknown as NonNullable<JourneyReadinessDeps["review"]>;
 }
 
+/**
+ * Owner clarification (2026-11-09, decisions/exit-codes.md "Proof role"): under `mutationProofPolicy: advisory`
+ * (the default here) an unwaived `inconclusive` proof never gates, so it is not a blocker; its authoring
+ * guidance moves onto the advisory proof line after "to make it conclusive: ". This returns that guidance,
+ * and fails if the proof became a blocker or the line lost its guidance.
+ */
 async function proofBlockerWhy(j: Journey, verify: unknown): Promise<string | undefined> {
   const r = await runJourneyReadiness({ id: j.metadata.id, journeysDir: "/tmp/jev-616" }, { review: reviewDep(j, verify) });
-  return r.blockers.find((b) => b.check === "proof")?.why;
+  expect(r.blockers.find((b) => b.check === "proof")).toBeUndefined();
+  const proof = r.checks.find((c) => c.check === "proof");
+  expect(proof?.advisory).toBe(true);
+  expect(proof?.state).toBe("inconclusive");
+  const marker = "; to make it conclusive: ";
+  const at = proof?.detail.indexOf(marker) ?? -1;
+  expect(at).toBeGreaterThan(-1);
+  return proof!.detail.slice(at + marker.length);
 }
 
 const SUGGESTION: JourneyTargetedProofPlan = { check: "end-state:0", mustFailWhen: "swap-param:threadId", relax: ["step:5", "step:15", "step:16", "step:17", "step:20"] };

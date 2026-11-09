@@ -437,7 +437,7 @@ export async function prefixFromBranch(branch: RecordedBranch, opts: PrefixFromB
     // #827: a secret parameter from a binding (--secret-field, the environment's targets.json), off the command line.
     let supplied: { params: Record<string, string>; bound?: BoundSecretParams };
     try {
-      supplied = await withCommandSecretParams({ dir: info.journeysDir, ids: [branch.journeyId], params: { ...info.params, ...(opts.params ?? {}) }, flags: opts.secretFields ?? [], environment, env: opts.env ?? process.env });
+      supplied = await withCommandSecretParams({ dir: info.journeysDir, ids: [branch.journeyId], params: { ...info.params, ...(opts.params ?? {}) }, flags: opts.secretFields ?? [], environment, env: opts.env ?? process.env, seams: opts.environmentSeams });
     } catch (err) {
       throw new BranchReplayInputError(err instanceof Error ? err.message : String(err));
     }

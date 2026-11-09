@@ -1,7 +1,7 @@
 import { assertJourneyRunnable } from "@jevitate/mcp-facade";
 import { inMcpInvocation } from "./approval-provenance.js";
 import { planSecretRun } from "./journey-secret-mode.js";
-import { currentBoundSecretParams, type BoundSecretParams } from "./secret-params.js";
+import { assertBoundSecretsOnOrigins, currentBoundSecretParams, resolveBoundSecretOrigins, type BoundSecretParams } from "./secret-params.js";
 import { assertMcpRunnable } from "./journey-stale-api.js";
 import { prepareMcpRunGuard, RunGuardRefusedError, type McpRunGuard } from "./mcp-run-guard.js";
 import { FsJourneyStore, JourneyRegistry, journeyParamSchema, secretParamNames, secretParamValues, validateParams } from "@jevitate/journey";
@@ -132,7 +132,10 @@ export async function runJourneyLoadTest(opts: RunJourneyLoadTestOptions): Promi
     if (plan.bound !== undefined) bound = { ...bound, ...plan.bound };
   }
   validateParams(journeyParamSchema(journey), params);
-  const boundSecretParams = bound === undefined ? undefined : new Map(Object.entries(bound).map(([n, o]) => [n, o === "allowlist" ? allowedOrigins : o] as const));
+  // A `--secret-field` binding goes to the run's own origins only (never the Journey's authored ones), checked before any browser.
+  const resolvedBound = resolveBoundSecretOrigins(bound, allowedOrigins);
+  if (resolvedBound !== undefined) assertBoundSecretsOnOrigins(journey, resolvedBound, opts.environment?.baseUrl ?? stored.recording.site);
+  const boundSecretParams = resolvedBound === undefined ? undefined : new Map(Object.entries(resolvedBound));
 
   // #789: under an MCP invocation, each actor's session is guarded; a refusal ends the whole test, below.
   // The mode decides whether the Journey's own `allowedOrigins` stay on the write allowlist (automation drops

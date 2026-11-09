@@ -1150,6 +1150,26 @@ test("runStep upload #498: a {var}-bound path is checked after binding", async (
   await expect(runStep(actor as any, step, new Map([["doc", join(dir, "secret.txt")]]), 0, { fixtureBaseDir: join(dir, "proj") })).rejects.toThrow("must be project-relative");
 });
 
+test("runStep upload: a secret {var}'s path is never in the refusal (declared secret, bound, or credential-named)", async () => {
+  const dir = await fixtureRoot();
+  const { actor } = uploadSpy();
+  const VALUE = "UpSecretVal9Zq";
+  const cases: Array<[string, Record<string, unknown>]> = [
+    ["doc", { refLookup: (n: string) => (n === "doc" ? { value: VALUE, secret: true } : undefined) }],
+    ["doc", { boundSecretParams: new Map([["doc", ["http://x"]]]) }],
+    ["apiToken", {}],
+  ];
+  for (const [name, opts] of cases) {
+    for (const value of [join(dir, VALUE), `../${VALUE}`, VALUE]) {
+      const step = { step: { ...uploadStep("x").step, file: { var: name } } } as RecordedStep;
+      const err = await runStep(actor as any, step, new Map([[name, value]]), 0, { fixtureBaseDir: join(dir, "proj"), ...opts }).then(() => undefined, (e: unknown) => e);
+      expect(err).toBeInstanceOf(FixturePathError);
+      expect((err as FixturePathError).message).toContain(`\${${name}}`);
+      expect(JSON.stringify({ ...(err as object), message: (err as Error).message, stack: (err as Error).stack })).not.toContain(VALUE);
+    }
+  }
+});
+
 test("runStep upload #498: with no fixtureBaseDir the upload is refused (fail-closed)", async () => {
   const dir = await fixtureRoot();
   const { actor } = uploadSpy();

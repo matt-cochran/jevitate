@@ -40,7 +40,7 @@ import { evaluateMutationProofPolicy, type MutationProofPolicySetting, type Proo
 import { readProofVerdict } from "./journey-verify-report.js";
 import { SafetyPolicy, describeCheck, explainCheck, type SafetyConfig } from "@jevitate/explore";
 import { navigateUrlParams, writeClassifier, type Step, type TargetDescriptor, type ValueOrVar } from "@jevitate/recording";
-import { currentJourneyProof, journeyProofStaleCause, type JourneyProofContext } from "./journey-proof-context.js";
+import { currentJourneyProof, journeyProofStaleCause, proofTargetKnown, proofTargetNow, type JourneyProofContext, type ProofTargetNow } from "./journey-proof-context.js";
 import type { LatestJourneyRun } from "./journey-run-record.js";
 import { DEFAULT_DONE_CHECK_POLICY, type DoneCheckPolicy } from "@jevitate/domain";
 import {
@@ -104,6 +104,10 @@ export interface JourneyVerifyRecord {
   readonly nativeReportError?: string;
   /** #816: the engine that recorded the proof. Absent on a receipt written before it was stored: the producer is unknown. */
   readonly engine?: { readonly version: string; readonly commit: string };
+  /** M5: the target origin the proof ran on. Absent on a receipt written before 0.30.0 (unknown: never counts for require-sensitive). */
+  readonly target?: { readonly origin: string };
+  /** M5: the app's release label the proof ran against (`--app-version` / `JEVITATE_APP_VERSION`), when it was known. */
+  readonly appVersion?: string;
 }
 
 /**
@@ -152,6 +156,8 @@ export interface JourneyReviewContext {
   readonly latestRun?: LatestJourneyRun | null;
   /** `project.json` `doneCheckPolicy` (default `require`): how an `unverified` job gates. */
   readonly doneCheckPolicy?: DoneCheckPolicy;
+  /** M5: the target origin and app version a receipt is judged against (default: the Journey's recorded site, `JEVITATE_APP_VERSION`). */
+  readonly proofTarget?: ProofTargetNow;
 }
 
 /** The attention line a job the latest run did not achieve opens with (readiness's `job` check carries it instead). */
@@ -163,6 +169,8 @@ export function reviewJobVerdict(latest: LatestJourneyRun | null, policy: DoneCh
   const ran = { at: latest.at, ...(/^[a-z-]{1,40}$/.test(latest.outcome) ? { outcome: latest.outcome } : {}) };
   if (!latest.current) return { attainment: "unverified", basis: "earlier-version", doneCheckPolicy: policy, ...ran };
   if (latest.job === undefined) return { attainment: "unverified", basis: "not-recorded", doneCheckPolicy: policy, ...ran };
+  // M4 (the rule readiness's job check applies): `achieved` counts only from a record whose own outcome is ok.
+  if (latest.job.attainment === "achieved" && ran.outcome !== "ok") return { attainment: "unverified", basis: "run-not-passed", doneCheckPolicy: policy, ...ran };
   return { attainment: latest.job.attainment, basis: latest.job.basis, doneCheckPolicy: policy, ...ran };
 }
 
@@ -490,11 +498,11 @@ function validEngine(e: unknown): e is { version: string; commit: string } {
   return e !== null && typeof e === "object" && typeof (e as { version?: unknown }).version === "string" && typeof (e as { commit?: unknown }).commit === "string";
 }
 
-function buildVerify(journey: Journey, rec: JourneyVerifyRecord | null | undefined, readRequests: readonly string[] | undefined): JourneyReviewVerify {
+function buildVerify(journey: Journey, rec: JourneyVerifyRecord | null | undefined, readRequests: readonly string[] | undefined, now: ProofTargetNow): JourneyReviewVerify {
   if (rec === null || rec === undefined) {
     return { status: "not-verified", hint: `run \`jevitate journey verify ${journey.metadata.id} --mutate\` to prove each assertion can fail` };
   }
-  const stale = !currentJourneyProof(journey, rec, readRequests);
+  const stale = !currentJourneyProof(journey, rec, readRequests, now);
   return {
     status: "recorded",
     verdict: readProofVerdict(rec.verdict),
@@ -502,7 +510,9 @@ function buildVerify(journey: Journey, rec: JourneyVerifyRecord | null | undefin
     // Evidence without planner identity, or under another read policy, must be reverified.
     stale,
     // #816: only "the Journey changed" when its content differs from what the receipt bound.
-    ...(stale ? { staleCause: journeyProofStaleCause(journey, rec, readRequests) } : {}),
+    ...(stale ? { staleCause: journeyProofStaleCause(journey, rec, readRequests, now) } : {}),
+    // M5: a receipt that does not name the target and app version it ran on shows, and never counts for require-sensitive.
+    ...(!stale && !proofTargetKnown(rec, now) ? { targetUnknown: true as const } : {}),
     ...(rec.reason === undefined ? {} : { reason: rec.reason }),
     ...(rec.countsForGate === undefined ? {} : { countsForGate: rec.countsForGate }),
     ...(validEngine(rec.engine) ? { recordedBy: { version: rec.engine.version, commit: rec.engine.commit } } : {}),
@@ -611,8 +621,8 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
       ...(m.targetedProofs === undefined || m.targetedProofs.length === 0 ? {} : { targetedProofs: m.targetedProofs.map((p) => ({ check: p.check, mustFailWhen: p.mustFailWhen, relax: [...p.relax] })) }),
       // Design §3.1: the Journey's own done check, when it carries one (placeholders only, never a value).
       ...(m.done === undefined ? {} : { doneCheck: { source: "journey" as const, at: m.done.at, check: m.done.check, ...(m.done.distinguishedBy === undefined ? {} : { distinguishedBy: [...m.done.distinguishedBy] }) } }),
-      verify: buildVerify(journey, ctx.lastVerify, ctx.safety?.readRequests),
-      policy: evaluateMutationProofPolicy({ journey, contentHash: hash, record: ctx.lastVerify, mode: ctx.proofPolicy, waiver: ctx.proofWaiver, readRequests: ctx.safety?.readRequests }),
+      verify: buildVerify(journey, ctx.lastVerify, ctx.safety?.readRequests, ctx.proofTarget ?? proofTargetNow(journey)),
+      policy: evaluateMutationProofPolicy({ journey, contentHash: hash, record: ctx.lastVerify, mode: ctx.proofPolicy, waiver: ctx.proofWaiver, readRequests: ctx.safety?.readRequests, now: ctx.proofTarget ?? proofTargetNow(journey) }),
     },
     changeSinceApproval: buildChange(journey, hash, ctx.approvedSnapshot, ctx.stepIdOnly === true),
     ...(m.approval === undefined
@@ -748,6 +758,8 @@ function buildAttention(r: Omit<JourneyReview, "attention">, weakEndState: reado
     const stale = staleProofAttention(v.staleCause, r.id, v.recordedBy);
     proofNote(stale.text, stale.hint);
   } else if (v.verdict === "insensitive") proofNote("Checks strength: the mutation proof is insensitive (some checks cannot fail)", reverify);
+  // M5: shown, with a warning; under require-sensitive the policy line below says it does not count.
+  if (v.status === "recorded" && !v.stale && v.verdict === "sensitive" && v.targetUnknown === true && (policy?.mode ?? "advisory") !== "require-sensitive") info("The mutation proof's receipt does not name the target origin and app version it ran on (written before 0.30.0, or without the app version set now): it would not count for require-sensitive", reverify);
   if (policy !== undefined && !policy.passed && !(v.status === "recorded" && (v.stale || v.verdict === "insensitive"))) warn(`Mutation proof policy (${policy.mode}): ${policy.reason}`, policy.next);
   else if (v.status === "recorded" && !v.stale && v.verdict !== "sensitive" && v.verdict !== "insensitive") info(`Mutation proof (${policy?.mode ?? "advisory"}): ${policy?.reason ?? v.verdict}`, policy?.next);
   if (r.proof.acceptedWeak !== undefined) info(`Weak checks were accepted: "${r.proof.acceptedWeak.reason}"`);
@@ -776,6 +788,10 @@ function staleProofAttention(cause: string | undefined, id: string, recordedBy?:
       return { text: "The mutation proof is out of date: the target's safety.readRequests changed since it ran", hint: reverify };
     case "no-planner-identity":
       return { text: "The mutation proof predates proof identity (recorded before 0.14.0), so it cannot be matched to this Journey", hint: reverify };
+    case "target":
+      return { text: "The mutation proof ran on another target origin than the Journey's recorded site: the Journey is unchanged, but the proof is for another target", hint: reverify };
+    case "app-version":
+      return { text: "The mutation proof ran on another app version than JEVITATE_APP_VERSION names now: the Journey is unchanged, but the app is not", hint: reverify };
     default:
       return { text: "The mutation proof is out of date: the Journey changed after it ran", hint: reverify };
   }

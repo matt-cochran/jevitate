@@ -14,6 +14,7 @@ import { isApprovedResumeStep } from "./journey-hold.js";
 import { registerRunHooks, resetRunHooksForTests } from "./journey-run-hooks.js";
 import { createCheckpointKey } from "./journey-verify-checkpoint.js";
 import { buildProgram } from "./program.js";
+import { advisoryCatalogDir } from "./done-check-policy.testkit.js";
 
 /**
  * #793 served acceptance, with a real process and real Chromium. A child process runs the Journey; the
@@ -167,6 +168,9 @@ async function cli(args: string[], approval?: Parameters<typeof buildProgram>[0]
     profiles: new ProfileManager("/unused"),
     inboxDir,
     journeysDir,
+    // H5: the project the resume reads its done check and doneCheckPolicy from. This test is about the hold, so
+    // its project is advisory (an unverified pass exits 0); the job verdict is still read and reported.
+    catalogDir: advisoryCatalogDir(root),
     dbPath: join(root, "db.sqlite"),
     explore: { browserPortFactory: () => new PlaywrightBrowserPort(), targetsConfigPath: join(root, "targets.json") },
     ...(approval === undefined ? {} : { approval }),
@@ -243,7 +247,9 @@ describe("[realtime] #793 a run held at step 3, its process killed, approved at 
     // The run-mode gate lives in this process too; it lets through only the approved resume step.
     registerRunHooks("test-gate", { beforeWrite: (ctx) => (ctx.step === 3 && !isApprovedResumeStep(ctx) ? { kind: "approval", reason: "a checkout needs a person" } : undefined) });
     const resumed = await cli(["inbox", "resume", id, "--holds-dir", holdsDir, "--param", `ref=${MARKER}`]);
-    expect(resumed.body, JSON.stringify(resumed.body)).toMatchObject({ ok: true, data: { id, outcome: "ok", fromStep: 3 } });
+    // H5: the resumed run reads its job's done check, as `journey run` does: none is declared, so the job reads
+    // unverified/no-check (0 under this advisory project; 2 under the default require, done-check-surfaces.test.ts).
+    expect(resumed.body, JSON.stringify(resumed.body)).toMatchObject({ ok: true, data: { id, outcome: "ok", fromStep: 3, job: { attainment: "unverified", basis: "no-check" } } });
     expect(resumed.code).toBe(0);
     expect(JSON.stringify(resumed.body)).not.toContain("MARKER_");
 

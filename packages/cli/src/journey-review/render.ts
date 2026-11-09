@@ -183,6 +183,8 @@ const STALE_CAUSE_TEXT: Readonly<Record<string, string>> = {
   "engine-unknown": "the Journey is unchanged, but this proof does not match this engine and its receipt does not say which engine recorded it",
   "read-policy": "the target's safety.readRequests changed after this proof ran",
   "no-planner-identity": "this proof predates proof identity (before 0.14.0)",
+  target: "the Journey is unchanged, but this proof ran on another target origin",
+  "app-version": "the Journey is unchanged, but this proof ran on another app version",
 };
 
 const JOB_BASIS_TEXT: Readonly<Record<string, string>> = {
@@ -194,6 +196,7 @@ const JOB_BASIS_TEXT: Readonly<Record<string, string>> = {
   "no-run": "no run of this Journey is recorded",
   "not-recorded": "the latest run's record predates job verdicts",
   "earlier-version": "the latest run was of an earlier version of this Journey",
+  "run-not-passed": "the latest run's own steps did not pass, so its done check does not count",
 };
 
 /** The fix for an `unverified` job, by why it reads so. */

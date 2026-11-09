@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import { FakeGenerationGateway } from "@jevitate/ai-core";
 import { BrowseTheWeb, CastActor } from "@jevitate/screenplay";
 import { runGoalBasedMission } from "./missions/goal-based.js";
+import { GOAL_IS_SIGN_IN_QUESTION } from "./decide.js";
 import { goalAsksForChange } from "./read-only.js";
-import { ScriptedJudge, withSession, useSkippingTime } from "./testkit.js";
+import { ScriptedJudge, withSession, useSkippingTime, type ScriptedStep } from "./testkit.js";
 
 // #304: Node and page time skip idle waits; assertions unchanged.
 useSkippingTime({ per: "all" });
@@ -23,7 +24,11 @@ interface LabState {
   readonly requests: readonly string[];
 }
 
-async function oneRun(): Promise<{ lab: LabState; transcript: string; recording: string }> {
+const SIGN_IN_STEPS: ScriptedStep[] = [{ op: "click", target: "0" }, { op: "type", target: "0" }, { op: "type", target: "1" }, { op: "click", target: "2" }];
+
+async function oneRun(
+  judge = new ScriptedJudge([...SIGN_IN_STEPS, { op: "done" }]),
+): Promise<{ lab: LabState; transcript: string; recording: string; result: Awaited<ReturnType<typeof runGoalBasedMission>> }> {
   // @ts-expect-error — a plain .mjs fixture with no declaration file
   const { startNavLab } = (await import("../../../test/fixtures/nav-lab/app.mjs")) as {
     startNavLab: (o: { caseId: string; port?: number }) => Promise<{ url: string; close: () => Promise<void> }>;
@@ -31,7 +36,6 @@ async function oneRun(): Promise<{ lab: LabState; transcript: string; recording:
   const lab = await startNavLab({ caseId: "sign-in-goal" });
   try {
     // Home: [0] Sign in (link). Sign-in page: [0] Email, [1] Password, [2] Sign in (submit).
-    const judge = new ScriptedJudge([{ op: "click", target: "0" }, { op: "type", target: "0" }, { op: "type", target: "1" }, { op: "click", target: "2" }, { op: "done" }]);
     const result = await withSession(
       "sign-in-goal-",
       async (session) => {
@@ -50,7 +54,7 @@ async function oneRun(): Promise<{ lab: LabState; transcript: string; recording:
     );
     const state = (await (await fetch(`${lab.url}/__lab/state`)).json()) as LabState;
     expect(result.outcome).toBe("succeeded");
-    return { lab: state, transcript: JSON.stringify(result.transcript), recording: JSON.stringify(result.recording) };
+    return { lab: state, transcript: JSON.stringify(result.transcript), recording: JSON.stringify(result.recording), result };
   } finally {
     await lab.close();
   }
@@ -76,5 +80,24 @@ describe("#810 — a sign-in goal is not read-only", () => {
       }
     },
     180_000,
+  );
+
+  it(
+    "RC lab 0/10: a model that never proposes done on the signed-in home page still ends succeeded — code saw Sign in give way",
+    async () => {
+      // As every rc-030 run did: after the sign-in it idles, then reports. The signed-in home page shows
+      // "Welcome back, Morgan" and Invoices, no sign-out control; the page judgment alone stays below the bar.
+      const judge = new ScriptedJudge([...SIGN_IN_STEPS, { op: "wait" }, { op: "scroll_down" }, { op: "scroll_up" }, { op: "report" }]);
+      judge.goalMetProbability = 0.3;
+      judge.noulProbabilities = { [GOAL_IS_SIGN_IN_QUESTION]: 0.95 };
+      const { lab, result } = await oneRun(judge);
+      expect(lab.done).toBe(true);
+      expect(result.outcome).toBe("succeeded");
+      expect(result.run.outcome).toEqual({ status: "completed", verifiedBy: "sign-in-signals" });
+      const facts = judge.goalCalls.at(-1)?.state.controls.find((c) => c.startsWith("SIGN-IN (observed by code"));
+      expect(facts).toMatch(/showed a sign-in control before the run signed in and shows none now/);
+      expect(JSON.stringify(judge.goalCalls)).not.toContain("lab-pass-1");
+    },
+    90_000,
   );
 });

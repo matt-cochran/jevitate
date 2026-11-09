@@ -1,4 +1,4 @@
-import { NOT_A_CREDENTIAL_WAY_OUT, currentBoundSecretParams, fixtureSecretNeeds, isCredentialExtractName, secretBoundNeeds, type BoundSecretParams } from "./secret-params.js";
+import { NOT_A_CREDENTIAL_WAY_OUT, assertBoundSecretsOnOrigins, currentBoundSecretParams, resolveBoundSecretOrigins, fixtureSecretNeeds, masksExtractedValue, secretBoundNeeds, type BoundSecretParams } from "./secret-params.js";
 import type { JourneyRunRecorder } from "./journey-run-record.js";
 import { JourneyRunEvidenceWriter, type WriteReceipt } from "./journey-run-evidence.js";
 import { hasRunHooks, resolveRunMode, runReadDoneCheckHooks, runValidateParamsHooks, withRunHookGuard, type RunHookContext, type RunMode } from "./journey-run-hooks.js";
@@ -15,8 +15,8 @@ import { anchorRuleMode, assertAnchorRules, journeyAnchorIssues, refLintFindings
 import { journeyCatalogGate, loadCatalog, resolveCatalogDir } from "./catalog-api.js";
 import { journeyDoneCheckFindings } from "./catalog-refs.js";
 import type { JevSetup } from "./jev-advisor.js";
-import { redactText } from "@jevitate/ai-core";
-import { safeRunPolicy, runTagsOf, type RunPolicy, clock, contentHash } from "@jevitate/domain";
+import { redactText, registerDeclaredSecrets } from "@jevitate/ai-core";
+import { safeRunPolicy, runTagsOf, type RunPolicy, clock, contentHash, DEFECT_OUTCOME_STATUSES, GOAL_OUTCOMES, JOURNEY_RUN_OUTCOMES, MISSION_OUTCOMES, MUTATION_PROOF_VERDICTS } from "@jevitate/domain";
 import { dirname, join } from "node:path";
 import { PlaywrightBrowserPort, type BrowserPort, type BrowserSession, type EmulationSpec } from "@jevitate/playwright";
 import { assertSameExtensionBuild, closeOnce, finalizeVideos, runVideoDir, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
@@ -34,6 +34,7 @@ import { JourneyRunner, flattenRecording, retargetRecording, type ProposedRevisi
 import { journeyStepRisk } from "./journey-heal.js";
 import { installHealProbeGuard } from "./heal-probe-guard.js";
 import { journeyResultRecord, type JourneyResultProposal } from "./journey-result-record.js";
+import { currentDoneCheckScope } from "./journey-done-check-scope.js";
 import { JourneyProposalProofError, writeJourneyProposal } from "./journey-proposal-store.js";
 import { stampRunMetadata } from "./run-metadata.js";
 import { recordRun } from "./run-index.js";
@@ -269,6 +270,12 @@ export interface MutationReplayOptions {
   afterEndState?: () => void;
   /** A proof must not trust a replay after a failed restore. Called once the run's restore has ended, however the run ended. */
   onFixtureRestoreFailed?: () => void;
+  /**
+   * Told every secret the replay knows (its secret params, a vault or targets.json binding, a fixture's
+   * secret outputs, an extracted credential) once the replay ends, however it ended, so a proof's own
+   * report redacts them too (independent check M6). Never reported.
+   */
+  onRunSecrets?: (secrets: readonly string[]) => void;
 }
 
 /** #402: what a mutation-proof replay returns beyond `journey run`'s result. */
@@ -310,15 +317,50 @@ export function runSecretValues(secrets: readonly string[], result: unknown, non
 
 export function redactSecretValues<T>(result: T, secrets: readonly string[]): T {
   if (secrets.length === 0) return result;
-  const scrub = (v: unknown): unknown =>
+  // Independent check M7: a structural field holding one of the run's own code tokens is never masked
+  // (a secret `ok` must not mask `outcome: "ok"`, or no exit code is attached). Free text, and anything
+  // under a value subtree (`output`, `fixtures`, `params`), is redacted as before.
+  const scrub = (v: unknown, inValues: boolean, key?: string): unknown =>
     typeof v === "string"
-      ? redactText(v, secrets)
+      ? !inValues && key !== undefined && isStructuralToken(key, v)
+        ? v
+        : redactText(v, secrets)
       : Array.isArray(v)
-        ? v.map(scrub)
+        ? v.map((x) => scrub(x, inValues, key))
         : v !== null && typeof v === "object"
-          ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, scrub(x)]))
+          ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, scrub(x, inValues || VALUE_SUBTREES.has(k), k)]))
           : v;
-  return scrub(result) as T;
+  return scrub(result, false) as T;
+}
+
+/** Where a run's values live: under these keys every string is a value, whatever its own key is named. */
+const VALUE_SUBTREES: ReadonlySet<string> = new Set(["output", "fixtures", "params", "values", "bindings", "vars"]);
+/** The closed vocabularies of the fields a run's own code writes: outcomes, verdicts, statuses. */
+const CODE_TOKENS: ReadonlySet<string> = new Set<string>([
+  ...JOURNEY_RUN_OUTCOMES,
+  ...MISSION_OUTCOMES,
+  ...GOAL_OUTCOMES,
+  ...MUTATION_PROOF_VERDICTS,
+  ...DEFECT_OUTCOME_STATUSES,
+  "held",
+  "cascade",
+  "not-applied",
+  "error",
+  "unpaired",
+  "passed",
+  "failed",
+  "refused",
+  "not-reached",
+  "skipped",
+]);
+const ENUM_FIELDS: ReadonlySet<string> = new Set(["outcome", "verdict", "status", "goalOutcome", "jobOutcome"]);
+const CODE_FIELDS: ReadonlySet<string> = new Set(["code", "codes", "errorCode", "refusal"]);
+const ERROR_CODE_TOKEN = /^E_[A-Z0-9_]{1,62}$/;
+
+function isStructuralToken(key: string, value: string): boolean {
+  if (ENUM_FIELDS.has(key)) return CODE_TOKENS.has(value);
+  if (CODE_FIELDS.has(key)) return ERROR_CODE_TOKEN.test(value) || CODE_TOKENS.has(value);
+  return false;
 }
 
 /**
@@ -720,7 +762,13 @@ async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutatio
   // 0.30.0 run hooks (journey-run-hooks.ts): what every hook is told; the mode once `resolveMode` decided it.
   let mode: RunMode | undefined;
   const target = { origin: opts.environment?.baseUrl ?? stored.recording.site, environment: opts.environment, targetsFile: opts.runGuardTargetsFile };
-  const hookCtx = (): RunHookContext => ({ journey: stored, params: opts.params, channel: opts.runRecorder?.channel, mode, evidence: evidence?.writer, target });
+  // Independent check H3: every value the run knows (bound, vault, fixture outputs, extracted), whether or not it writes evidence.
+  const knownValues = new Set<string>();
+  const noteKnown = (v: string): void => {
+    if (v !== "") knownValues.add(v);
+    evidence?.writer.noteValue(v);
+  };
+  const hookCtx = (): RunHookContext => ({ journey: stored, params: opts.params, channel: opts.runRecorder?.channel, mode, evidence: evidence?.writer, target, knownValues: () => [...knownValues] });
   const allowedOrigins = effectiveAllowedOrigins(journey, opts.environment, opts.allow);
   // #543: an http end-state check reads only an origin the replay allows — refused before any
   // fixture or browser (the probe re-checks every request after substitution).
@@ -765,8 +813,13 @@ async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutatio
     full = withSecretHandbacks(full, secretPlan.heldSecretParams);
     journey = wasFull ? full : withSecretHandbacks(journey, secretPlan.heldSecretParams);
   }
-  for (const v of secretPlan.values) evidence?.writer.noteValue(v);
+  for (const v of [...secretPlan.values, ...Object.values(secretPlan.params)]) noteKnown(v);
   const boundSecretParams = secretPlan.bound === undefined ? givenBound : { ...givenBound, ...secretPlan.bound };
+  // A secret goes only to an origin a person or operator named: a `--secret-field` binding's allowlist is
+  // the run's own origin(s) and `--allow`, never an origin only the Journey file authored. Checked here,
+  // before any browser, for a navigate URL or http check that would carry it; the interpreter checks each page.
+  const resolvedBound = resolveBoundSecretOrigins(boundSecretParams, operatorAllowedOrigins(journey, opts.environment, opts.allow));
+  if (resolvedBound !== undefined) assertBoundSecretsOnOrigins(journey, resolvedBound, target.origin);
   validateParams(journeyParamSchema(journey), { ...secretPlan.params, ...inputParams });
   await runValidateParamsHooks(hookCtx());
   // #402: the mutated copy replays (and is judged); the stored Journey still names, redacts and gates.
@@ -795,18 +848,21 @@ async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutatio
 
   const fx = opts.fixtures?.(journey.recording.site, allowedOrigins, stored.recording.site);
   let params: Record<string, string> = { ...secretPlan.params, ...inputParams };
+  let declaredSecrets: { release(): void } | undefined;
   try {
     if (fx !== undefined) {
       await fx.setup();
       const b = fx.bindings();
       params = Object.fromEntries(Object.entries(params).map(([k, v]) => [k, substituteSetupRefs(v, b, { where: `--param ${k}` })]));
       // #812: a fixture's outputs, and the params they were bound into, are masked from the evidence's write shapes.
-      for (const v of [...Object.values(b.values), ...fx.secrets(), ...Object.values(params)]) evidence?.writer.noteValue(v);
+      for (const v of [...Object.values(b.values), ...fx.secrets(), ...Object.values(params)]) noteKnown(v);
     }
     // #140 order: fixture setup (above) → open the browser (#137 launch options, #118 storageState) → run → restore.
     // #250/#251: a recorded or screenshotted run carries the live pixel mask from its first paint.
     // A fixture's credential-named output is redacted by name, wherever a param carried it.
     const secrets = [...new Set([...secretParamValues(stored, params), ...(fx?.secrets() ?? []), ...secretPlan.values])];
+    // Known values, not discovered ones: a declared 3-5 digit secret is masked inside a longer digit run too.
+    declaredSecrets = registerDeclaredSecrets(secrets);
     const mask = opts.mask ?? new SecretPixelMask(secrets);
     const capturing = opts.session === undefined && (opts.browser?.recordVideo !== undefined || opts.screenshots !== undefined);
     const openPort = (): BrowserPort => {
@@ -869,7 +925,7 @@ async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutatio
         new BrowseTheWeb(session, allowedOrigins),
         ...gate.abilities,
       );
-      const boundOption = boundSecretParams === undefined ? {} : { boundSecretParams: new Map(Object.entries(boundSecretParams).map(([n, o]) => [n, o === "allowlist" ? allowedOrigins : o] as const)) };
+      const boundOption = resolvedBound === undefined ? {} : { boundSecretParams: new Map(Object.entries(resolvedBound)) };
       const replayDeltas = opts.actionDeltas === true ? new ReplayDeltas({ secrets, recorded: flat.map((f) => f.recorded) }) : undefined;
       // #322/#400: a full replay (never an anchored prefix) must also satisfy the Journey's end state
       // and each step's request expectations.
@@ -907,8 +963,9 @@ async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutatio
       const nonSecretParams = declaredNonSecretParams(stored);
       const onExtracted = async (value: string, name?: string): Promise<void> => {
         opts.runRecorder?.noteValue(value);
-        evidence?.writer.noteValue(value);
-        if (name === undefined || !isCredentialExtractName(name) || nonSecretParams.has(name) || value.trim() === "") return;
+        noteKnown(value);
+        // A credential name, or one that names a credential and ends in a describing word with a credential-length value (`apiKey_name`).
+        if (name === undefined || !masksExtractedValue(name, value, nonSecretParams)) return;
         extractedCredentials.add(value);
         await mask.addSecret(value);
       };
@@ -967,12 +1024,13 @@ async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutatio
         });
         runGuard?.check();
         if ("output" in raw) opts.onRawOutput?.(raw.output);
-        if ("output" in raw && raw.output !== null && typeof raw.output === "object") for (const v of Object.values(raw.output as Record<string, unknown>)) if (typeof v === "string") evidence?.writer.noteValue(v);
+        if ("output" in raw && raw.output !== null && typeof raw.output === "object") for (const v of Object.values(raw.output as Record<string, unknown>)) if (typeof v === "string") noteKnown(v);
         // The page is still open: a done check reads it here (#800, a later deliverable's hook).
         if (hasRunHooks("readDoneCheck")) await runReadDoneCheckHooks({ ...hookCtx(), page: session.page, result: raw });
         runSecrets = [...new Set([...runSecretValues(secrets, raw, nonSecretParams), ...extractedCredentials])];
         result = redactSecretValues(raw, runSecrets);
       } finally {
+        mutation.onRunSecrets?.([...new Set([...runSecrets, ...extractedCredentials])]);
         await gate.done();
         await healGuard?.guard.disarm();
         await healGuard?.dispose();
@@ -1015,10 +1073,13 @@ async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutatio
       await closeSession();
     }
   } catch (err) {
+    // A replay that ends before the run's own secret set is told it (a fixture's setup): what it knew by then.
+    mutation.onRunSecrets?.([...new Set([...secretParamValues(stored, params), ...(fx?.secrets() ?? []), ...secretPlan.values])]);
     // #399: an error escaping the run (a crash, a closed page) may echo a navigated URL that
     // carried a secret parameter — its message and stack are redacted, its class kept.
     throw redactErrorSecrets(err, secretParamValues(journey, { ...inputParams, ...params }));
   } finally {
+    declaredSecrets?.release();
     await fx?.restore();
     if (mutation.onFixtureRestoreFailed !== undefined && fx?.restoreFailed() === true) mutation.onFixtureRestoreFailed();
   }
@@ -1035,6 +1096,16 @@ export function effectiveAllowedOrigins(journey: Journey, environment: ResolvedJ
   const out = [...base];
   for (const o of normalizeAllowlist([...(journey.metadata.allowedOrigins ?? []), ...allow])) if (!out.includes(o)) out.push(o);
   return out;
+}
+
+/**
+ * The origins a person or operator named for this run, where a `--secret-field` binding may type its
+ * secret: the environment's (`--env`/`--base-url`, `environments.json`), else the recorded site the run
+ * goes to, then `--allow`. Never the Journey's own `metadata.allowedOrigins`: a Journey file (a draft an
+ * agent wrote, say) cannot choose where a person's secret goes.
+ */
+export function operatorAllowedOrigins(journey: Journey, environment: ResolvedJourneyEnvironment | undefined, allow: readonly string[] = []): string[] {
+  return normalizeAllowlist([...(environment === undefined ? [journey.recording.site] : environment.allowedOrigins), ...allow]);
 }
 
 /**
@@ -1144,7 +1215,9 @@ async function persistHealRun(a: {
       };
     }
   }
-  const record = journeyResultRecord(result, { journey: a.stored, params: a.params, startedAt: a.startedAt, ...(proposal === undefined ? {} : { proposal }) });
+  // H5: the record keeps the run's job verdict (its done-check scope's) and folds it into the exit.
+  const doneCheck = currentDoneCheckScope();
+  const record = journeyResultRecord(result, { journey: a.stored, params: a.params, startedAt: a.startedAt, ...(proposal === undefined ? {} : { proposal }), ...(doneCheck?.job === undefined ? {} : { job: doneCheck.job, doneCheckPolicy: doneCheck.policy }) });
   const stamped = { ...record, result: stampRunMetadata(record.result) };
   await mkdir(dirname(resultPath), { recursive: true });
   await writeFile(resultPath, `${JSON.stringify(stamped, null, 2)}\n`, "utf8");

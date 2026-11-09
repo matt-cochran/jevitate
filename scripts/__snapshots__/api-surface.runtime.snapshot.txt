@@ -39,7 +39,7 @@
   provenSensitive: function
   rejudge: function
 
-# @jevitate/ai-core (127 exports)
+# @jevitate/ai-core (128 exports)
   AI_CORE: const (string)
   ALL_CREDENTIAL_KEYS: array
   BACKOFF_SCHEDULE_MS: array
@@ -150,6 +150,7 @@
   redactModelPayload: function
   redactText: function
   redactUrl: function
+  registerDeclaredSecrets: function
   requireKeys: function
   resolveJevRoute: function
   retryTransient: function
@@ -173,7 +174,7 @@
 # @jevitate/daemon (1 exports)
   ProfileManager: class
 
-# @jevitate/domain (115 exports)
+# @jevitate/domain (116 exports)
   DEFAULT_DONE_CHECK_POLICY: const (string)
   DEFAULT_HEAP_GROWTH_RULE: object
   DEFAULT_JEVITATE_REPO: const (string)
@@ -191,6 +192,7 @@
   HostHealthSummarySchema: object
   JOB_ATTAINMENTS: array
   JOB_BASES: array
+  JOB_UNKNOWN_REASONS: array
   JOURNEY_MISSION_OUTCOME: object
   JOURNEY_RUN_OUTCOMES: array
   LogClassCauseSchema: object

@@ -8,6 +8,7 @@ import { RunGuardRefusedError, runGuardRefusalBody } from "../mcp-run-guard.js";
 import { stampRunMetadata, withRunMetadata } from "../run-metadata.js";
 import { browserRunFromFlags, emulationFromFlags } from "../cli-shared.js";
 import { parseScreenshotsArg } from "../run-screenshots.js";
+import { redactSensitiveText } from "../terminal-result.js";
 import { McpArgError, argErrorBody, optBool, optInt, optNamedSessions, optPath, optExtensions, optRecordVideo, optScreenshots, optString, optStringArray, optViewport } from "../mcp-args.js";
 import { resourcePreflight } from "../resource-preflight.js";
 import type { McpToolCtx, McpToolGroup } from "./shared.js";
@@ -94,7 +95,8 @@ export function findingTools(ctx: McpToolCtx): McpToolGroup {
     const base = { id, callId: id, kind: "journey", journey: record.call.journey, enqueuedAtIso: record.enqueuedAtIso, ...(record.startedAtIso === undefined ? {} : { startedAtIso: record.startedAtIso }) };
     if (record.status === "queued" || record.status === "running") return jsonResult({ ...base, status: record.status, pending: true });
     const ended = { ...(record.finishedAtIso === undefined ? {} : { finishedAtIso: record.finishedAtIso }), ...(record.code === undefined ? {} : { code: record.code }) };
-    if (record.status === "failed") return errorResult({ ...base, ...ended, status: "failed", isError: true, error: record.error ?? "the queued Journey call could not run" });
+    // M2: masked as it is stored (drainJourneyCalls); masked again here, so a record an older drain wrote is too.
+    if (record.status === "failed") return errorResult({ ...base, ...ended, status: "failed", isError: true, error: redactSensitiveText(record.error ?? "the queued Journey call could not run", []) });
     const exitCode = record.exitCode ?? 2;
     const body = { ...base, ...ended, status: record.outcome ?? "inconclusive", outcome: record.outcome ?? "inconclusive", exitCode, isError: exitCode === 2, ...(record.runId === undefined ? {} : { runId: record.runId }), ...(record.job === undefined ? {} : { job: record.job }) };
     return body.isError ? errorResult(body) : jsonResult(body);

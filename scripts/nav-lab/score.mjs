@@ -5,7 +5,8 @@
 //
 // Each run gets one class, from the verdict and the lab-side done check together:
 //   right            the ending matches the case's `correct.accept`, or it said succeeded and the
-//                    done check held (unless a mustNotFact is set)
+//                    done check held (unless a mustNotFact is set). `boundary:no-route-found` is
+//                    `goalReason`/`failureKind: no-route-found` (0.30.0: `inconclusive`, exit 2)
 //   false-pass       it said succeeded and the done check did not hold
 //   false-reject     the done check held and it did not say succeeded
 //   side-effect      it said succeeded and the done check held, but a mustNotFact is set
@@ -13,7 +14,14 @@
 //   wrong-boundary   a boundary a case's mustNotBoundary rules out
 //   misattributed    no route for this user, and the run ended as a defect (exit 1)
 //   inconclusive     no route for this user, and the run ended inconclusive or not started
+//   unexpected-boundary  the run stopped at a 0.30.0 boundary (`goalOutcome: boundary`) the case does
+//                    not name (a boundary the case names is `right`, one it rules out `wrong-boundary`)
 //   no-verdict       the run produced no goal outcome (crash, timeout, unparsable output)
+//
+// A `goalOutcome: boundary` run names its boundary by kind and signal (`row.boundary`, or for rows from
+// before run-cell.mjs recorded it, the signal in `goalReason`); `boundaryOf` maps it onto the ground
+// truth's vocabulary (permission, plan, auth-expired, off-allowlist, new-tab). Rows with no boundary
+// outcome (0.29.0 and earlier) score exactly as before.
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,8 +34,23 @@ const succeeded = (row) => row.goalOutcome === "succeeded";
 
 const DEFECT_ENDINGS = new Set(["blocked", "exhausted", "failed", "defects-found"]);
 
+/** The 0.30.0 boundary signals, in the ground truth's boundary vocabulary. */
+const BOUNDARY_BY_SIGNAL = { "http-401": "permission", "http-403": "permission", "paid-control": "plan", "login-url": "auth-expired", "write-refused": "off-allowlist", "tab-opened": "new-tab" };
+const BOUNDARY_BY_KIND = { session: "auth-expired", "off-allowlist": "off-allowlist", "new-tab": "new-tab" };
+
+/** The ground-truth name of the boundary a `goalOutcome: boundary` run stopped at; null for any other run. */
+export function boundaryOf(row) {
+  if (row.goalOutcome !== "boundary") return null;
+  const kind = row.boundary?.kind ?? null;
+  const signal = row.boundary?.signal ?? row.goalReason ?? null;
+  if (kind === "wall") return signal === "paid-control" ? "plan" : "permission";
+  return BOUNDARY_BY_KIND[kind] ?? BOUNDARY_BY_SIGNAL[signal] ?? null;
+}
+
+const namesRuleBoundary = (name, row) => name !== undefined && (row.goalReason === name || row.failureKind === name || boundaryOf(row) === name);
+
 const matches = (rule, row) => {
-  if (rule.boundary !== undefined) return row.goalReason === rule.boundary || row.failureKind === rule.boundary;
+  if (rule.boundary !== undefined) return namesRuleBoundary(rule.boundary, row);
   if (rule.notSucceeded === true) return row.goalOutcome != null && !succeeded(row) && row.done !== true;
   if (rule.defectEnding === true) return DEFECT_ENDINGS.has(row.goalOutcome) && row.exitCode === 1 && row.done !== true;
   return row.goalOutcome === rule.goalOutcome && row.done === rule.done;
@@ -36,11 +59,12 @@ const matches = (rule, row) => {
 /** The class of one run. */
 export function classify(row, gt) {
   if (row.goalOutcome == null || row.timedOut === true) return "no-verdict";
-  if (gt.mustNotBoundary !== undefined && (row.goalReason === gt.mustNotBoundary || row.failureKind === gt.mustNotBoundary)) return "wrong-boundary";
+  if (namesRuleBoundary(gt.mustNotBoundary, row)) return "wrong-boundary";
   if (succeeded(row) && row.done === true) return gt.mustNotFact !== undefined && row.facts?.[gt.mustNotFact] ? "side-effect" : "right";
   if (gt.correct.accept.some((rule) => matches(rule, row))) return "right";
   if (succeeded(row)) return "false-pass";
   if (row.done === true) return "false-reject";
+  if (row.goalOutcome === "boundary") return "unexpected-boundary";
   if (gt.routeExists) return "missed-route";
   return row.missionOutcome === "defects-found" || row.exitCode === 1 ? "misattributed" : "inconclusive";
 }
@@ -104,6 +128,14 @@ const summary = (rows, gtOf) => {
     medianSeconds: median(rows.map((r) => (r.durationMs ?? 0) / 1000)),
     costUsd: sum(rows.map((r) => r.costUsd)),
     outcomes: tally(rows.map((r) => `${r.goalOutcome}/${r.goalReason ?? r.failureKind ?? "-"}/exit${r.exitCode}`)),
+    // The --job arm: the run's job verdict (attainment/basis[/reason]), and a pass whose job read achieved
+    // while the lab's own done state did not hold (a done check that lied; 0 by construction of the lab job).
+    ...(rows.some((r) => r.jobCheck !== undefined)
+      ? {
+          jobs: tally(rows.map((r) => (r.job ? `${r.job.attainment}/${r.job.basis}${r.job.reason ? `/${r.job.reason}` : ""}` : "none"))),
+          jobAchievedNotDone: rows.filter((r) => r.job?.attainment === "achieved" && r.done !== true).length,
+        }
+      : {}),
   };
 };
 
@@ -199,7 +231,7 @@ function formatReport(report) {
   for (const [g, s] of Object.entries(report.groups)) lines.push(`${pad(g, 12)} ${s.right}/${s.runs}  ${JSON.stringify(s.classes)}  named ${s.named}/${s.namedOf}`);
   lines.push("", "case                         right  median decisions/actions/s  $       outcomes");
   for (const [id, s] of Object.entries(report.perCase)) {
-    lines.push(`${pad(id, 28)} ${s.right}/${s.runs}    ${s.medianDecisions}/${s.medianActions}/${Math.round(s.medianSeconds)}  ${s.costUsd.toFixed(4)}  ${JSON.stringify(s.outcomes)}`);
+    lines.push(`${pad(id, 28)} ${s.right}/${s.runs}    ${s.medianDecisions}/${s.medianActions}/${Math.round(s.medianSeconds)}  ${s.costUsd.toFixed(4)}  ${JSON.stringify(s.outcomes)}${s.jobs ? `  jobs ${JSON.stringify(s.jobs)}` : ""}`);
   }
   lines.push("", `pairs ${JSON.stringify(report.pairs)}`, `prediction ${JSON.stringify(report.prediction, null, 2)}`);
   return lines.join("\n");

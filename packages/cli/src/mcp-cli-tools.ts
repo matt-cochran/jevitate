@@ -419,6 +419,8 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         storageState: session("--storage-state"),
         fixtures: path("--fixtures"),
         fixtureIdentity: FIXTURE_IDENTITY,
+        // M5: the app version the proof's receipt binds (as run_check's).
+        appVersion: s("--app-version"),
         ...ENVIRONMENT,
         ...EMULATION,
       },
@@ -699,7 +701,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "run_campaign",
     description:
-      "`jevitate campaign run <spec>` (#293): a bounded campaign of journey-anchored missions — replay each job's promoted Journey (discovery), run its anchored missions in order with the spec's fixtures restore between runs, and return ONE deduped report (each defect with the Journey steps it branched from). An invalid spec is refused listing every problem. #485: before any mission it runs a preflight (every start URL reachable, every session signed in, no allow-list origin slip) and refuses with the problems listed; skipPreflight: true runs without it (recorded on the report as preflight.skipped). allowDestructive/allowWrites/deny/paid/invariants and the media flags are forwarded to every mission. Needs real or fakeAi.",
+      "`jevitate campaign run <spec>` (#293): a bounded campaign of journey-anchored missions — replay each job's promoted Journey (discovery), run its anchored missions in order with the spec's fixtures restore between runs, and return ONE deduped report (each defect with the Journey steps it branched from). An invalid spec is refused listing every problem. #485: before any mission it runs a preflight (every start URL reachable, every session signed in, no allow-list origin slip) and refuses with the problems listed; skipPreflight: true runs without it (recorded on the report as preflight.skipped). allowDestructive/allowWrites/deny/paid/invariants and the media flags are forwarded to every mission. H5 (0.30.0): each discovery replay reads its job's done check, as run_journey does (discovery[].job): a job not achieved makes the campaign exit 1 (done-check-failed), an unverified one exit 2 under project.json doneCheckPolicy require (the default; a harness target excepted). doneCheck: false (`--no-done-check`) skips the readings; requireDoneCheck (`--require-done-check`) folds unverified to 2 even under advisory; not both. Needs real or fakeAi.",
     command: {
       path: "campaign run",
       params: {
@@ -720,6 +722,9 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         skipPreflight: b("--skip-preflight"),
         // #205/#746: start on a starved host (the campaign-start check and every mission) instead of E_HOST_STARVED.
         ignoreHostLoad: b("--ignore-host-load"),
+        // H5 (0.30.0): the discovery replays' done check, as run_journey's noDoneCheck / requireDoneCheck.
+        doneCheck: b("--no-done-check"),
+        requireDoneCheck: b("--require-done-check"),
         ...JEV_AI,
       },
       omitted: { "--secret-field": OMIT.envSecret,
@@ -874,7 +879,8 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "#437 requireApprovals (+ allowChannels: a comma list of tty, non-interactive, mcp, ci, pr-review; default tty): also an `approval` finding for each promoted Journey or approved persona/job whose approval is missing, stale or made over a channel not allowed. " +
       "#469: pr-review is a channel you may ALLOW, never one a caller sets — jevitate records it only after verifying the merged PR's approving review through the forge API in CI. " +
       "#799 requireTrust: also fails (exit 1, naming the environment) when an environment's trust in .jevitate/environments.json differs from the last commit — a trust change is PR-reviewed and committed first; it can only make the check stricter. " +
-      "#470 maxBrittleSteps n: opt-in locator gate — a Journey item with more than n brittle steps (missing the project's testIdAttributes convention) is a gating finding; without it locator health is advisory.",
+      "#470 maxBrittleSteps n: opt-in locator gate — a Journey item with more than n brittle steps (missing the project's testIdAttributes convention) is a gating finding; without it locator health is advisory. " +
+      "H5 (0.30.0): each Journey item reads its job's done check, as run_journey does, and its item carries `job`: a job not achieved is a gating done-check-failed finding (exit 1); a pass with an unverified job makes the check exit 2 under project.json doneCheckPolicy require (the default; a harness target excepted), 0 under advisory. doneCheck: false (`--no-done-check`) skips the readings (every job reads unverified, no-check); requireDoneCheck (`--require-done-check`) folds unverified to exit 2 even under advisory; not both.",
     command: {
       path: "check",
       params: { tags: TAGS, ...EXTENSION,
@@ -895,6 +901,9 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         allowChannels: s("--allow-channels"),
         requireTrust: b("--require-trust"),
         maxBrittleSteps: n("--max-brittle-steps"),
+        // H5 (0.30.0): the Journey items' done check, as run_journey's noDoneCheck / requireDoneCheck.
+        doneCheck: b("--no-done-check"),
+        requireDoneCheck: b("--require-done-check"),
         selfHeal: s("--self-heal", { enum: ["fail-closed", "hybrid", "full"] }),
         changes: s("--changes"),
         changeNote: many("--change-note"),

@@ -33,6 +33,12 @@ export interface RunHookContext {
   readonly evidence: JourneyRunEvidenceWriter | undefined;
   /** Where the run goes: the origin, the named environment (if any) and the operator's targets file seam. Absent for a caller that does not say. */
   readonly target?: RunHookTarget;
+  /**
+   * Every value the run knows so far beyond `params`: a vault or targets.json binding, a fixture's
+   * outputs, an extracted value. Told whether or not the run writes evidence (`JEVITATE_RUN_RECORD=off`),
+   * so a hold's checkpoint masks them all. Never reported.
+   */
+  readonly knownValues?: () => readonly string[];
 }
 
 /** The target a run goes to, as `runJourneyProgrammatically` resolved it (§5: what the run mode is decided from). */

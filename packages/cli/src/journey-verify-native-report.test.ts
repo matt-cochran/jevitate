@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -10,7 +10,8 @@ import { FakeClock, installClock, resetClock } from "@jevitate/domain";
 import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import { registerJourneyVerify, type JourneyVerifySeams } from "./journey-cli/verify.js";
 import { verifyRecordPath } from "./journey-review-store.js";
-import { NATIVE_REPORT_RETENTION, writeVerifyNativeReport } from "./journey-verify-evidence-file.js";
+import { secretForms } from "@jevitate/ai-core";
+import { NATIVE_REPORT_RETENTION, carriesSecretValue, writeVerifyNativeReport } from "./journey-verify-evidence-file.js";
 import { __resetTerminalResultForTests, type TerminalResultDeps } from "./terminal-result.js";
 
 /**
@@ -65,11 +66,11 @@ const terminal = (): TerminalResultDeps => ({
   sharedProcess: () => false,
 });
 
-async function verify(writeOut: (s: string) => void, stderr: string[] = []): Promise<void> {
+async function verify(writeOut: (s: string) => void, stderr: string[] = [], run: Run = quotesSecret): Promise<void> {
   const program = new Command();
   program.configureOutput({ writeOut, writeErr: (s) => void stderr.push(s) });
   const deps = { profiles: new ProfileManager("/unused"), journeysDir: dir, dbPath: join(dir, "no-site-policy.sqlite") };
-  registerJourneyVerify(program.command("journey"), program, deps, { run: quotesSecret, terminal: terminal() });
+  registerJourneyVerify(program.command("journey"), program, deps, { run, terminal: terminal() });
   await program.parseAsync(["journey", "verify", ID, "--mutate", "--param", `password=${SECRET}`, "--json"], { from: "user" });
 }
 
@@ -176,5 +177,64 @@ describe("#818 writeVerifyNativeReport", () => {
     const r = writeVerifyNativeReport(join(blocked, "inner"), "2026-11-09T12-00-00-000Z", envelope(0));
     chmodSync(blocked, 0o700);
     expect(r).toEqual({ error: expect.stringMatching(/native report could not be written/) as unknown as string });
+  });
+});
+
+describe("independent check M6: the native report is redacted for every secret the run knows, in every encoding", () => {
+  // A fixture's or an extracted credential, never a parameter: the replay reports it as one of its secrets.
+  const RUN_SECRET = "MARKER_FX*tok (x)!";
+  const forms = (v: string): string[] => [...secretForms(v), ...secretForms(v).map((f) => JSON.stringify(f).slice(1, -1))];
+  const quotesEverything = (async (_opts: unknown, mutation?: { onRunSecrets?: (s: readonly string[]) => void }) => {
+    mutation?.onRunSecrets?.([RUN_SECRET]);
+    const lowerStrict = encodeURIComponent(SECRET).replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase());
+    return { outcome: "quarantined", reason: `step 2: page showed ${RUN_SECRET}, went to /m?t=${encodeURIComponent(RUN_SECRET).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)} and /p?pw=${lowerStrict}`, output: {} };
+  }) as unknown as Run;
+
+  it("a fixture or extracted secret, and a parameter's lowercase-hex URL form, reach neither the file, the receipt nor stdout", async () => {
+    let out = "";
+    await verify((s) => void (out += s), [], quotesEverything);
+    const r = receipt();
+    expect(r.nativeReport).toBeDefined();
+    const text = readFileSync(resolve(dirname(verifyRecordPath(dir, ID)), r.nativeReport!.path), "utf8");
+    expect(text).toContain("page showed");
+    for (const f of [...forms(RUN_SECRET), ...forms(SECRET)]) {
+      expect(text).not.toContain(f);
+      expect(readFileSync(verifyRecordPath(dir, ID), "utf8")).not.toContain(f);
+      expect(out).not.toContain(f);
+    }
+  });
+
+  it("the withhold guard finds a secret in any URL or JSON form", () => {
+    const strict = encodeURIComponent(RUN_SECRET).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+    for (const text of [RUN_SECRET, strict, strict.replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase()), new URLSearchParams([["", RUN_SECRET]]).toString().slice(1), JSON.stringify({ v: 'a"b\\c' })]) {
+      expect(carriesSecretValue(`{"r":"${text}"}`, [RUN_SECRET, 'a"b\\c']), text).toBe(true);
+    }
+    expect(carriesSecretValue('{"outcome":"ok","n":1}', ["MARKER_absent"])).toBe(false);
+  });
+});
+
+describe("independent check (low): a symlinked reports directory is never written through", () => {
+  it("refuses a .verify/reports that is a symbolic link, and writes nothing where it points", async () => {
+    const verifyDir = dirname(verifyRecordPath(dir, ID));
+    mkdirSync(verifyDir, { recursive: true });
+    const elsewhere = join(dir, "elsewhere");
+    mkdirSync(elsewhere);
+    symlinkSync(elsewhere, join(verifyDir, "reports"));
+    await verify(() => undefined);
+    const r = receipt();
+    expect(r.nativeReport).toBeUndefined();
+    expect(r.nativeReportError).toMatch(/native report could not be written/);
+    expect(readdirSync(elsewhere)).toEqual([]);
+  });
+
+  it("writeVerifyNativeReport refuses any symlinked component under its root", () => {
+    const rootDir = join(dir, "root");
+    mkdirSync(rootDir);
+    const elsewhere = join(dir, "elsewhere2");
+    mkdirSync(elsewhere);
+    symlinkSync(elsewhere, join(rootDir, "reports"));
+    const res = writeVerifyNativeReport(join(rootDir, "reports", ID), "2026-11-09T12-00-00-000Z", { n: 0 }, rootDir);
+    expect(res).toEqual({ error: expect.stringMatching(/native report could not be written/) as unknown as string });
+    expect(readdirSync(elsewhere)).toEqual([]);
   });
 });

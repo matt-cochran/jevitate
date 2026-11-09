@@ -10,6 +10,7 @@ import { takeRecoveryTurn } from "./handle-blocked.js";
 import { TOO_MANY_CHOICES, TOO_MANY_CHOICES_RETRY, firstLine, pageStatusOf } from "./helpers.js";
 import type { PageView } from "./page-view.js";
 import { notePage, returnToStart } from "./return-to-start.js";
+import { noteRoutePage } from "./no-route.js";
 import type { Perceived } from "./step.js";
 
 export async function decideStep(ctx: RunContext, step: Perceived, view: PageView): Promise<Decision | "stop"> {
@@ -28,6 +29,8 @@ export async function decideStep(ctx: RunContext, step: Perceived, view: PageVie
   // (listed last and marked — never removed: a goal may cross the sections it names).
   ctx.goalFocus.noteUrl(snap.url);
   notePage(ctx, snap);
+  // 0.30.0 (#807): what the no-route-found coverage floor reads at the end of the run.
+  await noteRoutePage(ctx, snap, visibleText);
   const offGoal = ctx.goalFocus.offGoal(modelControls, ctx.chrome);
   try {
     // #192: the choice cap is bounded in decide(); should the API still refuse the count (a

@@ -23,7 +23,7 @@ function journey(): Journey {
 }
 function record(over: Partial<JourneyVerifyRecord> = {}): JourneyVerifyRecord {
   const j = journey();
-  return { journeyId: "save", contentHash: journeyReviewHash(j), proofHash: journeyProofHash(j), verdict: "sensitive", countsForGate: true, engine: { version: "0.30.0", commit: "abc1234" }, summary: { sensitive: 1 }, at: "2026-11-01T00:00:00Z", ...over };
+  return { journeyId: "save", contentHash: journeyReviewHash(j), proofHash: journeyProofHash(j), verdict: "sensitive", countsForGate: true, engine: { version: "0.30.0", commit: "abc1234" }, target: { origin: new URL(j.recording.site).origin }, summary: { sensitive: 1 }, at: "2026-11-01T00:00:00Z", ...over };
 }
 
 let root: string;

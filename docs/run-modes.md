@@ -120,7 +120,10 @@ In test mode a run never waits for a person. A Journey with a handback step is r
 `vault-autofill` uses: code types it into the field the spec names, on that origin only, and the value never
 reaches the model, the result, the evidence or a log. A promoted Journey reads it whatever channel approved it, an MCP
 promotion included, since that authorises test-mode runs (on `run_journey` the approval must also be
-current); a draft never reads the file. With no binding for
+current); a draft never reads the file. The same rule holds where a tool binds the Journey's secrets before
+its replays (`verify_journey`, `journey_readiness`, `chain_journeys`, `demo_journey`, `run_load_test`, an
+exploration's `fromJourney` prefix): the file serves a promoted Journey, approved by a person on an automation-mode
+target, and never a draft. With no binding for
 every such parameter (or a binding whose environment variable is unset), the run is refused with
 `E_HUMAN_STEP_IN_TEST_MODE` before any browser opens; it is never held. A binding on another origin only is
 refused with `E_SECRET_ORIGIN_REFUSED`.
@@ -156,7 +159,9 @@ record binds what a person approves:
 - the target's origin and trust;
 - the pending step and the control it names.
 
-It holds no value. The run ends `outcome: "held"` with `E_RUN_HELD` (exit 2).
+It holds no value. The checkpoint keeps the page address with each parameter's value replaced by its name, and
+every other value the run knows (a targets.json or vault binding, a fixture output, an extracted value) masked,
+in every form a URL can carry it, whether or not run records are on. The run ends `outcome: "held"` with `E_RUN_HELD` (exit 2).
 
 1. `jevitate inbox approve <id>` answers it. It works only at a terminal (a TTY on stdin and stdout) and not
    inside an MCP call. It shows what is held and asks for the hold's id typed back. `--reject` answers with a
@@ -168,7 +173,12 @@ It holds no value. The run ends `outcome: "held"` with `E_RUN_HELD` (exit 2).
    assertion.
 3. The resume is refused unless an approval by a person at a terminal exists, and the Journey hash, the
    parameter digest, the target origin and the pending action all still match the record. A changed Journey
-   needs a new hold and a new approval.
+   needs a new hold and a new approval. A hold a `journey chain` producer reached also binds the consumer
+   Journey's content hash and the requests file's sha256: a resume after either changed is refused
+   (`E_HOLD_BINDING`, naming `consumer` or `requests`) before anything opens.
+4. The resumed run reads its job's done check as `journey run` does, and reports `job`. Its exit folds the
+   job in: `1` when the job was not achieved, `2` for an unverified pass under `doneCheckPolicy: "require"`
+   ([outcomes](./outcomes.md)).
 
 A hold lives 24 hours by default. After that, resume ends the run `inconclusive` with `E_HOLD_EXPIRED` (exit
 2), and running the Journey again makes a new hold. Every other hold refusal ran nothing and exits 64.

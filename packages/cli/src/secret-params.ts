@@ -4,6 +4,7 @@ import { navigateUrlParams } from "@jevitate/recording";
 import { SecretFieldSpecError, fieldMatches, parseSecretField, type Control, type SecretField } from "@jevitate/explore";
 import type { TargetDescriptor } from "@jevitate/recording";
 import { SETUP_REF, type MissionFixtures } from "./mission-fixtures.js";
+import type { ResolvedJourneyEnvironment } from "./environments.js";
 
 /**
  * A secret parameter's value (declared `secret: true`, or a credential-like name) and the two
@@ -82,12 +83,38 @@ function edgeTermIn(word: string): boolean {
  * (it has its way out: `secret: false` with a person's approval).
  */
 export function isCredentialExtractName(name: string): boolean {
-  if (!isSecretName(name)) return false;
   const words = nameWords(name);
   const last = words[words.length - 1];
   if (words.length >= 2 && last !== undefined && DESCRIBING_LAST_WORDS.has(last)) return false;
+  return extractNameMentionsCredential(name);
+}
+
+/**
+ * `isCredentialExtractName` without the describing-last-word exemption: the name holds a credential
+ * term (`apiKey_name`, `token_count` as much as `apiKey`). A run masks such an extract's value as it
+ * binds when the value is long enough to be a credential (`MASKED_DESCRIBED_EXTRACT_LENGTH`), even
+ * though the name alone does not make the Journey secret-bound: see `masksExtractedValue`.
+ */
+export function extractNameMentionsCredential(name: string): boolean {
+  if (!isSecretName(name)) return false;
+  const words = nameWords(name);
   if (EXTRACT_CREDENTIAL_ANYWHERE_RE.test(words.join(""))) return true;
   return words.some((w) => edgeTermIn(w) || EXTRACT_CREDENTIAL_WORD_RE.test(w));
+}
+
+/** From this length a value is long enough to be a credential (the guard's plain-substring length, credential-guard.ts). */
+const MASKED_DESCRIBED_EXTRACT_LENGTH = 6;
+
+/**
+ * Does a run mask the value an `extract as <name>` binds (pixel mask, redaction set, the heal payload)?
+ * A credential name always; a name that mentions one but ends in a describing word (`apiKey_name`,
+ * `session_label`) when its value is credential-length, so a real key behind a describing name is still
+ * masked while `token_count = 42` does not mask every 42 in the evidence. `nonSecret`: declared `secret: false`.
+ */
+export function masksExtractedValue(name: string, value: string, nonSecret: ReadonlySet<string>): boolean {
+  if (nonSecret.has(name) || value.trim() === "") return false;
+  if (isCredentialExtractName(name)) return true;
+  return extractNameMentionsCredential(name) && value.trim().length >= MASKED_DESCRIBED_EXTRACT_LENGTH;
 }
 
 /**
@@ -265,8 +292,27 @@ export function secretParamTargets(journey: Journey): Array<{ name: string; targ
   });
 }
 
-/** Where a secret an operator's binding supplied may be typed: its origins, or the run's allowlist. */
+/**
+ * Where a secret an operator's binding supplied may be typed: its origins, or `"allowlist"` (a
+ * `--secret-field`'s), which the run resolves to the origins a person or operator named for it
+ * (`operatorAllowedOrigins`: the environment's, the run's own, `--allow`), never the Journey's authored ones.
+ */
 export type BoundSecretParams = Readonly<Record<string, readonly string[] | "allowlist">>;
+
+/** `bound` with each `"allowlist"` binding resolved to `operatorOrigins`; undefined when nothing is bound. */
+export function resolveBoundSecretOrigins(bound: BoundSecretParams | undefined, operatorOrigins: readonly string[]): Record<string, readonly string[]> | undefined {
+  if (bound === undefined) return undefined;
+  return Object.fromEntries(Object.entries(bound).map(([n, o]) => [n, o === "allowlist" ? [...operatorOrigins] : o] as const));
+}
+
+/**
+ * The run's pre-check, once every binding is resolved to origins (`resolveBoundSecretOrigins`), a
+ * `--secret-field`'s included: a navigate URL that would carry a bound secret to another origin, or an
+ * http check that would send it, refuses (`BoundSecretOutsideFieldError`) before any browser opens.
+ */
+export function assertBoundSecretsOnOrigins(journey: Journey, bound: Readonly<Record<string, readonly string[]>>, targetOrigin: string | undefined): void {
+  assertBoundOnlyOnOrigin(journey, bound, targetOrigin);
+}
 
 /** Two secret parameters and one binding, or one parameter and two bindings: which value goes where cannot be told. */
 export class SecretFieldAmbiguousError extends Error {
@@ -407,13 +453,17 @@ export async function withCommandSecretParams(req: {
   readonly ids: readonly (string | undefined)[];
   readonly params: Readonly<Record<string, string>>;
   readonly flags: readonly string[];
-  readonly environment?: { readonly secretFields?: readonly string[] | undefined; readonly baseUrl?: string | undefined } | undefined;
+  readonly environment?: ResolvedJourneyEnvironment | undefined;
   readonly env: Readonly<Record<string, string | undefined>>;
   /** false: a flag that binds none of the Journeys is left for the caller (`explore`'s goal loop binds live fields). */
   readonly strict?: boolean;
+  /** Where the target's trust is read (`environmentSeams`): the defaults otherwise. */
+  readonly seams?: { readonly environmentsFile?: string | undefined; readonly targetsFile?: string | undefined } | undefined;
 }): Promise<{ params: Record<string, string>; bound?: BoundSecretParams; used: readonly string[] }> {
   const targetFields = req.environment?.secretFields;
   if (req.flags.length === 0 && (targetFields ?? []).length === 0) return { params: { ...req.params }, used: [] };
+  // Loaded late, as below: approval-provenance reaches this module through the CLI's shared modules.
+  const mcp = (await import("./approval-provenance.js")).inMcpInvocation();
   const ids = [...new Set(req.ids.filter((id): id is string => typeof id === "string" && id !== ""))];
   const journeys = (await Promise.all(ids.map(async (id) => [id, await loadJourney(req.dir, id)] as const))).filter((e): e is readonly [string, Journey] => e[1] !== null);
   const specs = [...new Set(req.flags)];
@@ -426,7 +476,9 @@ export async function withCommandSecretParams(req: {
     // Only the flags that bind something of this Journey: the others are another Journey's.
     const mine = specs.filter((_, i) => paramsFromFields(journey, [parsed[i]!], new Set(Object.keys(req.params))).used.size > 0);
     for (const spec of mine) used.add(spec);
-    const r = withSecretParamsFor(journey, { id, params: req.params, flags: mine, targetFields, targetOrigin: req.environment?.baseUrl, env: req.env });
+    // 0.30.0 §5.3: over MCP the operator's targets.json binding serves only a Journey the run-mode rules let read it.
+    const fields = mcp && !(await mcpMayReadTargetSecrets(journey, req.environment, req.seams)) ? undefined : targetFields;
+    const r = withSecretParamsFor(journey, { id, params: req.params, flags: mine, targetFields: fields, targetOrigin: req.environment?.baseUrl, env: req.env });
     params = { ...r.params, ...params };
     Object.assign(bound, r.bound ?? {});
   }
@@ -437,6 +489,31 @@ export async function withCommandSecretParams(req: {
     );
   }
   return { params, ...(Object.keys(bound).length === 0 ? {} : { bound }), used: [...used] };
+}
+
+/**
+ * 0.30.0 §5.3, the rule `planSecretRun` and `testModeSecrets` apply (journey-secret-mode.ts), here for a
+ * command's own binding step: over MCP a Journey reads the operator's `targets.json` `secretFields` only
+ * when it is promoted and, on an automation-mode target, carries an approval a person made (owner
+ * decision 5); on a test-mode target any promotion will do (decision 5: an MCP promotion authorises
+ * test-mode runs). A draft never does. What this leaves out is the run's secret mode's to meet (a hold,
+ * or a refusal), never a value the agent chose where to send.
+ */
+async function mcpMayReadTargetSecrets(
+  journey: Journey,
+  environment: ResolvedJourneyEnvironment | undefined,
+  seams: { readonly environmentsFile?: string | undefined; readonly targetsFile?: string | undefined } | undefined,
+): Promise<boolean> {
+  if (journey.metadata.promoted !== true) return false;
+  // Loaded late: the run-mode gate reaches this module through the CLI's shared modules.
+  const { approvalAuthorisesAutomation, resolveRunTarget } = await import("./journey-run-mode-gate.js");
+  const target = resolveRunTarget({
+    origin: environment?.baseUrl ?? journey.recording.site,
+    environment,
+    ...(seams?.environmentsFile === undefined ? {} : { environmentsFile: seams.environmentsFile }),
+    ...(seams?.targetsFile === undefined ? {} : { targetsFile: seams.targetsFile }),
+  });
+  return target.mode === "test" || approvalAuthorisesAutomation(journey);
 }
 
 /** `--secret-field` on a replay command (#819, #827): the same binding `journey run` takes. */

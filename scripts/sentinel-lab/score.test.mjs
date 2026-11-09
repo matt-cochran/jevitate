@@ -1,6 +1,6 @@
-// node --test scripts/sentinel-lab/score.test.mjs — the report's headline numbers reproduce from the frozen runs.
+// pnpm exec vitest run scripts/sentinel-lab/score.test.mjs — the report's headline numbers reproduce from the frozen runs.
 import { strict as assert } from "node:assert";
-import { test } from "node:test";
+import { test } from "vitest";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readRows, score } from "./score.mjs";

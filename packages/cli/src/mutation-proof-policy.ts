@@ -1,7 +1,7 @@
 import { contentHash } from "@jevitate/domain";
 import { planJourneyMutations, journeyParamSchema, ProofWaiverSchema, type ProofWaiver, type Journey, type JourneyReview } from "@jevitate/journey";
 import type { JourneyVerifyRecord } from "./journey-review.js";
-import { currentJourneyProof, currentJourneyProofHash, journeyProofStaleCause } from "./journey-proof-context.js";
+import { currentJourneyProof, currentJourneyProofHash, journeyProofStaleCause, proofTargetKnown, proofTargetNow, type ProofTargetNow } from "./journey-proof-context.js";
 import { LEGACY_PROOF_WORD_REMOVED_IN, LEGACY_SENSITIVE_WORD, readProofVerdict } from "./journey-verify-report.js";
 
 /**
@@ -51,6 +51,8 @@ function staleReason(cause: ReturnType<typeof journeyProofStaleCause>): string {
   if (cause === "engine") return "mutation proof was recorded by another jevitate engine: the Journey is unchanged, but this engine computes its proof identity differently";
   if (cause === "read-policy") return "mutation proof is out of date: the target's safety.readRequests changed since it ran";
   if (cause === "no-planner-identity") return "mutation proof is out of date: it predates proof identity (before 0.14.0)";
+  if (cause === "target") return "mutation proof ran on another target origin than the one this Journey is judged for: the Journey is unchanged";
+  if (cause === "app-version") return "mutation proof ran on another app version than the one set now (JEVITATE_APP_VERSION): the Journey is unchanged";
   return "mutation proof is out of date";
 }
 
@@ -76,11 +78,14 @@ export function evaluateMutationProofPolicy(input: {
   mode?: MutationProofPolicySetting; waiver?: ProofWaiver | null;
   /** The target's `safety.readRequests` as they stand: a proof run under others is stale. */
   readRequests?: readonly string[] | undefined;
+  /** M5: the target origin and app version judged on now (default: the Journey's recorded site, `JEVITATE_APP_VERSION`). */
+  now?: ProofTargetNow;
 }): NonNullable<JourneyReview["proof"]["policy"]> {
   const { journey, contentHash: reviewedHash, record, waiver } = input;
   const mode = normalizeMutationProofPolicy(input.mode);
   const proofHash = currentJourneyProofHash(journey, record?.proofContext, input.readRequests);
-  const freshness = record == null ? "missing" : currentJourneyProof(journey, record, input.readRequests) ? "fresh" : "stale";
+  const now = input.now ?? proofTargetNow(journey);
+  const freshness = record == null ? "missing" : currentJourneyProof(journey, record, input.readRequests, now) ? "fresh" : "stale";
   const verdict = record == null ? "not-verified" : readProofVerdict(record.verdict);
   const counts = { ...(record?.summary ?? {}) };
   const receiptDigest = record == null ? null : mutationReceiptDigest(record);
@@ -92,12 +97,14 @@ export function evaluateMutationProofPolicy(input: {
   const uncounted = mode === "require-sensitive" && sensitive && record?.countsForGate !== true;
   // #816: a receipt that does not say which engine recorded it is never current evidence for require-sensitive.
   const unknownEngine = mode === "require-sensitive" && sensitive && !uncounted && (typeof record?.engine?.version !== "string" || typeof record.engine.commit !== "string");
-  const satisfied = sensitive && !uncounted && !unknownEngine;
+  // M5: a receipt that does not name the target and app version it ran on (before 0.30.0) never counts for require-sensitive.
+  const unknownTarget = mode === "require-sensitive" && sensitive && !uncounted && !unknownEngine && record != null && !proofTargetKnown(record, now);
+  const satisfied = sensitive && !uncounted && !unknownEngine && !unknownTarget;
   const waived = mode !== "require-sensitive" && validWaiver;
   const passed = mode === "advisory" || satisfied || waived;
   const waiverRequired = mode === "require-attempt" && freshness === "fresh" && verdict === "inconclusive" && !validWaiver;
   const classification = record == null ? "unknown" : nonMutationTestable(journey, counts, input.readRequests) ? "non-mutation-testable" : "mutation-testable";
-  const reason = satisfied ? "fresh sensitive mutation evidence" : unknownEngine ? "the mutation proof is sensitive, but its receipt does not say which engine recorded it (written before 0.30.0), so it does not count for require-sensitive: re-run it" : uncounted ? "the mutation proof is sensitive, but it does not count for require-sensitive: a proof's strength depends on a target you can reset (run it on a target with trust test or harness)" : waived ? `inconclusive attempt waived: ${waiver!.reason}` : freshness === "missing" ? "no mutation proof recorded" : freshness === "stale" ? staleReason(journeyProofStaleCause(journey, record!, input.readRequests)) : `${classification === "non-mutation-testable" ? "non-mutation-testable Journey; " : ""}mutation proof is ${verdict}${record?.reason === undefined ? "" : `: ${record.reason}`}`;
+  const reason = satisfied ? "fresh sensitive mutation evidence" : unknownEngine ? "the mutation proof is sensitive, but its receipt does not say which engine recorded it (written before 0.30.0), so it does not count for require-sensitive: re-run it" : unknownTarget ? "the mutation proof is sensitive, but its receipt does not name the target origin and app version it ran on (written before 0.30.0, or without the app version set now), so it does not count for require-sensitive: re-run it" : uncounted ? "the mutation proof is sensitive, but it does not count for require-sensitive: a proof's strength depends on a target you can reset (run it on a target with trust test or harness)" : waived ? `inconclusive attempt waived: ${waiver!.reason}` : freshness === "missing" ? "no mutation proof recorded" : freshness === "stale" ? staleReason(journeyProofStaleCause(journey, record!, input.readRequests, now)) : `${classification === "non-mutation-testable" ? "non-mutation-testable Journey; " : ""}mutation proof is ${verdict}${record?.reason === undefined ? "" : `: ${record.reason}`}`;
   const next = satisfied || waived ? "none" : waiverRequired ? `jevitate journey waive-proof ${journey.metadata.id} --reason "<reason>"` : `jevitate journey verify ${journey.metadata.id} --mutate`;
   // #704: versioned stable identity covers policy + executable plan + exact receipt + waiver.
   const digest = contentHash({ v: 1, mode, contentHash: reviewedHash, proofHash, receiptDigest, waiver: waiver ?? null });

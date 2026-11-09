@@ -668,6 +668,35 @@ describe("0.30.0 §5.4 the ratchet: over MCP a site policy only tightens, and a 
     expect(policyLoosenings(effective, noPace)).toEqual(["interaction"]);
   });
 
+  it("compares effective ceilings: adding or lowering a max / maxReadingMs is looser, even where the old policy set none (independent check H6)", () => {
+    const d = (mean: number, extra: { min?: number; max?: number } = {}) => ({ mean, sd: 1, ...extra });
+    const base = {
+      thinkBeforeActionMs: d(800, { min: 300 }),
+      interInteractionMs: d(500, { min: 200 }),
+      readingMsPerChar: 20,
+      typing: { charsPerSecond: 5, perKeyJitter: 0.3, wordPauseMs: d(200, { min: 50 }), sentencePauseMs: d(600), hesitation: { probability: 0.1, pauseMs: d(400, { min: 100 }) } },
+    };
+    const eff = policy(30, { interaction: base });
+    const with_ = (patch: (i: typeof base) => unknown) => policy(30, { interaction: patch(structuredClone(base)) as never });
+    expect(policyLoosenings(eff, with_((i) => ({ ...i, thinkBeforeActionMs: { ...i.thinkBeforeActionMs, max: 1 } })))).toEqual(["interaction.thinkBeforeActionMs.max"]);
+    expect(policyLoosenings(eff, with_((i) => ({ ...i, interInteractionMs: { ...i.interInteractionMs, max: 1 } })))).toEqual(["interaction.interInteractionMs.max"]);
+    expect(policyLoosenings(eff, with_((i) => ({ ...i, typing: { ...i.typing, wordPauseMs: { ...i.typing.wordPauseMs, max: 1 } } })))).toEqual(["interaction.typing.wordPauseMs.max"]);
+    expect(policyLoosenings(eff, with_((i) => ({ ...i, typing: { ...i.typing, sentencePauseMs: { ...i.typing.sentencePauseMs, max: 1 } } })))).toEqual(["interaction.typing.sentencePauseMs.max"]);
+    expect(policyLoosenings(eff, with_((i) => ({ ...i, typing: { ...i.typing, hesitation: { ...i.typing.hesitation, pauseMs: { ...i.typing.hesitation.pauseMs, max: 1 } } } })))).toEqual(["interaction.typing.hesitation.pauseMs.max"]);
+    expect(policyLoosenings(eff, with_((i) => ({ ...i, maxReadingMs: 0 })))).toEqual(["interaction.maxReadingMs"]);
+    // lowering an existing ceiling, and a no-op or raised one
+    const capped = policy(30, { interaction: { ...base, maxReadingMs: 5000, thinkBeforeActionMs: d(800, { min: 300, max: 4000 }) } });
+    const cappedWith = (i: unknown) => policy(30, { interaction: i as never });
+    expect(policyLoosenings(capped, cappedWith({ ...base, maxReadingMs: 100, thinkBeforeActionMs: d(800, { min: 300, max: 4000 }) }))).toEqual(["interaction.maxReadingMs"]);
+    expect(policyLoosenings(capped, cappedWith({ ...base, maxReadingMs: 9000, thinkBeforeActionMs: d(800, { min: 300, max: 9000 }) }))).toEqual([]);
+    expect(policyLoosenings(capped, cappedWith({ ...base, thinkBeforeActionMs: d(800, { min: 300, max: 4000 }) }))).toEqual([]); // dropping a cap: slower, stricter
+    // the throttle ceilings: lowering the interval floor, raising either limit, or dropping a limit
+    expect(policyLoosenings(policy(30, { throttles: { write: { minIntervalSeconds: 30, hourlyLimit: 10, dailyLimit: 50 } } }), policy(30, { throttles: { write: { minIntervalSeconds: 30, hourlyLimit: 10, dailyLimit: 51 } } }))).toEqual(["throttles.write.dailyLimit"]);
+    expect(policyLoosenings(policy(30, { throttles: { write: { minIntervalSeconds: 30, hourlyLimit: 10, dailyLimit: 50 } } }), policy(30, { throttles: { write: { minIntervalSeconds: 30, hourlyLimit: 10 } } }))).toEqual(["throttles.write.dailyLimit"]);
+    // no reading at all in the effective policy: a cap has nothing to cut
+    expect(policyLoosenings(policy(30, { interaction: { ...base, readingMsPerChar: undefined } as never }), policy(30, { interaction: { ...base, readingMsPerChar: undefined, maxReadingMs: 0 } as never }))).toEqual([]);
+  });
+
   it("mission_targets promote returns E_TARGET_PROMOTE_OVER_MCP and promotes nothing", async () => {
     const add = await tool("mission_targets").handler({ action: "add", id: "shop", name: "Shop", authorizedOrigin: SITE, baseUrl: SITE });
     expect(add.isError, add.content[0]!.text).toBeUndefined();

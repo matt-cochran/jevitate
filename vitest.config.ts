@@ -43,7 +43,8 @@ export default defineConfig({
     ],
     // Sweeps throwaway temp dirs the fixtures leak into os.tmpdir() at the end
     // of a run (a full run otherwise leaks ~0.5 GB). See test/global-temp-cleanup.ts.
-    globalSetup: ["./test/global-temp-cleanup.ts"],
+    // test/global-cwd-guard.ts fails the run when a test leaves a new entry in the repo root (the cwd).
+    globalSetup: ["./test/global-temp-cleanup.ts", "./test/global-cwd-guard.ts"],
     // Tests check the inbox store's and SQLite store's logic, not the disk flush; with fsync on, a
     // test's duration followed the HOST's disk writeback (seconds under memory pressure), turning
     // fast I/O tests into load-dependent timeouts. Production never sets this (see durability.ts).

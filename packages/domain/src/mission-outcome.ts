@@ -221,6 +221,12 @@ export type MissionFailureKind =
   | "done-check-failed"
   /** Goal (#209): the only failing checks were vacuous (#202) — satisfied before any action. Outcome `inconclusive`. */
   | "vacuous-check"
+  /**
+   * Goal, 0.30.0 (#807): the run covered every control it could reach, up to the code-decided coverage
+   * floor, and none led toward the goal. Outcome `inconclusive` (exit 2), `goalReason: "no-route-found"`;
+   * the message lists what was searched. Never a defect, and never a wall or a permission boundary.
+   */
+  | "no-route-found"
   /** Usability (#209): the job under review was never completed — the review proves nothing about the rest. */
   | "job-incomplete"
   /**
@@ -324,6 +330,8 @@ export function goalMissionOutcome(goalOutcome: GoalOnlyOutcome | MissionOutcome
  *  - `preflight-failed` — (`not-started`) the operator's configuration/pre-flight failed before the app was exercised.
  *  - `no-actions`       — (`not-started`) the run ended with zero executed actions for another reason.
  *  - `defects`          — only for `goalOutcome: "defects-found"` with no other known cause.
+ *  - `no-route-found`   — (`inconclusive`, 0.30.0 #807) the run covered every control it could reach, up to
+ *                         the coverage floor, and none led toward the goal (`failure.kind: "no-route-found"`).
  */
 export const GOAL_REASONS = [
   "success-check-failed",
@@ -348,6 +356,8 @@ export const GOAL_REASONS = [
   "login-url",
   "write-refused",
   "tab-opened",
+  // 0.30.0 (#807): an `inconclusive` goal run that met its coverage floor and found no route.
+  "no-route-found",
 ] as const;
 export type GoalReason = (typeof GOAL_REASONS)[number];
 
@@ -383,6 +393,7 @@ export function goalReasonOf(i: GoalReasonInput): GoalReason | undefined {
       return "hang";
     case "inconclusive":
       if (i.failureKind === "vacuous-check") return "vacuous-check";
+      if (i.failureKind === "no-route-found") return "no-route-found";
       if (i.stop === "budget") return "budget";
       return "broken-run";
     case "crashed":

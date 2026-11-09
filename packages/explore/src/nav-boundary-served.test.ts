@@ -50,6 +50,10 @@ const CASES: Case[] = [
   { id: "newtab-route", prefs: () => [click("Q3 sales report workspace")], kind: "new-tab", origin: "app" },
   { id: "clean", prefs: (call) => (call < 3 ? ROUTE : [{ op: "done" }]) },
   { id: "incidental-403-asset", prefs: (call) => (call < 3 ? ROUTE : [{ op: "done" }]) },
+  // The stated limit (nav-lab failure-modes: "role-hidden controls: no signal within one session"): the
+  // page only says "Signed in as Morgan Reyes (Viewer)" and has no Reports route; no 403, no paid control.
+  // Code never guesses a wall from a role word: it is a no-route case (a second persona shows the role).
+  { id: "wall-role-hidden", prefs: route(4) },
 ];
 
 const labs: Lab[] = [];

@@ -39,7 +39,7 @@ function reviewDep(journey: Journey, verify: unknown, policy?: unknown): NonNull
     attention: [],
     catalog: { linked: true, job: { id: "j", status: "approved" }, persona: { id: "p", status: "approved" }, unvetted: [], needsReReview: [] },
     // Owner decision "Proof role": the job gates; these tests are about the proof line.
-    job: { attainment: "achieved", basis: "done-check", doneCheckPolicy: "require" },
+    job: { attainment: "achieved", basis: "done-check", doneCheckPolicy: "require", outcome: "ok" },
   } as unknown as JourneyReview;
   return (async () => ({ journey, review })) as unknown as NonNullable<JourneyReadinessDeps["review"]>;
 }

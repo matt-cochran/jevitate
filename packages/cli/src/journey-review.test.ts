@@ -76,6 +76,8 @@ const VERIFY: JourneyVerifyRecord = {
   contentHash: journeyReviewHash(fixtureJourney()),
   proofHash: journeyProofHash(fixtureJourney()),
   verdict: "sensitive",
+  // M5: a 0.30.0 receipt names the target origin it ran on.
+  target: { origin: new URL(SITE).origin },
   summary: { sensitive: 3, insensitive: 0, cascade: 0, notApplied: 0, error: 0, unpaired: 1 },
   at: "2026-10-02T00:00:00.000Z",
 };

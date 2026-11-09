@@ -18,7 +18,10 @@ import { reviewJourneyById } from "./journey-review-api.js";
 import { verifyRecordPath } from "./journey-review-store.js";
 import { journeyReadRequests } from "./target-config.js";
 import { verifyJourneyMutations } from "./journey-verify.js";
-import { DEFAULT_DONE_CHECK_POLICY } from "@jevitate/domain";
+import { clock, DEFAULT_DONE_CHECK_POLICY } from "@jevitate/domain";
+import type { JobVerdict } from "@jevitate/adjudicator";
+import { resolveCatalogDir } from "./catalog-api.js";
+import { DoneCheckRun, doneCheckPolicyOf } from "./journey-done-check-hook.js";
 import { JOB_NOT_ACHIEVED_ATTENTION } from "./journey-review.js";
 import { runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 
@@ -144,6 +147,8 @@ interface JourneyContext {
   readonly id: string;
   journey: Journey;
   review: JourneyReview;
+  /** M4: in replay/prove, the job verdict of the replay this receipt just ran (never an earlier run's). */
+  replayJob?: NonNullable<JourneyReview["job"]>;
 }
 
 interface ReplayOutcome {
@@ -277,9 +282,11 @@ function reviewStrictCheck(ctx: JourneyContext): { check: ReadinessCheck; blocke
  * `advisory` shows it and does not gate. A harness target's `unverified` does not gate (as its run exits 0).
  */
 function jobCheck(ctx: JourneyContext): { check: ReadinessCheck; blocker?: ReadinessBlocker } {
-  const job = ctx.review.job ?? { attainment: "unverified" as const, basis: "no-run", doneCheckPolicy: DEFAULT_DONE_CHECK_POLICY };
+  const judged = ctx.replayJob ?? ctx.review.job ?? { attainment: "unverified" as const, basis: "no-run", doneCheckPolicy: DEFAULT_DONE_CHECK_POLICY };
+  // M4: `achieved` counts only from a run whose own steps passed, read from that same run (outcome and job of one record).
+  const job: typeof judged = judged.attainment === "achieved" && judged.outcome !== "ok" ? { ...judged, attainment: "unverified", basis: "run-not-passed" } : judged;
   const run = `jevitate journey run ${ctx.id} --env <non-production>`;
-  const when = job.at === undefined ? "" : ` (latest run ${job.at})`;
+  const when = ctx.replayJob !== undefined ? " (this readiness replay)" : job.at === undefined ? "" : ` (latest run ${job.at})`;
   if (job.attainment === "achieved") {
     return { check: { check: "job", journey: ctx.id, state: "pass", detail: `achieved: the done check read false before the latest run and true after it, in a fresh session${when}` } };
   }
@@ -309,6 +316,8 @@ const JOB_UNVERIFIED_REASON: Readonly<Record<string, string>> = {
   "already-true": "the done check already read true before the latest run, so it proves nothing",
   "reading-unknown": "a done-check reading could not be taken on the latest run",
   harness: "the latest run was on a harness target, which forces unverified",
+  "run-not-passed": "the run's own steps did not pass, so its done check does not count",
+  "replay-no-verdict": "the readiness replay gave no job verdict (it did not finish, or no done check was read)",
 };
 
 /** Every step objective written; a missing one is a person's annotation to draft. */
@@ -583,6 +592,28 @@ export async function runJourneyReadiness(opts: JourneyReadinessOptions, deps: J
   let boundConsumerParams: Record<string, string> | undefined;
   /** #624: the pair chain's result, kept in scope so the prove hint can name a rejection. */
   let chained: JourneyChainResult | undefined;
+  // M4: in replay/prove the job is the replay's own: each run reads its done check in a scope, as `journey run`.
+  const catalogDir = opts.catalogDir === undefined ? resolveCatalogDir(undefined) : opts.catalogDir;
+  const replayJobs = new Map<string, NonNullable<JourneyReview["job"]>>();
+  const withJob = async (o: RunJourneyProgrammaticallyOptions): Promise<Awaited<ReturnType<typeof run>>> => {
+    const scope = new DoneCheckRun({
+      catalogDir,
+      journeysDir: opts.journeysDir,
+      ...(o.environment?.baseUrl === undefined ? {} : { origin: o.environment.baseUrl }),
+      ...(opts.storageState === undefined ? {} : { storageState: opts.storageState }),
+      ...(opts.browserPortFactory === undefined ? {} : { sessionPortFactory: opts.browserPortFactory }),
+    });
+    const result = await scope.run(() => run(o));
+    if (!replayJobs.has(o.id)) {
+      // A result that already carries its verdict (a surface that folded it) is that run's own.
+      const carried = (result as { job?: JobVerdict }).job;
+      const job = carried ?? scope.job;
+      const outcome = /^[a-z-]{1,40}$/.test(result.outcome) ? { outcome: result.outcome } : {};
+      const policy = contexts.find((c) => c.id === o.id)?.review.job?.doneCheckPolicy ?? doneCheckPolicyOf(catalogDir);
+      replayJobs.set(o.id, job === undefined ? { attainment: "unverified", basis: "replay-no-verdict", doneCheckPolicy: policy, ...outcome } : { attainment: job.attainment, basis: job.basis, doneCheckPolicy: policy, at: clock.nowIso(), ...outcome });
+    }
+    return result;
+  };
   if (mode !== "report") {
     const producerSchema = journeyParamSchema(contexts[0]!.journey).required;
     environment = resolveTarget(opts, deps, requiredParams(contexts[0]!.journey, pair, opts.requests !== undefined), producerSchema);
@@ -606,7 +637,7 @@ export async function runJourneyReadiness(opts: JourneyReadinessOptions, deps: J
             // (record fields + request), captured from the first consumer run; names and outcomes
             // are all the chain itself returns.
             runJourney: async (chainOpts) => {
-              const result = await run(chainOpts);
+              const result = await withJob(chainOpts);
               if (chainOpts.id === opts.with && boundConsumerParams === undefined) {
                 boundConsumerParams = { ...chainOpts.params };
               }
@@ -616,7 +647,7 @@ export async function runJourneyReadiness(opts: JourneyReadinessOptions, deps: J
         );
         replay = pairReplay(chained);
       } else {
-        const result = await run({
+        const result = await withJob({
           dir: opts.journeysDir,
           id: opts.id,
           params,
@@ -688,6 +719,12 @@ export async function runJourneyReadiness(opts: JourneyReadinessOptions, deps: J
     if (r.awaiting !== undefined) awaiting.push(...r.awaiting);
   };
 
+  if (mode !== "report") {
+    // M4: never an earlier run's verdict here; a Journey the replay did not reach has none.
+    for (const ctx of contexts) {
+      ctx.replayJob = replayJobs.get(ctx.id) ?? { attainment: "unverified", basis: "replay-no-verdict", doneCheckPolicy: ctx.review.job?.doneCheckPolicy ?? doneCheckPolicyOf(catalogDir) };
+    }
+  }
   for (const ctx of contexts) {
     // Owner decision "Proof role": the receipt leads with the job verdict.
     push(jobCheck(ctx));

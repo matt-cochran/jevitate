@@ -434,12 +434,17 @@ describe("#827 the rest: files at rest, prefix replays, migrate", { timeout: 180
   });
 
   it("run_check over MCP: a planted value is refused the same way, and a suite file's binding is not read (the operator's targets.json is)", async () => {
-    const planted = await call("run_check", { suite: suite([{ id: "login", params: { password: PASSWORD } }]) });
+    // The output goes under root (a pathRoot), never the CLI default `jevitate-check/` in the cwd (the repo
+    // root under vitest), so writtenWithMarker() scans what the MCP run wrote too.
+    const planted = await call("run_check", { suite: suite([{ id: "login", params: { password: PASSWORD } }]), out: join(root, "mcp-check-planted") });
     expect(planted.isError).toBe(true);
     expect(planted.text).toContain("E_CHECK_SUITE");
     expect(planted.text).not.toContain(PASSWORD);
     writeTargets({ [site]: { secretFields: [`label=Password=env:${PW_VAR}`] } });
-    const bound = await call("run_check", { suite: suite(["login"]) });
+    const bound = await call("run_check", { suite: suite(["login"]), out: join(root, "mcp-check-bound") });
+    // The run happened (exit 2: a pass with no done check, decision 3) and wrote under root.
+    expect(bound.body).toMatchObject({ exitCode: 2, data: { kind: "jevitate-check", summary: { passed: 1 } } });
+    expect(existsSync(join(root, "mcp-check-bound", "check.json"))).toBe(true);
     expect(bound.text).not.toContain(PASSWORD);
     expect(hits).toEqual(["login ok"]);
     expect(writtenWithMarker()).toEqual([]);

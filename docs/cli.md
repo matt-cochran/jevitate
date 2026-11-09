@@ -275,10 +275,12 @@ run a campaign spec (JSON): replay each job's promoted Journey (discovery), then
 | `--log-scope <regex|substring>` | attribute only backend log lines matching this (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--log-source <spec>` | backend log source: file:<path> \| docker:<container> \| cmd:<command> (needs --allow-log-cmd) (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--log-triage` | record each mission's signal timeline and attach only the related lines to each defect (#313) (forwarded to every mission, as explore's) |  |  |  |  |
+| `--no-done-check` | H5 (0.30.0): skip each discovery replay's job done check; the job reads unverified (basis no-check), which makes the campaign exit 2 unless project.json doneCheckPolicy is advisory |  |  |  |  |
 | `--out <dir>` | the campaign's directory: every mission's results, campaign.json and campaign.md (default .jevitate/logs/<date>/campaign-<stamp>) |  |  |  |  |
 | `--paid <pattern>` | an app control that costs money or credits (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--real` | use live Jev + OpenRouter gateways for the missions (requires keys) | `false` |  |  |  |
 | `--record-video [dir]` | record a video of each mission's browser context (forwarded to every mission, as explore's) |  |  |  |  |
+| `--require-done-check` | H5 (0.30.0): a discovery replay whose job is unverified makes the campaign exit 2 even when project.json doneCheckPolicy is advisory |  |  |  |  |
 | `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
 | `--secret-field <binding>` | a secret parameter from the environment, off the command line (repeatable): '<label\|testId\|id\|name>=<value>=env:<VAR>' matched on the recorded step that types it, e.g. 'label=Password=env:APP_PASSWORD', or 'param=<name>=env:<VAR>' for any secret parameter by name, a token in a navigate URL included. With --env/--base-url the environment's secretFields in ~/.jevitate/targets.json apply the same way; --param wins. Each job's replay and missions get the bindings for its Journey; a secret value in the spec's params is refused (it sits at rest) | `[]` |  |  |  |
 | `--server-log-drain-ms <ms>` | how long to keep tailing --log-source after a mission's last action (default 3000) (forwarded to every mission, as explore's) |  |  |  |  |
@@ -424,9 +426,11 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 | `--max-brittle-steps <n>` | #470: opt-in locator gate — a Journey item with more than n brittle steps (targets that miss the project's testIdAttributes convention) is a gating finding. Without it locator health is advisory only |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
+| `--no-done-check` | H5 (0.30.0): skip each Journey item's job done check; every job reads unverified (basis no-check), which holds the check at exit 2 unless project.json doneCheckPolicy is advisory |  |  |  |  |
 | `--out <dir>` | output dir: results/, junit.xml, jevitate.sarif, report.md, check.json | `jevitate-check` |  |  |  |
 | `--real` | use live Jev + OpenRouter gateways for goals and model-driven missions (requires keys) | `false` |  |  |  |
 | `--require-approvals` | #437: also fail (an `approval` finding, exit 1, in JUnit + SARIF) when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed |  |  |  |  |
+| `--require-done-check` | H5 (0.30.0): a Journey item that passes with an unverified job holds the check at exit 2 even when project.json doneCheckPolicy is advisory |  |  |  |  |
 | `--require-trust` | #799: fail (exit 1, naming the environment) when an environment's `trust` in .jevitate/environments.json differs from the last commit; a change of trust is committed (PR-reviewed) first |  |  |  |  |
 | `--sarif <path>` | SARIF path (default <out>/jevitate.sarif) |  |  |  |  |
 | `--self-heal <mode>` | #453: fail-closed \| hybrid \| full — re-run a Journey that quarantined ONCE with a change-aware self-heal (needs --changes and/or --change-note, and --real/--fake-ai); a proposed revision is pending review (exit 5), never a pass | `fail-closed` |  |  |  |
@@ -1914,6 +1918,7 @@ preview or prove that each Journey assertion fails when its outcome is absent
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow <origin>` | an extra origin the replay may reach, e.g. the API of a split-origin app (repeatable; added to the recorded site, the environment's origins and the Journey's metadata.allowedOrigins) | `[]` |  |  |  |
 | `--allow-shell-hooks` | opt in to running --before/--after (operator commands; never model-chosen) | `false` |  |  |  |
+| `--app-version <label>` | the app's release label the proof runs against, bound into its receipt (1-64 of [A-Za-z0-9._+-]); also JEVITATE_APP_VERSION. A reader that sets another reads the proof stale |  |  |  |  |
 | `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
 | `--before <cmd>` | operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret} |  |  |  |  |
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |

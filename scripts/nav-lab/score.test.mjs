@@ -1,9 +1,13 @@
 // #807 The navigation-lab scorer: each ending class, the soft signals, and the prediction's arithmetic.
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
-import { classify, evaluatePrediction, followed, namesBoundary, scoreRows } from "./score.mjs";
+import { boundaryOf, classify, evaluatePrediction, followed, namesBoundary, scoreRows } from "./score.mjs";
+import { cellKey, LAB_JOB_CHECKS, labJobProject } from "./run-cell.mjs";
+import { buildCells } from "./run-matrix.mjs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const REACH = [{ goalOutcome: "succeeded", done: true }];
 const routeCase = { group: "routes", routeExists: true, correct: { verdict: "succeeded", accept: REACH } };
@@ -42,6 +46,14 @@ describe("classify", () => {
 
   test("a boundary may also match the failure kind", () => {
     expect(classify(row({ goalReason: "broken-run", failureKind: "no-route-found" }), noRouteCase)).toBe("right");
+  });
+
+  test("0.30.0: an inconclusive (exit 2) no-route-found run is right on a no-route case", () => {
+    const noRoute = row({ goalOutcome: "inconclusive", missionOutcome: "inconclusive", exitCode: 2, goalReason: "no-route-found", failureKind: "no-route-found" });
+    expect(classify(noRoute, noRouteCase)).toBe("right");
+    expect(classify(noRoute, { ...routeCase, mustNotBoundary: "no-route-found" })).toBe("wrong-boundary");
+    // Any other inconclusive ending on a no-route case stays `inconclusive`, not right.
+    expect(classify(row({ goalOutcome: "inconclusive", missionOutcome: "inconclusive", exitCode: 2, goalReason: "broken-run", failureKind: "insufficient-coverage" }), noRouteCase)).toBe("inconclusive");
   });
 
   test("a no-route verdict on a case whose route exists is a wrong boundary", () => {
@@ -163,5 +175,59 @@ describe("recorded n=10 baseline (.delivery/nav-lab/remediations.md)", () => {
     const c = report.perCase["looks-done-wrong-page"];
     expect(c.runs).toBe(10);
     expect(c.classes["false-pass"]).toBe(8);
+  });
+});
+
+describe("rc-030: a 0.30.0 boundary outcome", () => {
+  const wall = { group: "walls", routeExists: false, correct: { verdict: "boundary:permission", accept: [{ boundary: "permission" }] } };
+  const boundary = (signal, kind) => row({ goalOutcome: "boundary", goalReason: signal, exitCode: 2, missionOutcome: "inconclusive", ...(kind ? { boundary: { kind, signal } } : {}) });
+
+  test("maps kind and signal onto the ground truth's boundary names, from goalReason for older rows", () => {
+    expect(boundaryOf(boundary("http-403", "wall"))).toBe("permission");
+    expect(boundaryOf(boundary("paid-control"))).toBe("plan");
+    expect(boundaryOf(boundary("login-url", "session"))).toBe("auth-expired");
+    expect(boundaryOf(boundary("write-refused"))).toBe("off-allowlist");
+    expect(boundaryOf(boundary("tab-opened", "new-tab"))).toBe("new-tab");
+    expect(boundaryOf(row())).toBeNull();
+  });
+
+  test("the boundary a case names is right, one it rules out is wrong-boundary, any other is unexpected-boundary", () => {
+    expect(classify(boundary("http-403", "wall"), wall)).toBe("right");
+    expect(classify(boundary("http-403", "wall"), { ...routeCase, mustNotBoundary: "permission" })).toBe("wrong-boundary");
+    expect(classify(boundary("tab-opened", "new-tab"), routeCase)).toBe("unexpected-boundary");
+    expect(classify(boundary("http-403", "wall"), { ...wall, correct: { accept: [{ boundary: "plan" }] } })).toBe("unexpected-boundary");
+  });
+
+  test("rows with no boundary outcome score as before", () => {
+    expect(classify(row({ goalOutcome: "inconclusive", exitCode: 2, missionOutcome: "inconclusive" }), wall)).toBe("inconclusive");
+  });
+});
+
+describe("rc-030: the --job arm", () => {
+  test("cells and their keys are apart from judgment-only ones, which keep their keys", () => {
+    expect(cellKey({ case: "a", replicate: 0 })).toBe("a|0");
+    expect(cellKey({ case: "a", replicate: 0, jobCheck: "http" })).toBe("a|0|job=http");
+    expect(buildCells(1, ["a"], "page")).toEqual([{ case: "a", replicate: 0, jobCheck: "page" }]);
+    expect(buildCells(1, ["a"])).toEqual([{ case: "a", replicate: 0 }]);
+  });
+
+  test("the scratch project holds one job per check kind, on the lab's own state", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nav-lab-job-"));
+    try {
+      for (const kind of Object.keys(LAB_JOB_CHECKS)) {
+        const jobs = JSON.parse(readFileSync(join(labJobProject(dir, kind), ".jevitate", "jobs.json"), "utf8")).jobs;
+        expect(jobs).toEqual([expect.objectContaining({ id: "nav-lab-done", done: LAB_JOB_CHECKS[kind] })]);
+      }
+      expect(() => labJobProject(dir, "judgment")).toThrow(/--job must be one of page, http/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the summary tallies job verdicts in the job arm only", () => {
+    const gt = { cases: { r: routeCase } };
+    const jobRow = { ...ok, case: "r", jobCheck: "page", job: { attainment: "unverified", basis: "reading-unknown", reason: "check-unevaluable" } };
+    expect(scoreRows([jobRow], gt).totals.jobs).toEqual({ "unverified/reading-unknown/check-unevaluable": 1 });
+    expect(scoreRows([{ ...ok, case: "r" }], gt).totals.jobs).toBeUndefined();
   });
 });

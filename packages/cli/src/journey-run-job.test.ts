@@ -77,7 +77,7 @@ describe("latestJourneyRun", () => {
       recorder.noteJourney(j);
       return { outcome: "ok", ...(job === undefined ? {} : { job }) };
     });
-    clock.advanceBy(1000);
+    await clock.advanceBy(1000);
   }
 
   it("is the newest record of the Journey; none is undefined", async () => {
@@ -105,6 +105,21 @@ describe("latestJourneyRun", () => {
     expect(latest).toMatchObject({ current: true });
     expect(buildJourneyReview(j, { latestRun: latest }).job).toEqual({ attainment: "unverified", basis: "not-recorded", doneCheckPolicy: "require", at: "2026-10-01T00:00:01.000Z", outcome: "ok" });
     expect(buildJourneyReview(j, { latestRun: null, doneCheckPolicy: "advisory" }).job).toEqual({ attainment: "unverified", basis: "no-run", doneCheckPolicy: "advisory" });
+  });
+
+  // M4: `journey review` uses readiness's rule: `achieved` counts only from a record whose own outcome is ok.
+  it("a failed run's achieved done check reads unverified, run-not-passed, in the review (as in readiness)", async () => {
+    const j = journey();
+    await withJourneyRunRecord({ channel: "cli", id: "publish", params: {}, logsRoot: root }, async (recorder) => {
+      recorder.noteJourney(j);
+      return { outcome: "quarantined", job: { attainment: "achieved", basis: "done-check" } };
+    });
+    const latest = latestJourneyRun(root, "publish", j) ?? null;
+    expect(latest).toMatchObject({ outcome: "quarantined", job: { attainment: "achieved" }, current: true });
+    expect(buildJourneyReview(j, { latestRun: latest }).job).toMatchObject({ attainment: "unverified", basis: "run-not-passed", outcome: "quarantined" });
+    await clock.advanceBy(1000);
+    await run({ attainment: "achieved", basis: "done-check" }, j);
+    expect(buildJourneyReview(j, { latestRun: latestJourneyRun(root, "publish", j) ?? null }).job).toMatchObject({ attainment: "achieved", basis: "done-check", outcome: "ok" });
   });
 
   it("the logs a Journeys dir's runs record into sit beside it", () => {

@@ -28,8 +28,14 @@ export function readProofVerdict(verdict: string): string {
   return verdict === LEGACY_SENSITIVE_WORD ? "sensitive" : verdict;
 }
 
-/** The exit code for a proof's verdict (docs/ci.md): 0 sensitive · 1 insensitive · 2 inconclusive. */
-export function verifyExitCode(verdict: MutationProofVerdict): number {
-  return verdict === "sensitive" ? 0 : verdict === "insensitive" ? 1 : 2;
+/**
+ * The exit code for a proof's verdict (docs/ci.md, docs/outcomes.md): 0 sensitive · 1 insensitive · 2 inconclusive.
+ * Under `mutationProofPolicy: "require-sensitive"` a sensitive proof that does not count for the gate
+ * (`countsForGate: false`, a target that cannot be reset) exits 2: it is reported, and it proves nothing the gate
+ * accepts. Under `advisory` (the default) and `require-attempt` it exits 0.
+ */
+export function verifyExitCode(verdict: MutationProofVerdict, gate: { readonly countsForGate?: boolean; readonly mode?: string } = {}): number {
+  if (verdict === "sensitive") return gate.mode === "require-sensitive" && gate.countsForGate !== true ? 2 : 0;
+  return verdict === "insensitive" ? 1 : 2;
 }
 

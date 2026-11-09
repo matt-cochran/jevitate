@@ -1,4 +1,5 @@
 import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
+import { appVersionFlagProblem, envAppVersion } from "./app-version.js";
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import type { Command } from "commander";
 import { MissingCredentialError, formatUsageLine } from "@jevitate/ai-core";
@@ -70,25 +71,17 @@ function readEvidenceJson(path: string, kind: "input" | "manifest"): ReturnType<
   }
 }
 
-/** #479: the app's release label — 1-64 of [A-Za-z0-9._+-], starting with a letter or digit. */
-const APP_VERSION_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/;
-
 /**
  * #479: `--app-version` (validated, refused before anything runs), else `JEVITATE_APP_VERSION`; an
  * invalid env value is ignored with a warning on stderr. The flag wins over the environment.
  */
 function resolveAppVersion(flag: string | undefined, env: Readonly<Record<string, string | undefined>>, warn: (line: string) => void): string | undefined {
   if (flag !== undefined) {
-    if (!APP_VERSION_RE.test(flag)) throw new CheckArgsError(`--app-version must be 1-64 characters of [A-Za-z0-9._+-], starting with a letter or digit (got ${JSON.stringify(flag)})`);
+    const problem = appVersionFlagProblem(flag);
+    if (problem !== undefined) throw new CheckArgsError(problem);
     return flag;
   }
-  const fromEnv = env.JEVITATE_APP_VERSION;
-  if (fromEnv === undefined) return undefined;
-  if (!APP_VERSION_RE.test(fromEnv)) {
-    warn(`warning: ignoring JEVITATE_APP_VERSION: ${JSON.stringify(fromEnv)} is not a valid app version (1-64 of [A-Za-z0-9._+-], starting alphanumeric)\n`);
-    return undefined;
-  }
-  return fromEnv;
+  return envAppVersion(env, warn);
 }
 
 export function registerCheckCommand(program: Command, deps: CheckCliDeps, withLaunchFlags: (cmd: Command) => Command): void {
@@ -135,6 +128,8 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
       "#470: opt-in locator gate — a Journey item with more than n brittle steps (targets that miss the project's testIdAttributes convention) is a gating finding. Without it locator health is advisory only",
       nonNegativeIntArg,
     )
+    .option("--no-done-check", "H5 (0.30.0): skip each Journey item's job done check; every job reads unverified (basis no-check), which holds the check at exit 2 unless project.json doneCheckPolicy is advisory")
+    .option("--require-done-check", "H5 (0.30.0): a Journey item that passes with an unverified job holds the check at exit 2 even when project.json doneCheckPolicy is advisory")
     .action(taggedAction(program, "check", async function (this: Command) {
       const o = this.opts<{
         suite: string;
@@ -167,8 +162,12 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
         healMaxRunAttempts?: number;
         healMaxRunMs?: number;
         maxBrittleSteps?: number;
+        doneCheck: boolean;
+        requireDoneCheck?: boolean;
       }>();
       try {
+        // H5: the done-check flags, refused together (64) before anything runs, as `journey run` refuses them.
+        if (!o.doneCheck && o.requireDoneCheck === true) throw new CheckArgsError("--no-done-check and --require-done-check cannot be used together");
         // #453: refused (64) before the suite is read or anything runs.
         if (o.selfHeal !== "fail-closed" && o.selfHeal !== "hybrid" && o.selfHeal !== "full") {
           throw new CheckArgsError(`--self-heal must be one of fail-closed | hybrid | full (got '${o.selfHeal}')`);
@@ -248,6 +247,7 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
           ...(allowedChannels === undefined ? {} : { requireApprovals: { allowedChannels, catalogDir: resolveCatalogDir(deps.catalogDir) } }),
           ...(gate === undefined ? {} : { maxBrittleSteps: gate.maxBrittleSteps }),
           projectDir: resolveCatalogDir(deps.catalogDir),
+          ...(!o.doneCheck || o.requireDoneCheck === true ? { doneCheck: { ...(!o.doneCheck ? { skip: true } : {}), ...(o.requireDoneCheck === true ? { policy: "require" as const } : {}) } } : {}),
         });
         if (o.evidenceOut !== undefined && result.exitCode === 0 && evidenceInput !== undefined) {
           const resultDigests = Object.fromEntries(result.results.map((path) => [path, `sha256:${sha256(readFileSync(path, "utf8"))}`]));
@@ -264,7 +264,9 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
                 : i.verdict === "failed" && i.gating.length > 0
                   ? ` — ${i.gating.map((k) => findingTitle.get(k) ?? k).join("; ")}`
                   : "";
-            out?.(`${i.verdict.toUpperCase().padEnd(7)} ${i.target} ${i.kind} ${i.name}${reason}\n`);
+            // H5: a job that is not achieved (or not verified) is named on its item's line.
+            const job = i.job === undefined || i.job.attainment === "achieved" ? "" : ` · job ${i.job.attainment} (${i.job.basis})`;
+            out?.(`${i.verdict.toUpperCase().padEnd(7)} ${i.target} ${i.kind} ${i.name}${reason}${job}\n`);
           }
           // #213: 0 calls is nothing to report (not $0 vs "unpriced" noise) — omit the line entirely.
           if (result.usage !== undefined && result.usage.judgments + result.usage.generations > 0) {
@@ -289,7 +291,9 @@ export function registerCheckCommand(program: Command, deps: CheckCliDeps, withL
                 ? `FAIL: ${result.summary.gatingFindings} gating finding(s)`
                 : result.summary.errors > 0
                   ? `ERROR: ${result.summary.errors} item(s) errored${result.budget.exceeded === undefined ? "" : " · budget exceeded"}`
-                  : `INCONCLUSIVE: ${result.budget.exceeded ?? "the budget was exceeded before every item ran"}`;
+                  : result.budget.exceeded === undefined && result.summary.unverified > 0
+                    ? `INCONCLUSIVE: ${result.summary.unverified} Journey item(s) passed but their job is unverified (no done check, or one already true) under doneCheckPolicy require`
+                    : `INCONCLUSIVE: ${result.budget.exceeded ?? "the budget was exceeded before every item ran"}`;
           out?.(`${headline} · ${result.jsonPath}\n`);
           if (result.exitCode === 5) for (const p of result.proposals) out?.(`next: jevitate journey review ${p.journeyId}${p.proposalId === undefined ? "" : ` · jevitate journey promote ${p.journeyId} --proposal ${p.proposalId}`}\n`);
           out?.(result.summary.gatingFindings > 0 ? "next: jevitate report (the findings by fingerprint) · jevitate verify-fix <fp> after a fix\n" : "next: jevitate report\n");

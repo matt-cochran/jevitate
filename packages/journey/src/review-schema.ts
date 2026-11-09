@@ -144,8 +144,11 @@ export const ReviewVerifySchema = z.discriminatedUnion("status", [
        * identity differently (another jevitate version recorded it; the receipt names it). `engine-unknown`: the
        * same, but the receipt names no engine (before 0.30.0). `read-policy`: the target's
        * `safety.readRequests` changed. `no-planner-identity`: the receipt predates proof identity (0.14.0). Additive.
+       * M5 (0.30.0): `target`: the proof ran on another target origin; `app-version`: on another app version.
        */
-      staleCause: z.enum(["journey-changed", "engine", "engine-unknown", "read-policy", "no-planner-identity"]).optional(),
+      staleCause: z.enum(["journey-changed", "engine", "engine-unknown", "read-policy", "no-planner-identity", "target", "app-version"]).optional(),
+      /** M5: the receipt does not name the target origin and app version it ran on: shown, never counted by require-sensitive. Additive. */
+      targetUnknown: z.literal(true).optional(),
       /** #816: the engine the receipt says recorded the proof (version and commit). Absent on a receipt that names none. Additive. */
       recordedBy: z.object({ version: z.string(), commit: z.string() }).strict().optional(),
       summary: z.record(z.string(), z.number()),

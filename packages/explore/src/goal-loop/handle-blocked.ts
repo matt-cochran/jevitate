@@ -94,7 +94,7 @@ const goalNames = (goal: string, name: string): boolean => new RegExp(`\\b${esca
  * demo'), or its only content word is a variant of a goal word (`Reports`). One shared word of several
  * (`Publish archive`) is not the goal naming it.
  */
-const goalNamesPart = (name: string, goalTerms: ReadonlySet<string>): boolean => {
+export const goalNamesPart = (name: string, goalTerms: ReadonlySet<string>): boolean => {
   const controlTerms = terms(name);
   const hits = [...controlTerms].filter((t) => goalTerms.has(t)).length;
   return controlTerms.size > 0 && hits >= Math.min(2, controlTerms.size);

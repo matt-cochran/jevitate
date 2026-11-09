@@ -79,7 +79,10 @@ describe("native read-only pre-approval projection", () => {
     expect(result.pendingActions.map((a) => a.kind)).not.toContain("annotation-approve");
   });
 
-  it("blocks a candidate that removes an executable success check with a stale native proof", async () => {
+  // Owner decision "Proof role" (decisions/exit-codes.md, 2026-11-09): job gates, proof advisory. A stale
+  // proof blocks owner review only under an opt-in policy; under `advisory` it is a checks-strength line (info).
+  it("blocks a candidate that removes an executable success check with a stale native proof under require-sensitive", async () => {
+    await writeFile(join(root, "project.json"), JSON.stringify({ mutationProofPolicy: "require-sensitive" }));
     await draft({ successCriteria: ["The revised status is Complete"] });
     const result = await journeyPreApproval(dir, "sample", opts());
     expect(result.review.proof.verify).toMatchObject({ status: "recorded", stale: true });
@@ -87,11 +90,22 @@ describe("native read-only pre-approval projection", () => {
     expect(result.blockers.some((b) => b.code === "journey-attention")).toBe(true);
   });
 
+  it("shows, and does not block on, that candidate's stale proof under the advisory default", async () => {
+    await draft({ successCriteria: ["The revised status is Complete"] });
+    const result = await journeyPreApproval(dir, "sample", opts());
+    expect(result.review.proof.verify).toMatchObject({ status: "recorded", stale: true });
+    expect(result.review.attention).toContainEqual({ severity: "info", text: "The mutation proof is out of date: the Journey changed after it ran", hint: "jevitate journey verify sample --mutate" });
+    expect(result.blockers).toEqual([]);
+    expect(result.readyForOwnerReview).toBe(true);
+  });
+
   it.each(["missing-persona", "unknown-persona", "weak", "no-goal", "stale-proof"])("blocks %s alongside pending catalog approvals", async (failure) => {
+    // A stale proof gates only under an opt-in proof policy (owner decision "Proof role").
+    if (failure === "stale-proof") await writeFile(join(root, "project.json"), JSON.stringify({ mutationProofPolicy: "require-sensitive" }));
     const changed = structuredClone(stored);
     if (failure === "missing-persona") delete changed.metadata.persona;
     if (failure === "unknown-persona") changed.metadata.persona = "absent";
-    if (failure === "weak") changed.metadata.endState = [{ kind: "page", assertion: { kind: "visible", target: { testId: "status" } } }];
+    if (failure === "weak") changed.metadata.endState = [{ kind: "page", assertion: { kind: "count", target: { testId: "status" }, min: 0 } }];
     if (failure === "no-goal") delete changed.metadata.goal;
     if (failure === "stale-proof") changed.metadata.endState = [{ kind: "page", assertion: { kind: "textIncludes", target: { testId: "status" }, text: "Other" } }];
     await new FsJourneyStore(dir).put(changed);
@@ -175,7 +189,8 @@ describe("owner queue and final native strict review remain distinct", () => {
     const projection = await journeyPreApproval(dir, "sample", opts());
     expect(projection.readyForOwnerReview).toBe(true);
     expect(projection.pendingActions.map((a) => a.kind)).toEqual(["job-approve", "journey-promote"]);
-    current.metadata.endState = [{ kind: "page", assertion: { kind: "visible", target: { testId: "status" } } }];
+    // A defect the owner's approval does not settle: an end-state check that can never fail.
+    current.metadata.endState = [{ kind: "page", assertion: { kind: "count", target: { testId: "status" }, min: 0 } }];
     await new FsJourneyStore(dir).put(current);
     expect((await journeyPreApproval(dir, "sample", opts())).readyForOwnerReview).toBe(false);
   });

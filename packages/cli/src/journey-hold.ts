@@ -3,8 +3,8 @@ import { randomBytes } from "node:crypto";
 import { unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { TargetTrustSchema } from "@jevitate/adjudicator";
-import { clock, contentHash } from "@jevitate/domain";
+import { TargetTrustSchema, type JobVerdict } from "@jevitate/adjudicator";
+import { clock, contentHash, type DoneCheckPolicy } from "@jevitate/domain";
 import { FsInboxStore, HoldKindSchema, InboxItemAlreadyResolvedError, InboxItemNotFoundError, type BuildIdentity, type InboxItem } from "@jevitate/inbox";
 import { ApprovalProvenanceSchema, FsJourneyStore, describeStep, flatJourneySteps, secretParamNames, type ApprovalProvenance, type Journey } from "@jevitate/journey";
 import { PlaywrightBrowserPort, type BrowserPort, type BrowserSession } from "@jevitate/playwright";
@@ -21,6 +21,7 @@ import { RunHeldError, RunHookError, registerRunHooks, type PendingAction, type 
 import { checkpointKeyPath } from "./journey-verify-checkpoint.js";
 import { logsRoot } from "./project-dir.js";
 import { reconcileLinkedJob, type ReconcileInput } from "./journey-reconcile.js";
+import { inDoneCheckScope, type DoneCheckRunRequest } from "./journey-done-check-hook.js";
 import { missingSecretParams } from "./secret-params.js";
 import type { TargetTrust } from "./run-mode.js";
 
@@ -76,9 +77,18 @@ export const HoldRecordSchema = z.strictObject({
     .optional(),
   /**
    * #827 (§5.3): the run was a `journey chain` producer. A resume continues the whole chain: the consumer's
-   * id and the requests file's path, never its content or a value.
+   * id and the requests file's path, never its content or a value. M3: the consumer's content hash and the
+   * requests file's sha256 are bound too, so a resume refuses a consumer or a requests file changed since.
    */
-  chain: z.strictObject({ to: z.string().min(1).max(256), requests: z.string().min(1).max(4096), allowDraft: z.boolean().optional() }).optional(),
+  chain: z
+    .strictObject({
+      to: z.string().min(1).max(256),
+      toHash: z.string().min(1).max(128),
+      requests: z.string().min(1).max(4096),
+      requestsSha256: z.string().regex(/^[0-9a-f]{64}$/),
+      allowDraft: z.boolean().optional(),
+    })
+    .optional(),
 });
 export type HoldRecord = z.infer<typeof HoldRecordSchema>;
 
@@ -177,7 +187,7 @@ function originOf(url: string): string | undefined {
   }
 }
 
-export type HoldBinding = "journey" | "params" | "target" | "pending";
+export type HoldBinding = "journey" | "params" | "target" | "pending" | "consumer" | "requests";
 
 export interface HoldBindingNow {
   readonly journeyHash: string;
@@ -201,7 +211,19 @@ const BINDING_TEXT: Readonly<Record<HoldBinding, string>> = {
   params: "the parameters differ from the ones it was held with",
   target: "the target origin differs from the one it was held on",
   pending: "the pending action differs from the one that was approved",
+  consumer: "the chain's consumer Journey changed since the hold was made (a changed Journey needs a new approval)",
+  requests: "the chain's requests file changed since the hold was made",
 };
+
+/** M3: the chain bindings of a hold a chain's producer reached, against the consumer and requests file now. */
+export function holdChainBindingMismatches(chain: Pick<HoldChainContext, "toHash" | "requestsSha256">, now: { readonly toHash: string | undefined; readonly requestsSha256: string }): HoldBinding[] {
+  return [...(now.toHash === chain.toHash ? [] : ["consumer" as const]), ...(now.requestsSha256 === chain.requestsSha256 ? [] : ["requests" as const])];
+}
+
+/** M3: the refusal of a chain resume whose consumer or requests file changed (`E_HOLD_BINDING`). */
+export function holdChainBindingError(id: string, mismatches: readonly HoldBinding[]): HoldError {
+  return new HoldError("E_HOLD_BINDING", `the hold '${id}' cannot resume: ${mismatches.map((m) => BINDING_TEXT[m]).join("; ")}`, mismatches);
+}
 
 // --- The hook ------------------------------------------------------------------------------------------
 
@@ -261,7 +283,8 @@ async function persistHold(opts: HoldHookOptions, ctx: RunHookContext & PendingA
   const now = clock.now();
   const createdAt = new Date(now).toISOString();
   const expiresAt = new Date(now + (opts.ttlMs ?? DEFAULT_HOLD_TTL_MS)).toISOString();
-  const extracted = ctx.evidence?.observed().values ?? [];
+  // Every value the run knows, not only the evidence writer's: with run records off there is none (independent check H3).
+  const extracted = [...new Set([...(ctx.evidence?.observed().values ?? []), ...(ctx.knownValues?.() ?? [])])];
   writeRunCheckpoint(join(holdsDir, checkpointName(id)), key, {
     version: 1,
     hold: id,
@@ -536,12 +559,23 @@ export interface ResumeHoldRequest {
   readonly catalogDir?: string | null;
   /** #795 testing seam: the fresh-context reader of the job's done check. */
   readonly reconcileRead?: ReconcileInput["read"];
-  /** #795: the browser port the reconcile reading opens its fresh context from. */
+  /** #795: the browser port the reconcile reading opens its fresh context from (H5: the done check's readings too). */
   readonly reconcileBrowserPort?: ReconcileInput["browserPort"];
+  /** H5: the policy the resumed run's job verdict folds with (default project.json's `doneCheckPolicy`). */
+  readonly doneCheckPolicy?: DoneCheckPolicy;
 }
 
 export type ResumeHoldResult =
-  | { readonly outcome: "resumed"; readonly holdId: string; readonly fromStep: number; readonly result: RunJourneyResult & { evidenceError?: string } }
+  | {
+      readonly outcome: "resumed";
+      readonly holdId: string;
+      readonly fromStep: number;
+      readonly result: RunJourneyResult & { evidenceError?: string };
+      /** H5: the resumed run's job verdict (its done check, read as `journey run` reads it); absent while the hooks are not registered. */
+      readonly job?: JobVerdict;
+      /** H5: the policy the job folds with. */
+      readonly doneCheckPolicy: DoneCheckPolicy;
+    }
   | { readonly outcome: "held"; readonly holdId: string; readonly fromStep: number; readonly held: HeldOutcome };
 
 /** What a resume checks before anything opens. Exported for the refusal tests; `resumeHold` runs it first. */
@@ -646,7 +680,17 @@ export async function resumeHold(req: ResumeHoldRequest): Promise<ResumeHoldResu
   const off = registrations === 0 ? registerRunHooks(`${HOLD_HOOK_OWNER}-resume`, holdHooks({ holdsDir, ...(req.keyFile === undefined ? {} : { keyFile: req.keyFile }), ...(req.inboxDir === undefined ? {} : { inboxDir: req.inboxDir }), ...req.hooks })) : undefined;
   try {
     await session.page.goto(url, { waitUntil: "load" });
-    const result = await resumeScope.run(scope, () =>
+    // H5: the resumed run reads its job's done check, as `journey run` does (before the pending step, after the last).
+    const doneCheck: DoneCheckRunRequest = {
+      catalogDir: req.catalogDir ?? null,
+      journeysDir: req.journeysDir,
+      ...(env?.baseUrl === undefined ? {} : { origin: env.baseUrl }),
+      ...(req.storageState === undefined ? {} : { storageState: req.storageState }),
+      ...(req.reconcileBrowserPort === undefined ? {} : { browserPort: req.reconcileBrowserPort }),
+      ...(req.browserPortFactory === undefined ? {} : { sessionPortFactory: req.browserPortFactory }),
+      ...(req.doneCheckPolicy === undefined ? {} : { policy: req.doneCheckPolicy }),
+    };
+    const { result, job, policy } = await inDoneCheckScope(doneCheck, () => resumeScope.run(scope, () =>
       runJourneyProgrammatically({
         ...req.run,
         dir: req.journeysDir,
@@ -659,8 +703,8 @@ export async function resumeHold(req: ResumeHoldRequest): Promise<ResumeHoldResu
         ...(record.kind === "secret" ? { heldSecretParams: missingSecretParams(stored, req.params) } : {}),
         ...(env === undefined ? {} : { environment: env }),
       }),
-    );
-    return { outcome: "resumed", holdId: req.id, fromStep, result };
+    ));
+    return { outcome: "resumed", holdId: req.id, fromStep, result, ...(job === undefined ? {} : { job }), doneCheckPolicy: policy };
   } catch (err) {
     if (err instanceof RunHookError && err.cause instanceof HoldError) throw err.cause;
     const held = heldOutcomeOf(err);

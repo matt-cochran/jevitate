@@ -8,8 +8,13 @@
 // Same invocation as the accuracy lab's goal cell, and no --success: the done check stays on the lab's
 // side, so the verdict under test is judged independently. --real only ever points at the 127.0.0.1
 // server started here. JEVITATE_BIN is required: this lab measures a named build, never the global one.
+//
+// --job page|http (rc-030) adds the job done check arm: the run is `explore --job nav-lab-done` from a
+// scratch project whose .jevitate/jobs.json holds one job, done when the lab's own /__lab/state says so,
+// read as a page check or as an http check (LAB_JOB_CHECKS). The lab-side done check stays the oracle;
+// the line also carries the run's `job` verdict. Without --job the invocation is unchanged.
 import { spawn } from "node:child_process";
-import { appendFileSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -19,7 +24,26 @@ const fixtureDir = resolve(here, "../../test/fixtures/nav-lab");
 /** Jev 1.13 and 1.14 are both $0.042 per Mtok of input and free for output (docs.typesafe.ai/models.md, read 2026-11-06). */
 const JEV_USD_PER_INPUT_TOKEN = 0.042 / 1e6;
 
-export const cellKey = (cell) => `${cell.case}|${cell.replicate}`;
+/** A job-arm cell is keyed apart from a judgment-only one, so both may share an out dir. */
+export const cellKey = (cell) => `${cell.case}|${cell.replicate}${cell.jobCheck ? `|job=${cell.jobCheck}` : ""}`;
+
+/** The job done check arm: one catalog job, done when the lab's own state says so, read two ways. */
+export const LAB_JOB_ID = "nav-lab-done";
+export const LAB_JOB_CHECKS = {
+  page: { version: 1, at: "/__lab/state", check: 'textIncludes:css=body|"done":true' },
+  http: { version: 1, at: "/__lab/state", check: "http:GET /__lab/state|jsonPath=$.done|equals=true" },
+};
+
+/** The scratch project an `--job` run starts from (its cwd): `.jevitate/jobs.json` with the lab job. */
+export function labJobProject(outDir, jobCheck) {
+  const done = LAB_JOB_CHECKS[jobCheck];
+  if (!done) throw new Error(`--job must be one of ${Object.keys(LAB_JOB_CHECKS).join(", ")}, got ${JSON.stringify(jobCheck)}`);
+  const dir = join(outDir, "job-project", jobCheck);
+  mkdirSync(join(dir, ".jevitate"), { recursive: true });
+  const job = { id: LAB_JOB_ID, trigger: "the lab goal is stated", motivation: "complete the lab goal", outcome: "the lab-side state shows it is done", done };
+  writeFileSync(join(dir, ".jevitate", "jobs.json"), `${JSON.stringify({ jobs: [job] }, null, 2)}\n`);
+  return dir;
+}
 
 export const loadGroundTruth = () => JSON.parse(readFileSync(join(fixtureDir, "ground-truth.json"), "utf8"));
 
@@ -45,13 +69,16 @@ const startApp = (caseId, seed) => {
   return { child, ready };
 };
 
-const runJevitate = (port, { goal, entry, artifactDir, timeoutMs, maxActions }) =>
+const runJevitate = (port, { goal, entry, artifactDir, timeoutMs, maxActions, projectDir }) =>
   new Promise((resolveRun) => {
     const startedAt = Date.now();
     const child = spawn(
       process.execPath,
-      [process.env.JEVITATE_BIN, "explore", "--strategy", "goal", "--goal", goal, "--url", `http://127.0.0.1:${port}${entry}`, "--out", artifactDir, "--json", "--max-actions", String(maxActions), "--real"],
-      { cwd: fixtureDir, stdio: ["ignore", "pipe", "pipe"] },
+      [
+        process.env.JEVITATE_BIN, "explore", "--strategy", "goal", "--goal", goal, "--url", `http://127.0.0.1:${port}${entry}`, "--out", artifactDir, "--json", "--max-actions", String(maxActions), "--real",
+        ...(projectDir === undefined ? [] : ["--job", LAB_JOB_ID]),
+      ],
+      { cwd: projectDir ?? fixtureDir, stdio: ["ignore", "pipe", "pipe"] },
     );
     let stdout = "";
     let stderr = "";
@@ -131,14 +158,15 @@ const compactTranscript = (entries) =>
   }));
 
 /** Run one cell start-to-finish and append its JSON line to <outDir>/results.jsonl. */
-export async function runCell({ caseId, replicate = 0, timeoutMs = 300000, maxActions = 25, outDir }) {
+export async function runCell({ caseId, replicate = 0, timeoutMs = 300000, maxActions = 25, outDir, jobCheck }) {
   if (!caseId || !outDir) throw new Error("runCell requires caseId and outDir");
   if (!process.env.JEVITATE_BIN) throw new Error("JEVITATE_BIN must name the built CLI entry under test");
   const gt = loadGroundTruth().cases[caseId];
   if (!gt) throw new Error(`unknown case ${JSON.stringify(caseId)}`);
 
-  const artifactDir = join(outDir, "artifacts", `${caseId}-r${replicate}`);
+  const artifactDir = join(outDir, "artifacts", `${caseId}-r${replicate}${jobCheck ? `-job-${jobCheck}` : ""}`);
   mkdirSync(artifactDir, { recursive: true });
+  const projectDir = jobCheck ? labJobProject(outDir, jobCheck) : undefined;
 
   const server = startApp(caseId, replicate);
   let port;
@@ -152,7 +180,7 @@ export async function runCell({ caseId, replicate = 0, timeoutMs = 300000, maxAc
   let run;
   let state = null;
   try {
-    run = await runJevitate(port, { goal: gt.goal, entry: gt.entry, artifactDir, timeoutMs, maxActions });
+    run = await runJevitate(port, { goal: gt.goal, entry: gt.entry, artifactDir, timeoutMs, maxActions, projectDir });
     state = await fetch(`http://127.0.0.1:${port}/__lab/state`).then((r) => r.json());
   } finally {
     server.child.kill("SIGTERM");
@@ -184,6 +212,9 @@ export async function runCell({ caseId, replicate = 0, timeoutMs = 300000, maxAc
     failureMessage: typeof r.failure?.message === "string" ? r.failure.message.slice(0, 400) : null,
     reason: typeof r.reason === "string" ? r.reason.slice(0, 3000) : null,
     verifiedBy: r.runOutcome?.verifiedBy ?? null,
+    // 0.30.0: the boundary a run stopped at (kind and signal only), and, in the --job arm, its job verdict.
+    boundary: r.boundary ? { kind: r.boundary.kind ?? null, signal: r.boundary.signal ?? null } : null,
+    ...(jobCheck ? { jobCheck, job: r.job ?? null } : {}),
     defectStatus: r.defectOutcome?.status ?? null,
     defects: defects.map((d) => d?.kind ?? null),
     decisions: r.decisions ?? r.depth?.decisions ?? null,
@@ -223,10 +254,10 @@ if (isMain) {
   const caseId = arg("--case");
   const outDir = arg("--out");
   if (!caseId || !outDir) {
-    process.stderr.write("usage: node run-cell.mjs --case <id> --replicate n --out <dir> [--timeout-ms n] [--max-actions n]\n");
+    process.stderr.write("usage: node run-cell.mjs --case <id> --replicate n --out <dir> [--timeout-ms n] [--max-actions n] [--job page|http]\n");
     process.exit(2);
   }
-  runCell({ caseId, replicate: Number(arg("--replicate", "0")), timeoutMs: Number(arg("--timeout-ms", "300000")), maxActions: Number(arg("--max-actions", "25")), outDir }).then(
+  runCell({ caseId, replicate: Number(arg("--replicate", "0")), timeoutMs: Number(arg("--timeout-ms", "300000")), maxActions: Number(arg("--max-actions", "25")), outDir, ...(arg("--job") ? { jobCheck: arg("--job") } : {}) }).then(
     (line) => process.stdout.write(`${JSON.stringify(line)}\n`),
     (err) => {
       process.stderr.write(`${err && err.message ? err.message : err}\n`);

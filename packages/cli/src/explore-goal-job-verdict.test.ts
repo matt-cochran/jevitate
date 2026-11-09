@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { goalJobDecision, type GoalJobInput } from "./explore-job-done-check.js";
+import { MISSION_EXIT_CODES } from "@jevitate/domain";
+import { goalJobDecision, goalJobFold, type GoalJobInput } from "./explore-job-done-check.js";
 import { EXIT_CODES, exitCodeForError } from "./exit-codes.js";
 
 /**
@@ -70,5 +71,53 @@ describe("goalJobDecision", () => {
 describe("E_EXPLORE_JOB", () => {
   it("an unknown --job id (or an unreadable catalog) is a usage error: exit 64", () => {
     expect(exitCodeForError("E_EXPLORE_JOB")).toBe(EXIT_CODES.usage);
+  });
+});
+
+describe("rc-030: the final fresh reading of a run the loop did not decide", () => {
+  const ended = (over: Partial<GoalJobInput>): GoalJobInput => pass({ completed: false, goalOutcome: "blocked", foldedOutcome: "blocked", hasReader: true, ...over });
+
+  it("false is not-achieved, true is achieved (false before, true after)", () => {
+    expect(goalJobDecision(ended({ lastReading: false })).job).toEqual({ attainment: "not-achieved", basis: "done-check" });
+    expect(goalJobDecision(ended({ lastReading: true })).job).toEqual({ attainment: "achieved", basis: "done-check" });
+  });
+
+  it("an unreadable one stays reading-unknown, with its reason, and never becomes true or false", () => {
+    expect(goalJobDecision(ended({ lastReading: null, unknownReason: "page-replaced" })).job).toEqual({ attainment: "unverified", basis: "reading-unknown", reason: "page-replaced" });
+    expect(goalJobDecision(ended({ lastReading: null })).job).toEqual({ attainment: "unverified", basis: "reading-unknown" });
+  });
+});
+
+describe("decision 2: a pass whose done check reads false exits 1 (goalJobFold)", () => {
+  it("a grounded-answer pass whose final reading is false is defects-found, done-check-failed, exit 1", () => {
+    const d = goalJobDecision(pass({ completed: true, verifiedBy: "grounded-answer", hasReader: true, lastReading: false }));
+    expect(d.job).toEqual({ attainment: "not-achieved", basis: "done-check" });
+    const f = goalJobFold({ foldedOutcome: "clean", ...d });
+    expect(f.missionOutcome).toBe("defects-found");
+    expect(f.failure?.kind).toBe("done-check-failed");
+    expect(MISSION_EXIT_CODES[f.missionOutcome]).toBe(1);
+  });
+
+  it("the find-out exemption covers only unverified, never not-achieved; advisory does not soften it", () => {
+    for (const verifiedBy of ["grounded-answer", "success-condition", "grounded-judgment"] as const) {
+      for (const policy of ["require", "advisory"] as const) {
+        const d = goalJobDecision(pass({ verifiedBy, policy, hasReader: true, lastReading: false }));
+        expect(goalJobFold({ foldedOutcome: "clean", ...d }).missionOutcome).toBe("defects-found");
+      }
+    }
+    // A pending review is a pass too: not-achieved outranks it, as journeyMissionOutcome does.
+    const d = goalJobDecision(pass({ hasReader: true, lastReading: false }));
+    expect(goalJobFold({ foldedOutcome: "pending-review", ...d }).missionOutcome).toBe("defects-found");
+  });
+
+  it("a run already failing keeps its own ending; achieved and unverified folds are unchanged", () => {
+    const failed = goalJobDecision(pass({ completed: false, goalOutcome: "blocked", foldedOutcome: "defects-found", hasReader: true, lastReading: false }));
+    expect(goalJobFold({ foldedOutcome: "inconclusive", ...failed })).toEqual({ missionOutcome: "inconclusive" });
+    const achieved = goalJobDecision(pass({ hasReader: true, lastReading: true }));
+    expect(goalJobFold({ foldedOutcome: "clean", ...achieved })).toEqual({ missionOutcome: "clean" });
+    const unverified = goalJobDecision(pass({ verifiedBy: "grounded-judgment" }));
+    expect(goalJobFold({ foldedOutcome: "clean", ...unverified })).toEqual({ missionOutcome: "inconclusive" });
+    const harness = goalJobDecision(pass({ hasReader: true, lastReading: false, trust: "harness" }));
+    expect(goalJobFold({ foldedOutcome: "clean", ...harness })).toEqual({ missionOutcome: "clean" });
   });
 });

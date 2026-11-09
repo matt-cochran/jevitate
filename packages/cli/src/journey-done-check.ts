@@ -55,6 +55,22 @@ function unknown(reason: UnknownReason, started: number, at: "pre" | "post"): Do
   return { value: { known: false, reason }, session: "fresh", at, durationMs: Math.max(0, Math.round(clock.monotonicMs() - started)) };
 }
 
+/**
+ * A resolved check whose `http:GET <path>` is made absolute on `origin`; any other check is returned as is.
+ * Undefined when the URL would leave that origin (such a check is never read).
+ */
+export function httpCheckOnOrigin(check: string, origin: string): string | undefined {
+  const m = /^http:GET\s+([^|]*)(\|.*)?$/s.exec(check);
+  if (m === null) return check;
+  try {
+    const base = new URL(origin).origin;
+    const url = new URL(m[1]!.trim(), base);
+    return url.origin === base ? `http:GET ${url.toString()}${m[2] ?? ""}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Opens a new context, navigates to `spec.at`, evaluates `spec.check`, always closes the context. */
 export async function readDoneCheck(input: ReadDoneCheckInput): Promise<DoneReading> {
   const at = input.at ?? "post";
@@ -72,6 +88,11 @@ export async function readDoneCheck(input: ReadDoneCheckInput): Promise<DoneRead
     } catch {
       return unknown("check-unevaluable", started, at);
     }
+    // rc-030: a done check's `http:GET` names a PATH on the target origin (the done-check grammar), but the
+    // port evaluates the `--success` http grammar, which takes an absolute URL only. Unresolved, the port's
+    // parse refused it and every reading of an http done check was unknown. Resolved here, on this origin.
+    const check = httpCheckOnOrigin(resolved.check, input.origin);
+    if (check === undefined) return unknown("check-unevaluable", started, at);
     const { storageState, persona } = input.auth;
     try {
       session = await input.browserPort.openContext({
@@ -85,7 +106,7 @@ export async function readDoneCheck(input: ReadDoneCheckInput): Promise<DoneRead
     }
     let result: boolean | "unevaluable";
     try {
-      result = await session.evaluate(resolved.check);
+      result = await session.evaluate(check);
     } catch {
       return unknown("page-replaced", started, at);
     }

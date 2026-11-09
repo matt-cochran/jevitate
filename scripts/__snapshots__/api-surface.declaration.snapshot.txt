@@ -75,7 +75,7 @@
   WriteShape: type-alias
   WriteShapeSchema: variable
 
-# @jevitate/ai-core (181 exports)
+# @jevitate/ai-core (182 exports)
   aggregateOf: function
   AI_CORE: variable
   ALL_CREDENTIAL_KEYS: variable
@@ -199,6 +199,7 @@
   redactModelPayload: function
   redactText: function
   redactUrl: function
+  registerDeclaredSecrets: function
   requireKeys: function
   resolveJevRoute: function
   RetryDeps: interface
@@ -269,7 +270,7 @@
   ProfileManager: class
   ProfileStatus: interface
 
-# @jevitate/domain (182 exports)
+# @jevitate/domain (184 exports)
   assertInsideRoot: function
   assertRunTag: function
   assertSafeName: function
@@ -352,8 +353,10 @@
   isWithinQuietHours: function
   JOB_ATTAINMENTS: variable
   JOB_BASES: variable
+  JOB_UNKNOWN_REASONS: variable
   JobAttainment: type-alias
   JobBasis: type-alias
+  JobUnknownReason: type-alias
   JobVerdict: interface
   journeezeFingerprintMarker: function
   JOURNEY_MISSION_OUTCOME: variable

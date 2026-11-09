@@ -62,7 +62,12 @@ async function call(args: Record<string, unknown>): Promise<{ isError: boolean; 
 describe("0.30.0 #801 shorten_journey over MCP", () => {
   it("is served, mirroring journey shorten's arguments", () => {
     const tool = buildMcpTools({ journeysDir: "/unused" }).find((t) => t.name === "shorten_journey")!;
-    expect(Object.keys(tool.inputSchema.properties).sort()).toEqual(["budget", "fixtureIdentity", "fixtures", "id", "job", "outId", "params", "storageState"]);
+    // 14ad1e7e: shorten_journey runs on env/baseUrl with emulation and browser limits, as verify_journey does.
+    // Never a secret value or an extra origin over MCP: --secret-field and --allow stay CLI-only.
+    expect(Object.keys(tool.inputSchema.properties).sort()).toEqual([
+      "baseUrl", "budget", "device", "env", "extension", "fixtureIdentity", "fixtures", "geolocation", "id", "job",
+      "maxBrowserMemory", "maxBrowsers", "outId", "params", "stepResponseTimeoutMs", "storageState", "viewport",
+    ]);
     expect(tool.description).toMatch(/shortest found within budget/);
   });
 

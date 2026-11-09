@@ -11,6 +11,7 @@ import {
   redactContext,
   redactModelPayload,
   redactText,
+  registerDeclaredSecrets,
   redactUrl,
 } from "./index.js";
 
@@ -166,6 +167,31 @@ describe("F5 — a short secret inside a longer token", () => {
     expect(redactText("the cabbage and abcdef", ["abc", "bag"])).toBe("the cabbage and abcdef");
     expect(redactText("data-base", ["a-b"])).toBe("data-base");
     expect(() => assertNoSecretInPayload({ text: "12345 cabbage" }, ["1234", "bag"])).not.toThrow();
+  });
+
+  it("a declared all-digit 3-5 character secret is masked inside a longer digit run while its run lasts; a discovered one is not", () => {
+    const run = registerDeclaredSecrets(["4821", "abc", "12345678"]);
+    try {
+      expect(redactText("order 148213 and 4821", ["4821"])).toBe(`order 1${REDACTION_MASK}3 and ${REDACTION_MASK}`);
+      expect(() => assertNoSecretInPayload({ text: "148213" }, ["4821"])).toThrow(SecretLeakError);
+      // Only all-digit ones change: a declared letters secret keeps the short-secret rule.
+      expect(redactText("the cabbage", ["abc"])).toBe("the cabbage");
+      // A value no run declared keeps the rule.
+      expect(redactText("12345", ["1234"])).toBe("12345");
+    } finally {
+      run.release();
+    }
+    expect(redactText("order 148213", ["4821"])).toBe("order 148213");
+  });
+
+  it("two runs declaring the same digits: it stays declared until both end", () => {
+    const a = registerDeclaredSecrets(["9090"]);
+    const b = registerDeclaredSecrets(["9090"]);
+    a.release();
+    a.release();
+    expect(redactText("190901", ["9090"])).toBe(`1${REDACTION_MASK}1`);
+    b.release();
+    expect(redactText("190901", ["9090"])).toBe("190901");
   });
 
   it("a one- or two-character secret stays whole-token only", () => {

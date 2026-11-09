@@ -57,7 +57,7 @@ export function registerJourneyShorten(journey: Command, program: Command, deps:
       "authoring time: search for a shorter path to the same job by removing steps (no model); every candidate is a full replay with the fixtures reset around it, decided only by the job's done check in a fresh context; never drops a confirm/agree/accept click. Writes an UNPROMOTED draft and reports the shortest found within budget",
     )
     .requiredOption("--job <jobId>", "the catalog job (.jevitate/jobs.json) whose done check decides every candidate")
-    .option("--budget <n>", "replays the search may spend, the recorded path's included (default 30)")
+    .option("--budget <n>", "replays the search may spend, the recorded path's included (default 30)", intArg({ min: 1, max: 500 }))
     .option("--out-id <id>", "the draft Journey's id (default <id>-shortest; refused when it exists)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
     .option("--secret-field <binding>", REPLAY_SECRET_FIELD_HELP, collectSecretField, [] as string[])
@@ -66,7 +66,7 @@ export function registerJourneyShorten(journey: Command, program: Command, deps:
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
       const flags = this.opts<
-        { project?: string; journeysDir?: string; job: string; budget?: string; outId?: string; param: Record<string, string>; secretField: string[]; storageState?: string; stepResponseTimeout?: number; json?: boolean } & FixtureFlags
+        { project?: string; journeysDir?: string; job: string; budget?: number; outId?: string; param: Record<string, string>; secretField: string[]; storageState?: string; stepResponseTimeout?: number; json?: boolean } & FixtureFlags
       >();
       const layout = journeyLayout(program, deps, { project: flags.project, journeysDir: flags.journeysDir });
       if (layout === null) return;
@@ -75,8 +75,8 @@ export function registerJourneyShorten(journey: Command, program: Command, deps:
         emitJson(program, fail("E_JOURNEY_SHORTEN_ARGS", message));
         process.exitCode = EXIT_CODES.usage;
       };
-      const budget = flags.budget === undefined ? undefined : Number(flags.budget);
-      if (budget !== undefined && (!Number.isInteger(budget) || budget < 1 || budget > 500)) return usage("--budget: a whole number of replays from 1 to 500");
+      // #218: --budget is parsed (1-500) at parse time by its argParser.
+      const budget = flags.budget;
       await warnSecretParamsOnArgv(program.configureOutput().writeErr, dir, [id], flags.param, "journey shorten");
       const { env: envName, baseUrl, ...emulationFlags } = this.opts<EnvironmentFlags & EmulationFlags>();
       // #247: where every candidate runs (an unknown env or a bad file is 64, nothing opened).
@@ -103,7 +103,7 @@ export function registerJourneyShorten(journey: Command, program: Command, deps:
       let params: Record<string, string>;
       let bound: BoundSecretParams | undefined;
       try {
-        ({ params, bound } = await withCommandSecretParams({ dir, ids: [id], params: flags.param, flags: flags.secretField, environment, env: deps.explore?.env ?? process.env }));
+        ({ params, bound } = await withCommandSecretParams({ dir, ids: [id], params: flags.param, flags: flags.secretField, environment, env: deps.explore?.env ?? process.env, seams: environmentSeams(deps) }));
       } catch (err) {
         const e = secretFieldErrorOf(err, "E_JOURNEY_SHORTEN_ARGS");
         if (e === undefined) throw err;

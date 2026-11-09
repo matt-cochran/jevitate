@@ -196,7 +196,7 @@ describe("#434 deterministic readiness — Journeys", () => {
 describe("d-vocab-migration: readiness leads with the job verdict; the proof is checks strength", () => {
   async function recordSensitive(countsForGate: boolean | undefined): Promise<void> {
     const j = await new FsJourneyStore(journeysDir).get("publish");
-    await writeVerifyRecord(journeysDir, { journeyId: "publish", contentHash: journeyReviewHash(j!), proofHash: journeyProofHash(j!), verdict: "sensitive", ...(countsForGate === undefined ? {} : { countsForGate, engine: { version: "0.30.0", commit: "abc1234" } }), summary: { sensitive: 1 }, at: "2026-10-01T00:00:00Z" });
+    await writeVerifyRecord(journeysDir, { journeyId: "publish", contentHash: journeyReviewHash(j!), proofHash: journeyProofHash(j!), verdict: "sensitive", ...(countsForGate === undefined ? {} : { countsForGate, engine: { version: "0.30.0", commit: "abc1234" }, target: { origin: new URL(j!.recording.site).origin } }), summary: { sensitive: 1 }, at: "2026-10-01T00:00:00Z" });
   }
 
   it("a sensitive proof on a trust 'unknown' target shows countsForGate false and does not satisfy require-sensitive", async () => {

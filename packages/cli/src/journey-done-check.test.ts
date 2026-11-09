@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FakeClock, installClock, resetClock } from "@jevitate/domain";
 import type { DoneReading } from "@jevitate/adjudicator";
-import { evaluateJobDoneCheck, readDoneCheck, type BrowserPort, type DoneCheckSession } from "./journey-done-check.js";
+import { evaluateJobDoneCheck, httpCheckOnOrigin, readDoneCheck, type BrowserPort, type DoneCheckSession } from "./journey-done-check.js";
 
 const SECRET_VALUE = "hunter2-ZZ9";
 
@@ -95,5 +95,16 @@ describe("evaluateJobDoneCheck (§3.1)", () => {
     [undefined, undefined, { attainment: "unverified", basis: "no-check" }],
   ] as const)("row %#", (before, after, want) => {
     expect(evaluateJobDoneCheck(before, after)).toEqual(want);
+  });
+});
+
+describe("rc-030: an http done check's path is read on the run's origin", () => {
+  const O = "http://127.0.0.1:4100";
+  it("makes the path absolute on the origin and keeps the assertions", () => {
+    expect(httpCheckOnOrigin("http:GET /__lab/state|jsonPath=$.done|equals=true", O)).toBe(`http:GET ${O}/__lab/state|jsonPath=$.done|equals=true`);
+  });
+  it("leaves a page check as it is, and refuses a URL that would leave the origin", () => {
+    expect(httpCheckOnOrigin('textIncludes:css=body|"done":true', O)).toBe('textIncludes:css=body|"done":true');
+    expect(httpCheckOnOrigin("http:GET //evil.example/x|status=200", O)).toBeUndefined();
   });
 });

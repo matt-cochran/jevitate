@@ -21,7 +21,10 @@ import {
   sweepStops,
   type JourneyBranchPoint,
 } from "@jevitate/journey";
-import { assertSafeName, combineOutcomes, MISSION_OUTCOMES, type MissionOutcome, clock } from "@jevitate/domain";
+import { assertSafeName, combineOutcomes, journeyMissionOutcome, MISSION_OUTCOMES, type DoneCheckPolicy, type MissionOutcome, clock } from "@jevitate/domain";
+import type { JobVerdict } from "@jevitate/adjudicator";
+import { jobCarriedBy } from "./journey-done-check-hook.js";
+import { doneCheckExitInput } from "./journey-done-check.js";
 import type { ConsolidatedDefect } from "@jevitate/findings";
 import { applyJourneyEnvironment, environmentFromFlags, isEnvironmentError, type ResolvedJourneyEnvironment } from "./environments.js";
 import { prefixParams } from "./journey-api.js";
@@ -365,6 +368,8 @@ export interface CampaignDiscovery {
   /** `ok`: the whole Journey replays · `stale`: it did not (its missions were skipped) · `error`: the replay could not run. */
   readonly outcome: "ok" | "stale" | "error";
   readonly reason?: string;
+  /** H5 (0.30.0): the replay's `job` verdict (its done check, as `journey run --json` reports it); absent when none was read. */
+  readonly jobVerdict?: JobVerdict;
 }
 
 export interface CampaignMission {
@@ -426,6 +431,12 @@ export interface RunCampaignOptions {
   readonly preflight?: CampaignPreflightDeps | "skip";
   /** #746: `--ignore-host-load`: start even when the host is starved (the campaign-start host check). */
   readonly ignoreHostLoad?: boolean;
+  /**
+   * H5 (0.30.0): the discovery replays' done check. `policy` is what each replay's job folds into the campaign's
+   * outcome with (project.json's doneCheckPolicy, or `require` for `--require-done-check`); `skip`
+   * (`--no-done-check`) and `require` are forwarded to every discovery `journey run`. Absent: the policy default.
+   */
+  readonly doneCheck?: { readonly policy: DoneCheckPolicy; readonly skip?: boolean; readonly require?: boolean };
 }
 
 interface ChildRun {
@@ -536,13 +547,16 @@ export async function runCampaign(plan: CampaignPlan, opts: RunCampaignOptions):
       const d = await restored(
         job,
         async (): Promise<CampaignDiscovery> => {
-          const r = await runChild(opts.newProgram, ["journey", "run", job.journey, "--dir", opts.journeysDir, ...shared, "--json"]);
+          const doneCheckFlags = [...(opts.doneCheck?.skip === true ? ["--no-done-check"] : []), ...(opts.doneCheck?.require === true ? ["--require-done-check"] : [])];
+          const r = await runChild(opts.newProgram, ["journey", "run", job.journey, "--dir", opts.journeysDir, ...shared, ...doneCheckFlags, "--json"]);
           if (!r.ok) return { job: job.id, journeyId: job.journey, outcome: "error", reason: `${r.error?.code}: ${r.error?.message}` };
           const outcome = r.data?.outcome;
           const writes = Array.isArray(r.data?.offAllowlistWrites) ? r.data.offAllowlistWrites.filter((o): o is string => typeof o === "string") : [];
           if (opts.preflight !== undefined && opts.preflight !== "skip") preflightProblems.push(...allowOriginProblems(preflightJobs[index]!, writes));
           replaySlowness.push({ journey: job.journey, slowSteps: Array.isArray(r.data?.slowSteps) ? (r.data.slowSteps as JourneyReplaySlowness["slowSteps"]) : [] });
-          if (outcome === "ok") return { job: job.id, journeyId: job.journey, outcome: "ok" };
+          // H5: the replay's job verdict, as `journey run --json` reports it.
+          const verdict = jobCarriedBy(r.data);
+          if (outcome === "ok") return { job: job.id, journeyId: job.journey, outcome: "ok", ...(verdict === undefined ? {} : { jobVerdict: verdict }) };
           return { job: job.id, journeyId: job.journey, outcome: "stale", reason: typeof r.data?.reason === "string" ? r.data.reason : `the replay ended ${String(outcome)}` };
         },
         (message): CampaignDiscovery => ({ job: job.id, journeyId: job.journey, outcome: "error", reason: `fixture setup failed: ${message}` }),
@@ -657,7 +671,17 @@ export async function runCampaign(plan: CampaignPlan, opts: RunCampaignOptions):
     return r === null ? [] : [r];
   });
   const report = await buildReport({ runs, missionTargetsDir: opts.missionTargetsDir });
-  const missionOutcome = combineOutcomes(missions.map((m) => m.missionOutcome));
+  // H5 (0.30.0, owner decisions 2/3): a discovery replay whose job was not achieved is a defect (exit 1, over a
+  // clean or inconclusive campaign); one whose job is unverified turns a clean campaign inconclusive (exit 2) under
+  // `require` (a harness target excepted), as an unverified pass of `journey run` exits. It never hides a defect.
+  const policy = opts.doneCheck?.policy;
+  const jobOutcomes = discovery.flatMap((d) => (d.outcome === "ok" && d.jobVerdict !== undefined ? [journeyMissionOutcome("ok", doneCheckExitInput(d.jobVerdict, policy))] : []));
+  const missionsOutcome = combineOutcomes(missions.map((m) => m.missionOutcome));
+  const missionOutcome: MissionOutcome = jobOutcomes.includes("defects-found") && (missionsOutcome === "clean" || missionsOutcome === "inconclusive")
+    ? "defects-found"
+    : jobOutcomes.includes("inconclusive") && missionsOutcome === "clean"
+      ? "inconclusive"
+      : missionsOutcome;
   const slowReport = reportSlowness(replaySlowness);
   const slowness = slowReport.coldStarts.length + slowReport.slowSteps.length === 0 ? undefined : slowReport;
   const finishedAt = now();
@@ -692,7 +716,9 @@ function campaignMarkdown(r: CampaignResult, reportMarkdown: string): string {
     ...(r.preflight === undefined ? [] : ["## Preflight", "", r.preflight.skipped === true ? "Skipped (--skip-preflight)." : "Passed: every start URL ready, every session signed in and from the declared persona context, no allow-list mismatch.", ""]),
     "## Discovery",
     "",
-    ...(r.discovery.length === 0 ? ["Skipped (discovery: false)."] : ["| job | journey | outcome | reason |", "| --- | --- | --- | --- |", ...r.discovery.map((d) => `| ${d.job} | ${d.journeyId} | ${d.outcome} | ${(d.reason ?? "").replace(/\|/g, "\\|")} |`)]),
+    ...(r.discovery.length === 0
+      ? ["Skipped (discovery: false)."]
+      : ["| job | journey | outcome | job verdict | reason |", "| --- | --- | --- | --- | --- |", ...r.discovery.map((d) => `| ${d.job} | ${d.journeyId} | ${d.outcome} | ${d.jobVerdict === undefined ? "" : `${d.jobVerdict.attainment} (${d.jobVerdict.basis})`} | ${(d.reason ?? "").replace(/\|/g, "\\|")} |`)]),
     "",
     "## Missions",
     "",

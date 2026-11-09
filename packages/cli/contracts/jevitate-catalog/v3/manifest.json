@@ -4,8 +4,8 @@
   "package": "@jevitate/cli",
   "source": {
     "repository": "https://github.com/matt-cochran/jevitate.git",
-    "commit": "3f1553d088bc336404a37ab4f8eb7d87e199322e",
-    "packageVersionAtCommit": "0.29.0"
+    "commit": "7720f3bf541b3b6297c9c590dfc156dbd1e86561",
+    "packageVersionAtCommit": "0.29.1"
   },
   "compatibility": {
     "repositoryCatalogMajor": 1,
@@ -76,8 +76,8 @@
     },
     {
       "path": "schemas/journey.schema.json",
-      "bytes": 410378,
-      "sha256": "3bc1de14189d356083687f76e747d20548201984f9de6ceb64960cad97af59e2"
+      "bytes": 411259,
+      "sha256": "6b45a1b58d4dac8c959709c084fc65f75583af93a6be694e269d9af948561e58"
     },
     {
       "path": "schemas/personas.schema.json",

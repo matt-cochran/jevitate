@@ -228,7 +228,7 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
           if (o.storageState === undefined && environment?.storageState !== undefined) o.storageState = environment.storageState;
           // #827: the prefix's secret parameters from the environment: a --secret-field that binds one (a recorded
           // field, or param=<name>), and with --env/--base-url the environment's targets.json secretFields.
-          const prefixSecrets = await withCommandSecretParams({ dir: resolveJourneysDir(deps, o.journeysDir), ids: [o.fromJourney], params: o.param, flags: o.secretField, environment, env: deps.explore?.env ?? process.env, strict: false });
+          const prefixSecrets = await withCommandSecretParams({ dir: resolveJourneysDir(deps, o.journeysDir), ids: [o.fromJourney], params: o.param, flags: o.secretField, environment, env: deps.explore?.env ?? process.env, seams: environmentSeams(deps), strict: false });
           prefixSecretSpecs = new Set(prefixSecrets.used);
           prefixRequest = {
             dir: resolveJourneysDir(deps, o.journeysDir),

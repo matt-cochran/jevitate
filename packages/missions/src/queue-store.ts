@@ -1,5 +1,6 @@
+import { randomBytes } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
-import { mkdir, open, readFile, readdir, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isNodeError, safeChildPath } from "@jevitate/domain";
 import type { QueuedJourneyRecord, QueuedMission } from "./schema.js";
@@ -21,6 +22,45 @@ export interface ClaimOwner {
   readonly pid: number;
   readonly host: string;
   readonly claimedAtIso: string;
+  /** The claimant's process start time (Linux `/proc` starttime): a reused PID has another one. */
+  readonly startKey?: string;
+  /** A per-drain nonce: tells this drain's claims from an earlier drain's that had the same PID. */
+  readonly nonce?: string;
+}
+
+/**
+ * Creates `path` holding `owner`, whole or not at all, and fails (false) if it exists: the content is
+ * written to a private temp file and hard-linked into place, so a crash never leaves an empty claim
+ * and the claimant is on disk the moment the claim exists.
+ */
+async function writeClaimExclusively(path: string, owner: ClaimOwner): Promise<boolean> {
+  const tmp = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  await writeFile(tmp, JSON.stringify(owner), { mode: 0o600, flag: "wx" });
+  try {
+    await link(tmp, path);
+    return true;
+  } catch (err) {
+    if (isNodeError(err, "EEXIST")) return false;
+    throw err;
+  } finally {
+    await unlink(tmp).catch(() => undefined);
+  }
+}
+
+function parseClaimOwner(raw: string): ClaimOwner | null {
+  try {
+    const o = JSON.parse(raw) as Partial<ClaimOwner>;
+    if (typeof o.pid !== "number" || typeof o.host !== "string" || typeof o.claimedAtIso !== "string") return null;
+    return {
+      pid: o.pid,
+      host: o.host,
+      claimedAtIso: o.claimedAtIso,
+      ...(typeof o.startKey === "string" ? { startKey: o.startKey } : {}),
+      ...(typeof o.nonce === "string" ? { nonce: o.nonce } : {}),
+    };
+  } catch {
+    return null; // an empty claim from before owners were recorded
+  }
 }
 
 export interface DrainableMissionQueueStore extends MissionQueueStore {
@@ -64,18 +104,7 @@ export class FsMissionQueueStore implements DrainableMissionQueueStore {
    */
   async claim(id: string, owner: ClaimOwner): Promise<boolean> {
     await mkdir(this.dir, { recursive: true, mode: 0o700 });
-    try {
-      const fh = await open(safeChildPath(this.dir, id, { what: "mission id", suffix: ".claim" }), "wx", 0o600);
-      try {
-        await fh.writeFile(JSON.stringify(owner));
-      } finally {
-        await fh.close();
-      }
-      return true;
-    } catch (err) {
-      if (isNodeError(err, "EEXIST")) return false;
-      throw err;
-    }
+    return writeClaimExclusively(safeChildPath(this.dir, id, { what: "mission id", suffix: ".claim" }), owner);
   }
 
   async claimOwner(id: string): Promise<ClaimOwner | null> {
@@ -86,14 +115,7 @@ export class FsMissionQueueStore implements DrainableMissionQueueStore {
       if (isNodeError(err, "ENOENT")) return null;
       throw err;
     }
-    try {
-      const o = JSON.parse(raw) as Partial<ClaimOwner>;
-      return typeof o.pid === "number" && typeof o.host === "string" && typeof o.claimedAtIso === "string"
-        ? { pid: o.pid, host: o.host, claimedAtIso: o.claimedAtIso }
-        : null;
-    } catch {
-      return null; // an empty claim from before owners were recorded
-    }
+    return parseClaimOwner(raw);
   }
 
   async update(m: QueuedMission): Promise<void> {
@@ -196,18 +218,7 @@ export class FsJourneyCallQueueStore implements JourneyCallQueueStore {
 
   async claim(id: string, owner: ClaimOwner): Promise<boolean> {
     await mkdir(this.dir, { recursive: true, mode: 0o700 });
-    try {
-      const fh = await open(this.pathFor(id, ".claim"), "wx", 0o600);
-      try {
-        await fh.writeFile(JSON.stringify(owner));
-      } finally {
-        await fh.close();
-      }
-      return true;
-    } catch (err) {
-      if (isNodeError(err, "EEXIST")) return false;
-      throw err;
-    }
+    return writeClaimExclusively(this.pathFor(id, ".claim"), owner);
   }
 
   async claimOwner(id: string): Promise<ClaimOwner | null> {
@@ -218,12 +229,7 @@ export class FsJourneyCallQueueStore implements JourneyCallQueueStore {
       if (isNodeError(err, "ENOENT")) return null;
       throw err;
     }
-    try {
-      const o = JSON.parse(raw) as Partial<ClaimOwner>;
-      return typeof o.pid === "number" && typeof o.host === "string" && typeof o.claimedAtIso === "string" ? { pid: o.pid, host: o.host, claimedAtIso: o.claimedAtIso } : null;
-    } catch {
-      return null;
-    }
+    return parseClaimOwner(raw);
   }
 
   async update(r: QueuedJourneyRecord): Promise<void> {

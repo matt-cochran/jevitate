@@ -10,6 +10,7 @@ import type { RunOutcome } from "../conversation.js";
 import { buildCrashReport } from "../crash-report.js";
 import type { ExploreRun, MissCause } from "../explore.js";
 import { MAX_REPORT_REJECTIONS } from "./limits.js";
+import { noRouteFound } from "./no-route.js";
 import { targetStoppedAnswering } from "../mission-failure.js";
 import { emptyRecording } from "../record.js";
 import { redactText, redactUrl } from "../redact.js";
@@ -88,6 +89,17 @@ export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
       `the decision the refusal asked for was never taken${refusal === undefined ? "" : `: ${quote(refusal, 240)}`}`;
   }
 
+  // 0.30.0 (#807): the run covered every control it could reach (the floor, `no-route.ts`) and none led
+  // toward the goal: `inconclusive` (exit 2), `no-route-found`, naming what was searched — never a defect.
+  {
+    const noRoute = await noRouteFound(ctx);
+    if (noRoute !== null) {
+      ctx.failure = { kind: "no-route-found", message: noRoute };
+      ctx.incomplete = noRoute;
+      ctx.stop = "inconclusive";
+    }
+  }
+
   await ctx.readOnly?.disarm();
   ctx.page.off("request", ctx.onRequestSeen);
   ctx.page.off("response", ctx.onDocumentResponse);
@@ -114,6 +126,8 @@ export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
   const missCause: MissCause | undefined =
     boundary !== undefined
       ? boundary.signal
+      : ctx.failure?.kind === "no-route-found"
+        ? "no-route-found"
       : finalOutcome.status === "completed" || ctx.answer !== undefined || (ctx.stop !== "blocked" && ctx.stop !== "no-progress")
       ? undefined
       : ctx.lastReportNotFound

@@ -35,7 +35,10 @@ import {
   collectParam,
   emitJson,
   writeRawResult,
+  resolveJourneysDir,
 } from "./cli-shared.js";
+import { resolveCatalogDir } from "./catalog-api.js";
+import { DONE_CHECK_FAILED_MESSAGE, doneCheckExitInput } from "./journey-done-check.js";
 
 /** Registers `jevitate source`: `add|list|pull|update|remove|trust|run`. */
 export function registerSourceCommands(program: Command, deps: CliDeps): void {
@@ -257,15 +260,22 @@ export function registerSourceCommands(program: Command, deps: CliDeps): void {
           ...(sourceRunEmulation === undefined ? {} : { emulation: sourceRunEmulation }),
           ...(storageState !== undefined ? { storageState } : {}),
           ...browserOption(this.opts<BrowserLaunchFlags>()),
+          // H5: the job's done check, from this project's catalog and policy.
+          catalogDir: resolveCatalogDir(deps.catalogDir),
+          journeysDir: resolveJourneysDir(deps),
         })));
-        const envelope = ok(result);
+        // H5 (owner decisions 2/3): the job verdict is reported and folds into the exit, as `journey run` folds it.
+        const { doneCheckPolicy, ...reported } = result;
+        const jobFailed = reported.job?.attainment === "not-achieved" && reported.outcome === "ok";
+        const view = jobFailed ? { ...reported, failure: { kind: "done-check-failed", message: DONE_CHECK_FAILED_MESSAGE } } : reported;
+        const code = journeyExitCode(result.outcome, doneCheckExitInput(reported.job, doneCheckPolicy));
+        const envelope = ok(view);
         if (json) {
           emitJson(program, envelope);
-          const code = journeyExitCode(result.outcome);
           if (code !== 0) process.exitCode = code;
         } else {
-          writeRawResult(program, result);
-          process.exitCode = journeyExitCode(result.outcome);
+          writeRawResult(program, view);
+          process.exitCode = code;
         }
       } catch (err) {
         // Each run-gate refusal maps to a distinct E_SOURCE_RUN* code so a

@@ -20,7 +20,6 @@ import {
   withBrowserLaunchFlags,
   browserLaunchFromFlags,
   buildExploreGateways,
-  fakeDoneJudge,
   resolveInboxDir,
 } from "./cli-shared.js";
 import { registerRunSurfaceHooks } from "./run-surface-hooks.js";
@@ -54,7 +53,6 @@ import { registerAcceptanceAuditCommands } from "./acceptance-audit-cli.js";
 import { registerJourneezeHintCommands } from "./journeeze-hint-cli.js";
 
 export type { CliDeps, RecordCliDeps } from "./cli-shared.js";
-export { fakeDoneJudge } from "./cli-shared.js";
 
 /**
  * `--version`'s display string: `x.y.z (commit <sha>, tree <tree>, built <iso>)`, so results from

@@ -25,10 +25,21 @@ export type JobAttainment = (typeof JOB_ATTAINMENTS)[number];
 export const JOB_BASES = ["done-check", "already-true", "reading-unknown", "no-check", "harness"] as const;
 export type JobBasis = (typeof JOB_BASES)[number];
 
+/**
+ * Why a `reading-unknown` reading could not be taken (the adjudicator's `UnknownReason` tokens, code-made,
+ * never a value): `session-unavailable` (no fresh session, or its navigation failed), `page-replaced`
+ * (the page changed while it was read), `check-unevaluable` (the check could not be evaluated there:
+ * an unbound placeholder, a URL off the origin, a target or response that could not be judged).
+ */
+export const JOB_UNKNOWN_REASONS = ["page-not-watched", "page-replaced", "session-unavailable", "check-unevaluable", "replay-stalled", "not-gathered", "replay-errored"] as const;
+export type JobUnknownReason = (typeof JOB_UNKNOWN_REASONS)[number];
+
 /** A run's job verdict (`result.job`), decided by the adjudicator. */
 export interface JobVerdict {
   readonly attainment: JobAttainment;
   readonly basis: JobBasis;
+  /** rc-030: with basis `reading-unknown`, why the reading could not be taken, when the surface knows. */
+  readonly reason?: JobUnknownReason;
 }
 
 /**

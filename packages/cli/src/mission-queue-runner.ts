@@ -1,8 +1,10 @@
 import { triagedServerLog } from "./explore-shared.js";
-import { existsSync, mkdirSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { basename, join } from "node:path";
-import type { GenerationPort, JudgmentPort, UsageTracker } from "@jevitate/ai-core";
+import { redactText, type GenerationPort, type JudgmentPort, type UsageTracker } from "@jevitate/ai-core";
+import { secretParamValues } from "@jevitate/journey";
 import { validateInvariantSpec } from "@jevitate/recording";
 import { PlaywrightBrowserPort, resolveEmulation, type BrowserPort, type BrowserLaunchOptions, type EmulationSpec } from "@jevitate/playwright";
 import { authExpiredResult, ensurePersonaSession, type AuthCheck } from "./persona-login.js";
@@ -38,13 +40,13 @@ import { substituteSetupRefs, type MissionFixtures } from "./mission-fixtures.js
 import { clock, combineOutcomes, journeyExitCode, safeRunPolicy, JOURNEY_RUN_OUTCOMES, MISSION_EXIT_CODES, MISSION_OUTCOMES, type JourneyRunOutcome, type MissionOutcome } from "@jevitate/domain";
 import type { ClaimOwner, JourneyCallQueueStore, QueuedJourneyRecord } from "@jevitate/missions";
 import { runAsMcpInvocation } from "./approval-provenance.js";
-import { exploreDoneCheckPolicy, prepareJobDoneCheck } from "./explore-job-done-check.js";
+import { exploreDoneCheckPolicy, jobCheckRunOptions, prepareJobDoneCheck } from "./explore-job-done-check.js";
 import { resolveCatalogDir } from "./catalog-api.js";
 import { resolveLayout } from "./project-layout.js";
 import { heldOutcomeOf } from "./journey-hold.js";
 import { withJourneyRunRecord } from "./journey-run-record.js";
 import { assertMcpRunnable } from "./journey-stale-api.js";
-import { missingSecretParams, withSecretParamsFor } from "./secret-params.js";
+import { missingSecretParams, secretParamsCarriedBy, withSecretParamsFor } from "./secret-params.js";
 import { withSiteGate } from "./site-gate-cli.js";
 import { inMcpInvocation } from "./approval-provenance.js";
 import { prepareMcpRunGuard } from "./mcp-run-guard.js";
@@ -150,6 +152,25 @@ export interface QueuedJourneyRun {
   readonly job?: { readonly attainment: string; readonly basis: string };
 }
 
+/** Who a drain is: PID and host, plus a per-drain nonce and the process start time, so a reused PID is not mistaken for it. */
+export interface DrainIdentity {
+  readonly pid: number;
+  readonly host: string;
+  readonly nonce?: string;
+  readonly startKey?: string;
+}
+
+/** `/proc/<pid>/stat` field 22 (starttime, clock ticks since boot); undefined off Linux or for a gone process. */
+export function processStartKey(pid: number): string | undefined {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const rest = stat.slice(stat.lastIndexOf(")") + 2).split(" "); // after "pid (comm) ": field 3 onward
+    return rest[19] === undefined || rest[19] === "" ? undefined : rest[19];
+  } catch {
+    return undefined;
+  }
+}
+
 export type QueuedJourneyExecutor = (call: QueuedJourneyRecord["call"]) => Promise<QueuedJourneyRun>;
 
 export interface DrainMissionQueueOptions {
@@ -162,9 +183,11 @@ export interface DrainMissionQueueOptions {
   /** Called once per mission as it finishes (a `--watch` drain streams these). */
   readonly onMission?: (m: DrainedMission) => void;
   /** This drain's identity, recorded on each claim (default: this process and host). */
-  readonly owner?: { readonly pid: number; readonly host: string };
+  readonly owner?: DrainIdentity;
   /** Is a process on this host alive? (default: `process.kill(pid, 0)`) */
   readonly isAlive?: (pid: number) => boolean;
+  /** A process's start time key, or undefined when it cannot be read (default: Linux `/proc/<pid>/stat`). A reused PID has another one. */
+  readonly processStart?: (pid: number) => string | undefined;
   /** A `running` mission whose drain cannot be checked (another host, an old claim) is abandoned after this long (default 12h). */
   readonly orphanAfterMs?: number;
   /** #797: the queued Journey calls (`queue_journey` / `journey queue`), drained after the missions, oldest first. */
@@ -189,7 +212,7 @@ export function needsModel(mission: QueuedMission): boolean {
  */
 export async function drainMissionQueue(opts: DrainMissionQueueOptions): Promise<DrainReport> {
   const now = opts.nowIso ?? (() => clock.nowIso());
-  const self = opts.owner ?? { pid: process.pid, host: hostname() };
+  const self = drainIdentity(opts);
   const recovered = await recoverOrphans(opts, self, now);
   const queued = (await opts.queue.list())
     .filter((m) => m.status === "queued")
@@ -260,6 +283,12 @@ export async function drainMissionQueue(opts: DrainMissionQueueOptions): Promise
   return { ran, recovered, skipped, ...(journeys.length === 0 ? {} : { journeys }), ...(journeysRecovered.length === 0 ? {} : { journeysRecovered }) };
 }
 
+function drainIdentity(opts: Pick<DrainMissionQueueOptions, "owner" | "processStart">): DrainIdentity {
+  if (opts.owner !== undefined) return opts.owner;
+  const startKey = (opts.processStart ?? processStartKey)(process.pid);
+  return { pid: process.pid, host: hostname(), nonce: randomUUID(), ...(startKey === undefined ? {} : { startKey }) };
+}
+
 /**
  * Whether a `running` claim belongs to a drain that died (GAPS 20; the rule `recoverOrphans` applies to
  * missions): a claim of this process is its own; on this host, its process is gone; when that cannot be
@@ -269,17 +298,29 @@ export async function drainMissionQueue(opts: DrainMissionQueueOptions): Promise
 function orphanError(
   owner: ClaimOwner | null,
   startedIso: string,
-  opts: Pick<DrainMissionQueueOptions, "isAlive" | "orphanAfterMs">,
-  self: { readonly pid: number; readonly host: string },
+  opts: Pick<DrainMissionQueueOptions, "isAlive" | "orphanAfterMs" | "processStart">,
+  self: DrainIdentity,
   now: () => string,
+  stage: "running" | "queued" = "running",
 ): string | undefined {
   const isAlive = opts.isAlive ?? processAlive;
+  const processStart = opts.processStart ?? processStartKey;
   const orphanAfterMs = opts.orphanAfterMs ?? ORPHAN_AFTER_MS;
-  if (owner !== null && owner.host === self.host && owner.pid === self.pid) return undefined;
+  const sameDrain = owner !== null && owner.host === self.host && owner.pid === self.pid && (owner.nonce === undefined || self.nonce === undefined || owner.nonce === self.nonce);
+  if (sameDrain) return undefined;
   const checkable = owner !== null && owner.host === self.host;
-  const dead = checkable ? !isAlive(owner.pid) : Date.parse(now()) - Date.parse(startedIso) > orphanAfterMs;
+  // Alive means the PID exists AND is the process that claimed: a reused PID has another start time.
+  const claimant = (o: ClaimOwner): boolean => {
+    if (!isAlive(o.pid)) return false;
+    const now = o.startKey === undefined ? undefined : processStart(o.pid);
+    return o.startKey === undefined || now === undefined || now === o.startKey;
+  };
+  const dead = checkable ? !claimant(owner) : Date.parse(now()) - Date.parse(startedIso) > orphanAfterMs;
   if (!dead) return undefined;
   const who = owner === null ? "its drain" : `its drain (pid ${owner.pid} on ${owner.host})`;
+  if (stage === "queued") {
+    return `${who} claimed it and stopped before starting it; nothing ran — enqueue it again to retry`;
+  }
   return checkable
     ? `${who} stopped without finishing it; it was not re-run, since it may already have sent writes — enqueue it again to retry`
     : `${who} has not finished it after ${Math.round(orphanAfterMs / 3_600_000)}h; recorded failed, not re-run, since it may already have sent writes — enqueue it again to retry`;
@@ -288,15 +329,16 @@ function orphanError(
 /** GAPS 20: a queued Journey call a dead drain left `running` is recorded `failed`, never re-run (it may have sent writes). */
 async function recoverOrphanJourneyCalls(
   store: JourneyCallQueueStore,
-  opts: Pick<DrainMissionQueueOptions, "isAlive" | "orphanAfterMs">,
-  self: { readonly pid: number; readonly host: string },
+  opts: Pick<DrainMissionQueueOptions, "isAlive" | "orphanAfterMs" | "processStart">,
+  self: DrainIdentity,
   now: () => string,
 ): Promise<RecoveredJourneyCall[]> {
   const out: RecoveredJourneyCall[] = [];
   for (const r of await store.list()) {
-    if (r.status !== "running") continue;
+    if (r.status !== "running" && r.status !== "queued") continue;
     const owner = await store.claimOwner(r.id);
-    const error = orphanError(owner, r.startedAtIso ?? owner?.claimedAtIso ?? r.enqueuedAtIso, opts, self, now);
+    if (r.status === "queued" && owner === null) continue; // never claimed
+    const error = orphanError(owner, r.startedAtIso ?? owner?.claimedAtIso ?? r.enqueuedAtIso, opts, self, now, r.status);
     if (error === undefined) continue;
     await store.update({ ...r, status: "failed", finishedAtIso: now(), error });
     out.push({ callId: r.id, error });
@@ -311,7 +353,7 @@ async function recoverOrphanJourneyCalls(
  */
 async function drainJourneyCalls(
   calls: NonNullable<DrainMissionQueueOptions["journeyCalls"]>,
-  self: { readonly pid: number; readonly host: string },
+  self: DrainIdentity,
   now: () => string,
 ): Promise<DrainedJourneyCall[]> {
   const queued = (await calls.store.list()).filter((r) => r.status === "queued").sort((a, b) => a.enqueuedAtIso.localeCompare(b.enqueuedAtIso));
@@ -329,7 +371,10 @@ async function drainJourneyCalls(
       await calls.store.update({ ...running, status: "done", finishedAtIso: now(), outcome: run.outcome, exitCode: run.exitCode, ...extra });
       out.push({ callId: record.id, journey, status: "done", outcome: run.outcome, exitCode: run.exitCode, ...extra });
     } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
+      // M2: the executor masked the run's own secrets in what it threw; the shared rule masks the rest
+      // (URL credentials, named credentials, credential shapes) before the message is stored or returned.
+      const { redactSensitiveText } = await import("./terminal-result.js");
+      const error = redactSensitiveText(err instanceof Error ? err.message : String(err), []);
       const c = (err as { code?: unknown } | null)?.code;
       const code = typeof c === "string" && /^E_[A-Z0-9_]+$/.test(c) ? c : undefined;
       await calls.store.update({ ...running, status: "failed", finishedAtIso: now(), error, ...(code === undefined ? {} : { code }) });
@@ -337,6 +382,22 @@ async function drainJourneyCalls(
     }
   }
   return out;
+}
+
+/**
+ * M1: a queued call never carries a secret value. The queue tool refuses one before it is written, but the
+ * file can be edited by hand: the drain checks again against the Journey's declared secrets (a credential-like
+ * name, or one the Journey declares `secret: true`), before any browser, and names the parameter only.
+ */
+export class SecretParamInQueueError extends Error {
+  readonly code = "E_SECRET_PARAM_IN_QUEUE";
+  constructor(readonly journeyId: string, readonly params: readonly string[]) {
+    super(
+      `E_SECRET_PARAM_IN_QUEUE: the queued call to journey '${journeyId}' carries a value for secret parameter${params.length === 1 ? "" : "s"} ${params.join(", ")}; a queued call never holds a secret, so nothing ran. ` +
+        `Remove it from the queue file and enqueue the call again without it: the run meets the secret with its secret mode (the target's targets.json secretFields, or a hold a person completes).`,
+    );
+    this.name = "SecretParamInQueueError";
+  }
 }
 
 /** #427: how long a queued mission's pre-flight auth check may take to load its start page. */
@@ -365,14 +426,15 @@ function processAlive(pid: number): boolean {
  */
 async function recoverOrphans(
   opts: DrainMissionQueueOptions,
-  self: { readonly pid: number; readonly host: string },
+  self: DrainIdentity,
   now: () => string,
 ): Promise<RecoveredMission[]> {
   const out: RecoveredMission[] = [];
   for (const m of await opts.queue.list()) {
-    if (m.status !== "running") continue;
+    if (m.status !== "running" && m.status !== "queued") continue;
     const owner = await opts.queue.claimOwner(m.id);
-    const error = orphanError(owner, m.startedAtIso ?? owner?.claimedAtIso ?? m.enqueuedAtIso, opts, self, now);
+    if (m.status === "queued" && owner === null) continue; // never claimed
+    const error = orphanError(owner, m.startedAtIso ?? owner?.claimedAtIso ?? m.enqueuedAtIso, opts, self, now, m.status);
     if (error === undefined) continue; // this drain's own, or possibly still running
     await opts.queue.update({ ...m, status: "failed", finishedAtIso: now(), error });
     out.push({ missionId: m.id, error });
@@ -738,7 +800,7 @@ function runQueuedMission(opts: RealExecutorOptions): (job: Parameters<QueuedMis
       if (jobCheck !== undefined && !jobCheck.ok) throw Object.assign(new Error(`${jobCheck.code}: ${jobCheck.message}`), { code: jobCheck.code });
       const r = await runExploration({
         ...common,
-        ...(jobCheck?.ok !== true ? {} : jobCheck.reader !== undefined ? { doneCheck: jobCheck.reader } : { doneCheckBasis: jobCheck.basis }),
+        ...jobCheckRunOptions(jobCheck),
         doneCheckPolicy,
         ...(mission.requireDoneCheck === true ? { requireDoneCheck: true } : {}),
         url: target.baseUrl,
@@ -794,7 +856,12 @@ export async function runQueuedJourneyCall(call: QueuedJourneyCall, deps: Queued
     environment,
     targetsFile: deps.targetsFile,
     expectedHash: call.journey.hash,
-    run: (decision) => deps.run({ id: call.journey.id, params: { ...(call.params ?? {}) }, environment, decision }),
+    run: (decision) => {
+      // M1: what the gate read, so the check is against the Journey that runs (a hand-edited file included).
+      const carried = decision === undefined ? [] : secretParamsCarriedBy(decision.journey, call.params ?? {});
+      if (carried.length > 0) throw new SecretParamInQueueError(call.journey.id, carried);
+      return deps.run({ id: call.journey.id, params: { ...(call.params ?? {}) }, environment, decision });
+    },
   });
 }
 
@@ -830,8 +897,11 @@ export function realQueuedJourneyExecutor(opts: RealJourneyExecutorOptions): Que
     const { runJourneyProgrammatically } = await import("./journey-api.js");
     const { runWithDoneCheck } = await import("./journey-done-check-hook.js");
     const { resolveCatalogDir } = await import("./catalog-api.js");
+    const { redactErrorSecrets } = await import("./journey-api.js");
     // The run's id: its record's key, which names its evidence directory (`journey-evidence-<runId>`).
     let runId: string | undefined;
+    // M2: the secret values this run was given (the call's, and the targets.json binding's), to mask in a failure.
+    const runSecrets = new Set<string>();
     try {
       const result = await runAsMcpInvocation(() =>
         withJourneyRunRecord({ channel: "queue", id: call.journey.id, params: call.params ?? {}, logsRoot: opts.logsRoot, evidenceKeyFile: opts.evidenceKeyFile }, (runRecorder) => {
@@ -849,6 +919,7 @@ export function realQueuedJourneyExecutor(opts: RealJourneyExecutorOptions): Que
                   decision !== undefined && fields.length > 0 && missingSecretParams(decision.journey, params).length > 0
                     ? withSecretParamsFor(decision.journey, { id, params, flags: [], targetFields: fields, targetOrigin: decision.target.origin, env: opts.secretEnv ?? process.env })
                     : { params };
+                if (decision !== undefined) for (const v of secretParamValues(decision.journey, bound.params)) runSecrets.add(v);
                 // GAPS 21 (#800): the linked job's done check, read as `journey run` reads it.
                 return runWithDoneCheck({
                   catalogDir: resolveCatalogDir(opts.catalogDir),
@@ -891,7 +962,9 @@ export function realQueuedJourneyExecutor(opts: RealJourneyExecutorOptions): Que
       // 0.30.0 §5.4: held for a person (`jevitate inbox approve <holdId>`, then `inbox resume`): it proves nothing yet.
       const held = heldOutcomeOf(err);
       if (held !== undefined) return { outcome: "held", exitCode: 2, ...(runId === undefined ? {} : { runId }), ...(typeof held.code === "string" ? { code: held.code } : {}) };
-      throw err;
+      // A non-Error carries no stack: its text is masked here, as an Error's message and stack are.
+      if (!(err instanceof Error) && runSecrets.size > 0) throw new Error(redactText(String(err), [...runSecrets]));
+      throw redactErrorSecrets(err, [...runSecrets]);
     }
   };
 }

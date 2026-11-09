@@ -3,7 +3,10 @@
 //
 //   JEVITATE_BIN=packages/cli/dist/bin.js node scripts/nav-lab/run-matrix.mjs --out <dir> [--replicates 3]
 //       [--concurrency 2] [--quiet-lock <file>] [--max-load 20] [--max-usd 10] [--cases a,b]
-//       [--guards clean:J1,clean:J2,j3-deadend:J3]
+//       [--guards clean:J1,clean:J2,j3-deadend:J3] [--job page|http]
+//
+// --job page|http (rc-030) runs every case cell as `explore --job` against the lab's own done state
+// (run-cell.mjs LAB_JOB_CHECKS), keyed apart from judgment-only cells; guard cells are unchanged.
 //
 // --guards adds the accuracy lab's goal-strategy cells, run by its own unchanged runCell (results in
 // <out>/accuracy/), each with one line in <out>/guards.jsonl that also holds decisions and cost.
@@ -18,13 +21,13 @@ import { loadavg } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCell as runAccuracyCell } from "../accuracy-lab/run-cell.mjs";
-import { cellKey, costOf, loadGroundTruth, runCell } from "./run-cell.mjs";
+import { cellKey, costOf, LAB_JOB_CHECKS, loadGroundTruth, runCell } from "./run-cell.mjs";
 
 /** Every cell of the matrix, replicate by replicate, so an early stop still covers each case. */
-export function buildCells(replicates, caseIds = Object.keys(loadGroundTruth().cases)) {
+export function buildCells(replicates, caseIds = Object.keys(loadGroundTruth().cases), jobCheck = undefined) {
   const cells = [];
   for (let replicate = 0; replicate < replicates; replicate += 1) {
-    for (const id of caseIds) cells.push({ case: id, replicate });
+    for (const id of caseIds) cells.push({ case: id, replicate, ...(jobCheck ? { jobCheck } : {}) });
   }
   return cells;
 }
@@ -87,7 +90,7 @@ async function main() {
   };
   const outDir = arg("--out");
   if (!outDir) {
-    process.stderr.write("usage: node run-matrix.mjs --out <dir> [--replicates 3] [--concurrency 2] [--quiet-lock f] [--max-load 20] [--max-usd 10] [--cases a,b]\n");
+    process.stderr.write("usage: node run-matrix.mjs --out <dir> [--replicates 3] [--concurrency 2] [--quiet-lock f] [--max-load 20] [--max-usd 10] [--cases a,b] [--guards v:J,…] [--job page|http]\n");
     process.exit(2);
   }
   mkdirSync(outDir, { recursive: true });
@@ -97,6 +100,11 @@ async function main() {
   const maxLoad = Number(arg("--max-load", "20"));
   const maxUsd = Number(arg("--max-usd", "10"));
   const only = arg("--cases");
+  const jobCheck = arg("--job");
+  if (jobCheck !== undefined && !(jobCheck in LAB_JOB_CHECKS)) {
+    process.stderr.write(`--job must be one of ${Object.keys(LAB_JOB_CHECKS).join(", ")}\n`);
+    process.exit(2);
+  }
   const logPath = join(outDir, "matrix.log");
   const log = (msg) => {
     const line = `${new Date().toISOString()} ${msg}\n`;
@@ -111,7 +119,7 @@ async function main() {
   const guards = (arg("--guards") ?? "").split(",").filter(Boolean).map((g) => g.split(":"));
   const guardCells = guards.flatMap(([variant, job]) => Array.from({ length: replicates }, (_, replicate) => ({ case: `accuracy:${variant}:${job}`, variant, job, replicate })));
   const noCases = only === "none";
-  const queue = [...(noCases ? [] : buildCells(replicates, only ? only.split(",") : undefined)), ...guardCells].filter((c) => !done.has(cellKey(c)));
+  const queue = [...(noCases ? [] : buildCells(replicates, only ? only.split(",") : undefined, jobCheck)), ...guardCells].filter((c) => !done.has(cellKey(c)));
   log(`start: ${queue.length} cells to run, ${done.size} recorded, $${spent.toFixed(4)} spent`);
 
   let overBudget = false;
@@ -136,9 +144,9 @@ async function main() {
       if (!cell) return;
       log(`run  ${cellKey(cell)}`);
       try {
-        const line = cell.variant ? await runGuard(cell, outDir, 25) : await runCell({ caseId: cell.case, replicate: cell.replicate, outDir });
+        const line = cell.variant ? await runGuard(cell, outDir, 25) : await runCell({ caseId: cell.case, replicate: cell.replicate, outDir, ...(cell.jobCheck ? { jobCheck: cell.jobCheck } : {}) });
         spent += line.costUsd ?? 0;
-        log(`done ${cellKey(cell)} goal=${line.goalOutcome} reason=${line.goalReason} exit=${line.exitCode} labDone=${line.done} decisions=${line.decisions} ${Math.round(line.durationMs / 1000)}s total=$${spent.toFixed(4)}`);
+        log(`done ${cellKey(cell)} goal=${line.goalOutcome} reason=${line.goalReason} exit=${line.exitCode} labDone=${line.done}${line.job ? ` job=${line.job.attainment}/${line.job.basis}${line.job.reason ? `(${line.job.reason})` : ""}` : ""} decisions=${line.decisions} ${Math.round(line.durationMs / 1000)}s total=$${spent.toFixed(4)}`);
         if (spent > maxUsd) overBudget = true;
       } catch (err) {
         log(`cell failed ${cellKey(cell)}: ${err && err.message ? err.message : err}`);

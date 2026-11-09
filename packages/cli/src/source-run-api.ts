@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { prepareMcpRunGuard } from "./mcp-run-guard.js";
 import { guardRequestWithMode, resolveSurfaceRunMode, runModeRecord, type RunModeRecord } from "./run-surface-mode.js";
 import type { RunTarget } from "./journey-run-mode-gate.js";
@@ -28,6 +29,11 @@ import type { SourceApiDeps } from "./source-api.js";
 import { inMcpInvocation } from "./approval-provenance.js";
 import { SecretParamOverMcpError, secretParamArgvWarning, secretParamsCarriedBy, withSecretParamsFor } from "./secret-params.js";
 import { JourneyRequiresAuthError, journeyFixtureBaseDir, redactErrorSecrets, redactSecretParams } from "./journey-api.js";
+import { doneCheckRunHooks, inDoneCheckScope } from "./journey-done-check-hook.js";
+import type { RunHookContext } from "./journey-run-hooks.js";
+import { resolveCatalogDir } from "./catalog-api.js";
+import type { JobVerdict } from "@jevitate/adjudicator";
+import type { DoneCheckPolicy } from "@jevitate/domain";
 
 /**
  * The runner seam for a source-resolved Journey. Takes the ALREADY-GATED
@@ -81,6 +87,11 @@ export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params
 
   validateParams(journeyParamSchema(file), params);
 
+  // H5: the job's done check, read as `journey run` reads it: before step 1 (a fresh context, before the run's
+  // browser opens) and after the end state. It reads only inside the done-check scope `runSourceJourney` opens.
+  const hookCtx: RunHookContext = { journey: file, params, channel: undefined, mode: runMode?.mode, evidence: undefined, target: { origin: file.recording.site } };
+  await doneCheckRunHooks.validateParams(hookCtx);
+
   // The browser allowlist is the Journey's authorized origin set — the base
   // site plus every gate-approved declared origin.
   const allowedOrigins = [...new Set([file.recording.site, ...file.declaredOrigins])];
@@ -115,6 +126,7 @@ export const realResolvedJourneyRunner: RunResolvedJourney = async (file, params
     try {
       const result = await outcomeChecks.run(actor, () => runner.run({ journey: file, params, policy }));
       runGuard?.check();
+      await doneCheckRunHooks.readDoneCheck({ ...hookCtx, page: session.page, result });
       return result;
     } finally {
       await gate.done();
@@ -163,7 +175,16 @@ export interface RunSourceJourneyRequest {
   secretFields?: readonly string[];
   /** Where a `--secret-field` `env:` source is read (default `process.env`). */
   secretEnv?: Readonly<Record<string, string | undefined>>;
+  /** H5: the project data dir holding `jobs.json`/`project.json` the done check is read from (default the project's). */
+  catalogDir?: string | null;
+  /** H5: the project's journeys dir (the catalog's Journey links); default `<catalogDir>/journeys`. */
+  journeysDir?: string;
+  /** H5: the policy the job verdict folds with (default project.json's `doneCheckPolicy`). */
+  doneCheckPolicy?: DoneCheckPolicy;
 }
+
+/** H5: a source run's result, with its job verdict and the policy the surface folds it with. */
+export type SourceJourneyRunResult = JourneyRunResult & { readonly run: RunModeRecord; readonly job?: JobVerdict; readonly doneCheckPolicy: DoneCheckPolicy };
 
 /** Resolves a registered source's recorded pin, or throws `UnknownSourceError`
  *  (fail-closed) — a source the lock does not know about is never treated as
@@ -194,7 +215,7 @@ async function requireEntry(lockPath: string, name: string): Promise<SourceEntry
 export async function runSourceJourney(
   deps: SourceRunApiDeps,
   req: RunSourceJourneyRequest,
-): Promise<JourneyRunResult> {
+): Promise<SourceJourneyRunResult> {
   // Unknown/unregistered source -> UnknownSourceError, before any run.
   const entry = await requireEntry(deps.lockPath, req.sourceName);
 
@@ -237,9 +258,17 @@ export async function runSourceJourney(
   const run = deps.runJourney ?? realResolvedJourneyRunner;
   // #399: a secret parameter (e.g. a token in a navigate URL) never comes back — not in the
   // result, not in an escaping error — exactly as `journey run` redacts it.
+  // H5: the run reads its job's done check inside this scope; the result carries the verdict.
+  const catalogDir = req.catalogDir === undefined ? resolveCatalogDir(undefined) : req.catalogDir;
+  const doneCheck = {
+    catalogDir,
+    journeysDir: req.journeysDir ?? (catalogDir === null ? "journeys" : join(catalogDir, "journeys")),
+    ...(req.storageState === undefined ? {} : { storageState: req.storageState }),
+    ...(req.doneCheckPolicy === undefined ? {} : { policy: req.doneCheckPolicy }),
+  };
   try {
-    const result = await run(file, params, req.policy ?? safeRunPolicy(), req.storageState, req.emulation, req.browser, req.siteGate, decided, modeNotes);
-    const withMode: JourneyRunResult & { readonly run: RunModeRecord } = { ...result, run: runModeRecord(decided, modeNotes) };
+    const { result, job, policy } = await inDoneCheckScope(doneCheck, () => run(file, params, req.policy ?? safeRunPolicy(), req.storageState, req.emulation, req.browser, req.siteGate, decided, modeNotes));
+    const withMode: SourceJourneyRunResult = { ...result, run: runModeRecord(decided, modeNotes), ...(job === undefined ? {} : { job }), doneCheckPolicy: policy };
     return redactSecretParams(withMode, file, params);
   } catch (err) {
     throw redactErrorSecrets(err, secretParamValues(file, params));
