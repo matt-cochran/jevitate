@@ -7,6 +7,7 @@ import { FsJourneyStore, JourneyRegistry, type Journey } from "@jevitate/journey
 import type { BrowserPort, OpenOptions } from "@jevitate/playwright";
 import type { Recording } from "@jevitate/recording";
 import { buildProgram } from "./program.js";
+import { advisoryCatalogDir } from "./done-check-policy.testkit.js";
 import { runCheck, type CheckRunners } from "./check-api.js";
 import { parseSuite } from "./check-suite.js";
 import { initProjectDir } from "./project-dir.js";
@@ -309,6 +310,7 @@ describe("journey run --env / --base-url (CLI)", () => {
     const program = buildProgram({
       profiles: new ProfileManager("/unused"),
       dbPath: join(root, "db.sqlite"),
+      catalogDir: advisoryCatalogDir(root),
       ...(opts.environmentsFile === undefined ? {} : { environmentsFile: opts.environmentsFile }),
       explore: { browserPortFactory: () => port, targetsConfigPath },
     });

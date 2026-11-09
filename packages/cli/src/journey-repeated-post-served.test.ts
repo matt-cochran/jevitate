@@ -10,6 +10,7 @@ import { FsJourneyStore, type Journey, type JourneyNetworkCheck } from "@jevitat
 import type { RecordedStep } from "@jevitate/recording";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
+import { advisoryCatalogDir } from "./done-check-policy.testkit.js";
 
 /**
  * #526 — a step's `responseStatus` check is judged on the requests THAT step sent, and their
@@ -92,6 +93,7 @@ async function run(id: string, steps: RecordedStep[]): Promise<{ exitCode: numbe
     profiles: new ProfileManager("/unused"),
     journeysDir,
     dbPath: join(dir, "no-site-policy.sqlite"),
+    catalogDir: advisoryCatalogDir(dir),
     explore: { browserPortFactory: () => new PlaywrightBrowserPort() },
   });
   program.configureOutput({ writeOut: (s) => out.push(s), writeErr: () => undefined });

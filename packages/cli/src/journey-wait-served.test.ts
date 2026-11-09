@@ -11,6 +11,7 @@ import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import type { OutcomeWait } from "@jevitate/recording";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
+import { advisoryCatalogDir } from "./done-check-policy.testkit.js";
 import { useSkippingTime } from "../../explore/src/testkit.js";
 
 // #304: Node and page time skip idle waits — the 2-minute job below takes ~2 min of PAGE time only.
@@ -112,6 +113,7 @@ async function cli(journeysDir: string, args: string[]): Promise<{ out: string; 
     profiles: new ProfileManager("/unused"),
     journeysDir,
     dbPath: join(dir, "no-site-policy.sqlite"),
+    catalogDir: advisoryCatalogDir(dir),
     explore: { browserPortFactory: () => new PlaywrightBrowserPort() },
   });
   program.configureOutput({ writeOut: (s) => out.push(s), writeErr: () => undefined });
