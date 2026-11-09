@@ -764,6 +764,35 @@ jevitate load run checkout --authorized-origin http://localhost:3000 --concurren
 Over MCP, agents find and run promoted Journeys with `find_capabilities` and `run_journey`
 ([agents.md](./agents.md)).
 
+### Retrying after a crash: reconcile and write receipts
+
+A run that dies after its write (a killed process, a lost connection) leaves the question of whether
+the job already happened. Before a retry or a resume, jevitate reads the done check of the job the
+Journey links (`metadata.job`, see [catalog](./catalog.md)) in a fresh browser context:
+
+```bash
+jevitate journey run checkout --retry --param sku=A1   # reads the done check first
+jevitate inbox resume <hold-id>                        # does the same before the pending write
+```
+
+- A check that reads true means the job happened. The run does not start, and the result says why:
+  `E_RECONCILE_ALREADY_DONE` (exit `2`). On a resume the hold stays in place.
+- A check that cannot be read (a session that will not open, a check that does not lint) is
+  `E_RECONCILE_UNREADABLE` (exit `2`): whether the job happened is unknown, so the write is not repeated.
+- A check that reads false, or a Journey whose job has no done check, runs as before. A plain
+  `journey run` without `--retry` is not reconciled.
+
+This is the whole contract: the done check, not a prepare/commit protocol. No param or extracted value
+appears in the result or the message.
+
+Every run's result also lists its writes as receipts in `writes[]`, one entry per method and path
+shape: `method`, `path` (the route with parameter and id segments masked, such as `/:id/:id`), `status`
+(`2xx`, `3xx`, `4xx`, `5xx`, `aborted`, `unanswered`, or `unknown` when the run could not watch the
+page), `count`, `refused` (present and `true` for a write the run refused and never sent) and, for a
+write off the Journey's own origin, `origin`. A receipt never holds a value, a request or response body,
+or a full URL. The same shapes are in the run's `evidence.json`. A receipt shows what was sent and how it
+was answered; whether the job landed is what the done check answers.
+
 ## Recorded fixtures
 
 `explore-author-journey --fixtures <file>` sets the fixtures up before, and restores them after,
@@ -941,14 +970,21 @@ A value is never guessed. If two secret parameters match one binding, or one par
 nothing runs (`E_JOURNEY_RUN_ARGS`). Bind each by a
 target only its own step has, or give all but one with `--param`.
 
-Over MCP a Journey that needs a secret parameter doesn't run. A value for one is refused by name with
+Over MCP a secret value is still never accepted. A value for a secret parameter is refused by name with
 `E_SECRET_PARAM_OVER_MCP` before anything runs, on `run_journey`, `verify_journey`,
 `journey_readiness`, `chain_journeys`, `demo_journey`, `annotate_journey`, `run_load_test`,
-`run_exploration` and `sources`, and `run_journey` refuses the same way when the parameter is left out.
-`targets.json` is not read for this over MCP: an agent can promote a Journey over MCP, so it could
-choose where the value goes. A person runs it on the CLI, or the Journey signs in with a stored session
-(`storageState`) and needs no secret. A `${setup.x}` reference holds no value and is not refused.
-`run_check` and `run_campaign` read `params` from the suite or spec file, not from the request.
+`run_exploration` and `sources`. What changed in 0.30.0 is the case where the request leaves the secret
+out of `run_journey`: it is handled by the target's run mode, as [run modes](./run-modes.md) describes.
+In automation mode, on a Journey a person approved, the run goes on to the step that needs it and then
+types the value from a `~/.jevitate/targets.json` `secretFields` binding on that origin (`vault-autofill`)
+or holds for a person to finish the step in a headed browser (`jevitate inbox resume`, `visible-handback`).
+In test mode the test target's own `secretFields` supply it, or the run is refused with
+`E_HUMAN_STEP_IN_TEST_MODE`. The value never reaches the model, the result or the evidence. That route
+covers `run_journey` and its holds only: `verify_journey`, `chain_journeys` and the other tools above
+still refuse a Journey that needs a secret, and a secret in a `navigate` URL runs on the CLI only.
+`run_check` and `run_campaign` read `params` from the suite or spec file, not from the request, and a
+literal secret in that file stays a documented limit. On the CLI, `regression run`/`capture`,
+`verify-fix` and `journey migrate --labels` take `--param` only and print the argv warning by name.
 
 **Which names count.** A parameter is secret when it declares `secret: true`, or when its name reads
 as a credential. The name check is deliberately broad, since a credential that slips through has no
