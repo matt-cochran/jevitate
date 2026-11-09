@@ -168,7 +168,7 @@ interface DiffFillColumn {
  * for any other non-promoted reason — noise, ambiguous, low-confidence
  * variable) is left completely untouched on `base`, so its step stays
  * `{redacted:true}` in the returned `Recording`. `@jevitate/interpreter`'s
- * `run-step.ts` throws `"cannot fill with a redacted constant value"` when
+ * `run-step.ts` throws a typed `RedactedFillError` (`E_REDACTED_FILL`) when
  * it hits such a step during replay — so this function's output is only
  * genuinely independently replayable when EVERY fill/select column in
  * `diff` was promoted to a `{var}` (i.e. every one was a confident

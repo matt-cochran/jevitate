@@ -21,6 +21,27 @@ export class SelectAlternativeUnavailableError extends Error {
   }
 }
 
+/**
+ * A recorded `fill`/`select` whose value was redacted at recording time (a credential: a password,
+ * a one-time code, a bound secret) has no plaintext to replay. Fail closed — never type the mask, never
+ * guess — naming the field and how to supply its value. The message never carries a value.
+ */
+export class RedactedFillError extends Error {
+  readonly code = "E_REDACTED_FILL";
+  /** The recorded field's name, as a person reads it (its label or accessible name). */
+  readonly field: string;
+  constructor(target: TargetDescriptor) {
+    const field = target.label ?? target.name ?? target.testId ?? target.text ?? target.css ?? "the field";
+    super(
+      `E_REDACTED_FILL: the recorded value for field ${JSON.stringify(field)} is redacted (a credential is never stored), so it cannot be replayed; ` +
+        `supply it at run time: bind the field with --secret-field 'label=${field}=env:VAR' (or a targets.json secretFields entry), ` +
+        "or make the step a secret parameter of the Journey",
+    );
+    this.name = "RedactedFillError";
+    this.field = field;
+  }
+}
+
 /** #579: which live option a `select` mutation must avoid (never chosen, never reported). */
 export interface SelectAlternative {
   readonly avoid: string;
@@ -323,6 +344,7 @@ export async function runStep(
       return { kind: "done" };
     }
     case "fill": {
+      if ("redacted" in step.value && step.value.redacted) throw new RedactedFillError(step.target);
       const text = resolveValue(step.value, vars);
       const field = await strictTarget(actor, step.target, targetOpts);
       if (isBoundSecret(step.value, targetOpts.boundSecretParams)) {
@@ -359,6 +381,7 @@ export async function runStep(
       // #579: a swap-param mutation supplies an `avoid` value instead of the recorded `{var}` — the
       // live <select> names a DIFFERENT enabled, non-empty option; when it has none, fail closed.
       const alternative = targetOpts.selectAlternative?.(index);
+      if (alternative === undefined && "redacted" in step.value && step.value.redacted) throw new RedactedFillError(step.target);
       const chosen = alternative === undefined ? resolveValue(step.value, vars) : undefined;
       const page = actor.ability(BrowseTheWebToken).session.page;
       const locator = await resolveTarget(page, step.target, targetOpts);

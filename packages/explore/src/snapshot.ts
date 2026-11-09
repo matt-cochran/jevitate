@@ -3,6 +3,7 @@ import { descriptorLocator } from "@jevitate/interpreter";
 import { computeDescriptor, isSecretField, targetDisplay } from "@jevitate/recorder";
 import type { TargetDescriptor, TargetDisplay } from "@jevitate/recording";
 import { isCredentialField } from "./auth-completion.js";
+import { markSecretFieldDescriptor } from "./credential-input.js";
 import { contentHash, clock } from "@jevitate/domain";
 import { DEFAULT_BOUNDS } from "./bounds.js";
 import { occluderOf } from "./occlusion.js";
@@ -1015,6 +1016,8 @@ async function readSnapshot(page: Page, opts?: SnapshotOptions): Promise<Snapsho
         { secretField: isSecretField(raw.inputType, raw.autocomplete, [raw.name]) || isCredentialField(control), secrets: opts?.secrets ?? [] },
       );
       if (display !== undefined) CONTROL_DISPLAY.set(kept.descriptor, display);
+      // A value typed into a secret field is recorded redacted, whatever its source (`credential-input.ts`).
+      if (isSecretField(raw.inputType, raw.autocomplete, [raw.name])) markSecretFieldDescriptor(kept.descriptor);
       controls.push(kept);
       keptFacts.push(facts);
     } catch (e) {
