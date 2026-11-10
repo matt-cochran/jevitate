@@ -240,6 +240,27 @@ and the busy indicator. The indicator matches by its description
 (`[data-testid=taste-busy]`, `role=status "Approving…"`) or by its visible words
 (`Approving*`), so a pattern may name either (#687).
 
+### Slow page bootstrap
+
+Goal exploration and `explore-author-journey` accept `--render-wait-ms` for a slow
+authenticated bootstrap or test transport. It sets the finite page-perception
+settle ceiling, including subsequent perceptions and hang confirmation. Values
+must be integers from 1 to 300000; omitting the flag retains the normal 15000 ms
+default and resource-governance behavior.
+
+```bash
+jevitate explore --url http://localhost:3000 --goal "Open Reports" \
+  --success 'urlIncludes:/reports' --render-wait-ms 60000 --real --json
+```
+
+This changes how long code waits, not what proves success. Requests, DOM changes,
+hard failures, and genuinely nonsettling pages remain observable. It neither
+marks an API call as background nor lifts an authorization or write guard.
+Other exploration strategies refuse this flag rather than silently ignore it.
+The direct MCP exploration and authoring tools accept `renderWaitMs`; suite goal
+items and their target defaults use the same field and bounds. Queued missions
+retain their existing fixed schema and the normal engine default.
+
 ### Job-wait budget and the no-progress ceiling
 
 A busy state that outlasts the render ceiling (`ui-no-progress`) is a hang

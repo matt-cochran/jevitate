@@ -155,6 +155,7 @@ export async function runGoalStrategy(ctx: ExploreRunContext): Promise<void> {
   }
   try {
     const result = await runExploration({
+      ...(o.renderWaitMs === undefined ? {} : { renderWaitMs: Number(o.renderWaitMs) }),
         ...(target === undefined ? {} : { target }),
       ...jobCheckRunOptions(jobCheck),
       doneCheckPolicy,
