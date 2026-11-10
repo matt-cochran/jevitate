@@ -2,6 +2,7 @@ import { queueExploration as facadeQueueExploration, aiGenerateText as facadeAiG
 import { FsMissionTargetStore, MissionTargetRegistry, FsMissionQueueStore, MISSION_STRATEGIES, QUEUED_SCREENSHOT_MODES } from "@jevitate/missions";
 import type { McpToolCtx, McpToolGroup } from "./shared.js";
 import { jsonResult, errorResult, redactCredentials } from "./shared.js";
+import { resolveSurfaceRunMode, runModeRecord } from "../run-surface-mode.js";
 
 /** `queue_exploration` and `ai_generate_text`. */
 export function exploreTools(ctx: McpToolCtx): McpToolGroup {
@@ -18,7 +19,18 @@ export function exploreTools(ctx: McpToolCtx): McpToolGroup {
       }
       const targets = new MissionTargetRegistry(new FsMissionTargetStore(deps.missionTargetsDir));
       const queue = new FsMissionQueueStore(deps.missionQueueDir);
-      return facadeQueueExploration(targets, queue, args);
+      const queued = await facadeQueueExploration(targets, queue, args);
+      // 0.30.0 §5: the mode the queued run will be in, from the person-written files for the promoted
+      // target's origin (the request names no trust). The run decides it again from the files when it
+      // starts (mission-queue-runner.ts), so a file changed in between is what counts.
+      const target = await targets.resolve(String((args as { target?: unknown }).target));
+      const decided = resolveSurfaceRunMode({
+        surface: "queue",
+        origin: target.baseUrl,
+        ...(deps.environmentsFile === undefined ? {} : { environmentsFile: deps.environmentsFile }),
+        ...(deps.targetsConfigPath === undefined ? {} : { targetsFile: deps.targetsConfigPath }),
+      });
+      return { ...queued, run: runModeRecord(decided) };
     });
 
   // ai_generate_text: preflight-gated generation. Wired only when a gateway (or
@@ -34,7 +46,7 @@ export function exploreTools(ctx: McpToolCtx): McpToolGroup {
   return {
     queue_exploration: {
       description:
-        "Enqueue an exploration mission against a PROMOTED target. Never runs anything — only queues; `jevitate mission run` drains the queue, and get_mission_result {id: missionId} reports its status/result. strategy: goal-based (goal|feature|route + successAssertion) | coverage | exploratory (novelty-first coverage) | adversarial (optional in-scope route glob) | feature (feature name, optional route glob); a usability review is not queueable — use run_exploration {strategy: usability}. The target's authorized origin plus its declared apiOrigins are the only reachable origins. Refuses unknown/unpromoted targets, over-ceiling budgets and invalid declared `invariants` (an optional closed spec checked around every action; probes GET/HEAD on the target origin only). Optional 'viewport' ({width,height}) or 'device' (a Playwright devices registry name, e.g. \"iPhone 13\") — mutually exclusive (#149); default: Playwright's own default viewport. An unknown device is refused before any browser opens. #255: 'recordVideo' / 'evidenceVideo' (booleans) and 'screenshots' (screens | steps) write media next to the result (listed in it) — a queued request never names a path; 'persona' names a persona in the operator's ~/.jevitate/targets.json for the target's origin (its session, never the caller's). #424: 'minEffort' {minActions, minDistinctStates} (goal-based only) — the minimum exploration before the model may conclude, capped by the budget. Same as `jevitate mission queue`.",
+        "Enqueue an exploration mission against a PROMOTED target. Never runs anything — only queues; `jevitate mission run` drains the queue, and get_mission_result {id: missionId} reports its status/result. strategy: goal-based (goal|feature|route + successAssertion) | coverage | exploratory (novelty-first coverage) | adversarial (optional in-scope route glob) | feature (feature name, optional route glob); a usability review is not queueable — use run_exploration {strategy: usability}. The target's authorized origin plus its declared apiOrigins are the only reachable origins. Refuses unknown/unpromoted targets, over-ceiling budgets and invalid declared `invariants` (an optional closed spec checked around every action; probes GET/HEAD on the target origin only). Optional 'viewport' ({width,height}) or 'device' (a Playwright devices registry name, e.g. \"iPhone 13\") — mutually exclusive (#149); default: Playwright's own default viewport. An unknown device is refused before any browser opens. #255: 'recordVideo' / 'evidenceVideo' (booleans) and 'screenshots' (screens | steps) write media next to the result (listed in it) — a queued request never names a path; 'persona' names a persona in the operator's ~/.jevitate/targets.json for the target's origin (its session, never the caller's). #424: 'minEffort' {minActions, minDistinctStates} (goal-based only) — the minimum exploration before the model may conclude, capped by the budget. #800: 'job' (goal-based with a goal: a catalog job id in .jevitate/jobs.json) — its done check verifies the run, read in fresh contexts when the mission runs, as run_exploration {job}; 'requireDoneCheck' (boolean) makes an unverified job exit 2 even when project.json says advisory. Same as `jevitate mission queue`.",
       inputSchema: {
         type: "object",
         properties: {
@@ -73,6 +85,9 @@ export function exploreTools(ctx: McpToolCtx): McpToolGroup {
             type: "object",
             properties: { minActions: { type: "number" }, minDistinctStates: { type: "number" } },
           },
+          // #800 (goal-based with a goal): the job whose done check verifies the run, resolved when it runs.
+          job: { type: "string" },
+          requireDoneCheck: { type: "boolean" },
         },
         required: ["target"],
       },

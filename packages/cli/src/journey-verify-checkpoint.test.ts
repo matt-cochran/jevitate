@@ -7,7 +7,11 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ProfileManager } from "@jevitate/daemon";
 import { FakeClock, installClock, resetClock } from "@jevitate/domain";
-import { FsJourneyStore, ParamValidationError, assertionSiteKey, journeyAssertions, judgeAssertions, mutationProofVerdict, planJourneyMutations, type Journey, type JourneyAssertionSite, type MutationPlan, type ReplayPace } from "@jevitate/journey";
+import { FsJourneyStore, ParamValidationError, assertionSiteKey, journeyAssertions, planJourneyMutations, type Journey, type JourneyAssertionSite, type MutationPlan, type ReplayPace, mutationPlanSites, type MutationRunResult } from "@jevitate/journey";
+import { judgeAssertions as judgeSites, mutationProofVerdict } from "@jevitate/adjudicator";
+/** #812: the adjudicator's judging of a Journey's own assertion sites, as `journey verify` gathers them. */
+const judgeAssertions = (j: Journey, plan: MutationPlan, results: ReadonlyMap<string, MutationRunResult>) =>
+  judgeSites(journeyAssertions(j), plan, results, new Map(mutationPlanSites(j).map((s) => [s.site, s])));
 import { registerJourneyVerify, type JourneyVerifySeams } from "./journey-cli/verify.js";
 import { JourneyVerifyStalledError, planJourneyVerification, verifyJourneyMutations, type JourneyVerifyReport } from "./journey-verify.js";
 import {
@@ -56,7 +60,7 @@ type Run = NonNullable<JourneyVerifySeams["run"]>;
 type RunResult = Awaited<ReturnType<Run>>;
 const passed = { outcome: "ok", output: {} } as RunResult;
 const requestBroken = { outcome: "quarantined", reason: `step 3 request check failed: ${APP_TEXT}`, outcomeFailures: [{ where: "step-request", step: 3, checkIndex: 0 }], blockedWrites: [{ method: "POST", path: `/api/save?who=${APP_TEXT}` }] } as unknown as RunResult;
-const stepBroken = { outcome: "quarantined", reason: `step 2 postcondition failed: ${APP_TEXT}`, at: 1 } as RunResult;
+const stepBroken = { outcome: "quarantined", reason: `step 2 postcondition failed: ${APP_TEXT}`, at: 1, failurePhase: "postcondition" } as RunResult;
 
 function journeyOf(name = "Save text"): Journey {
   return {
@@ -216,7 +220,7 @@ describe("the progress receipt", () => {
       return proofResult(n);
     });
     const report = await prove(run, request(false));
-    expect(report.verdict).toBe("proven");
+    expect(report.verdict).toBe("sensitive");
     expect(report.reusedPairs).toBe(0);
     expect(seen).toEqual([
       { completed: 0, currentPair: null, lastResultClass: null },
@@ -229,7 +233,7 @@ describe("the progress receipt", () => {
       receipt: "valid",
       verifier: "exited",
       resume: { possible: false, refusal: "finished" },
-      progress: { state: "finished", verdict: "proven", completed: 3, total: 3, build: BUILD, verifierPid: process.pid },
+      progress: { state: "finished", verdict: "sensitive", completed: 3, total: 3, build: BUILD, verifierPid: process.pid },
     });
   });
 
@@ -274,7 +278,7 @@ describe("the progress receipt", () => {
       if (n === 2) sibling = openProofCheckpoint(request(false, { onNotice: (t) => void notices.push(t) }), { journey, journeyHash: "other", plan, params: {}, sites: journeyAssertions(journey) });
       return proofResult(n);
     });
-    expect((await prove(run, request(false))).verdict).toBe("proven");
+    expect((await prove(run, request(false))).verdict).toBe("sensitive");
     expect((await sibling)?.session).toBeUndefined();
     expect(notices.join()).toContain("owns");
     expect(readBody().completed).toHaveLength(3);
@@ -298,7 +302,7 @@ describe("the progress receipt", () => {
       return proofResult(n);
     });
     const report = await prove(run, request(false, { onNotice: (t) => void notices.push(t) })).finally(() => chmodSync(parent, 0o755));
-    expect(report.verdict).toBe("proven");
+    expect(report.verdict).toBe("sensitive");
     expect(notices.filter((t) => t.includes("could not be saved"))).toHaveLength(1);
   });
 
@@ -334,7 +338,7 @@ describe("resume", () => {
       return n === 1 ? passed : n === 2 ? requestBroken : n === 3 ? stepBroken : passed;
     });
     const report = await prove(resumed.run, request(true));
-    expect(report.verdict).toBe("proven");
+    expect(report.verdict).toBe("sensitive");
     expect(report.reusedPairs).toBe(1);
     // Base, block-write:3 (the interrupted pair, run again), stale-value:2, closing.
     expect(resumed.calls()).toBe(4);
@@ -343,7 +347,7 @@ describe("resume", () => {
       ["block-write:3", undefined],
       ["stale-value:2", undefined],
     ]);
-    expect(JSON.parse(readFileSync(verifyRecordPath(join(dir, "journeys"), ID), "utf8"))).toMatchObject({ verdict: "proven", reusedPairs: 1 });
+    expect(JSON.parse(readFileSync(verifyRecordPath(join(dir, "journeys"), ID), "utf8"))).toMatchObject({ verdict: "sensitive", reusedPairs: 1 });
   });
 
   it("runs the closing replay even with every pair reused, and its failure leaves no proof", async () => {
@@ -365,7 +369,7 @@ describe("resume", () => {
     expect(existsSync(verifyRecordPath(join(dir, "journeys"), ID))).toBe(false);
     expect(readBody().completed).toHaveLength(1);
     const again = scripted((n) => (n === 1 ? passed : n === 2 ? requestBroken : n === 3 ? stepBroken : passed));
-    expect((await prove(again.run, request(true))).verdict).toBe("proven");
+    expect((await prove(again.run, request(true))).verdict).toBe("sensitive");
   });
 
   it("can follow a resume with another resume, keeping the pairs of both", async () => {
@@ -375,7 +379,7 @@ describe("resume", () => {
     expect(readBody().completed.map((p) => p.id)).toEqual(["skip:3", "block-write:3"]);
     const third = scripted((n) => (n === 1 ? passed : n === 2 ? stepBroken : passed));
     const report = await prove(third.run, request(true));
-    expect(report).toMatchObject({ verdict: "proven", reusedPairs: 2 });
+    expect(report).toMatchObject({ verdict: "sensitive", reusedPairs: 2 });
   });
 
   it("is free to resume after a proof ended in a process that goes on (an MCP server)", async () => {
@@ -548,8 +552,8 @@ describe("a proof that ended on an errored independence replay", () => {
     const resumed = scripted(proofResult);
     const report = await prove(resumed.run, request(true));
     expect(resumed.independenceRuns()).toBe(1);
-    expect(report.verdict).toBe("proven");
-    expect(readBody()).toMatchObject({ state: "finished", verdict: "proven", independence: "passed", taint: { isolation: null } });
+    expect(report.verdict).toBe("sensitive");
+    expect(readBody()).toMatchObject({ state: "finished", verdict: "sensitive", independence: "passed", taint: { isolation: null } });
   });
 
   it("never reads the old answer: it errors again and the proof stays inconclusive, and a third try can still repair it", async () => {
@@ -557,7 +561,7 @@ describe("a proof that ended on an errored independence replay", () => {
     const again = await prove(scripted(proofResult, new Error("no browser")).run, request(true));
     expect(again.verdict).toBe("inconclusive");
     expect(readBody()).toMatchObject({ errorGap: true, taint: { isolation: "independence-errored" } });
-    expect((await prove(scripted(proofResult).run, request(true))).verdict).toBe("proven");
+    expect((await prove(scripted(proofResult).run, request(true))).verdict).toBe("sensitive");
   });
 
   it("is read fresh: state crossing on the resume's own base is what the proof reports", async () => {
@@ -574,7 +578,7 @@ describe("a proof that ended on an errored independence replay", () => {
     await expect(prove(scripted(() => stall()).run, request(true))).rejects.toBeInstanceOf(JourneyVerifyStalledError);
     expect(readBody().independence).toBeNull();
     const resumed = scripted(proofResult);
-    expect((await prove(resumed.run, request(true))).verdict).toBe("proven");
+    expect((await prove(resumed.run, request(true))).verdict).toBe("sensitive");
     expect(resumed.independenceRuns()).toBe(1);
   });
 
@@ -660,15 +664,15 @@ describe("a resume and an errored pair", () => {
     expect(readVerifyProgress(path, keyFile, ID).resume).toEqual({ possible: true });
     const resumed = labelled(proving);
     const second = await proveLabelled(resumed, true);
-    expect(second).toMatchObject({ verdict: "proven", reusedPairs: 2 });
+    expect(second).toMatchObject({ verdict: "sensitive", reusedPairs: 2 });
     expect(resumed.labels).toEqual(["base", "independence replay, as recorded", "block-write:3", "closing replay, as recorded"]);
     expect(second.mutations.map((m) => [m.id, m.reused])).toEqual([
       ["skip:3", true],
       ["block-write:3", undefined],
       ["stale-value:2", true],
     ]);
-    expect(JSON.parse(readFileSync(verifyRecordPath(join(dir, "journeys"), ID), "utf8"))).toMatchObject({ verdict: "proven", reusedPairs: 2 });
-    expect(readBody()).toMatchObject({ state: "finished", verdict: "proven" });
+    expect(JSON.parse(readFileSync(verifyRecordPath(join(dir, "journeys"), ID), "utf8"))).toMatchObject({ verdict: "sensitive", reusedPairs: 2 });
+    expect(readBody()).toMatchObject({ state: "finished", verdict: "sensitive" });
     expect(readBody().completed.map((p) => p.id)).toEqual(["skip:3", "block-write:3", "stale-value:2"]);
     expect(await refusal(prove(labelled(proving).run, request(true)))).toBe("finished");
   });
@@ -680,7 +684,7 @@ describe("a resume and an errored pair", () => {
     const resumed = labelled(proving);
     const second = await prove(resumed.run, request(true, { onNotice: (t) => notes.push(t) }), { onProgress: resumed.onProgress });
     expect(resumed.labels).toEqual(["base", "independence replay, as recorded", "block-write:3", "stale-value:2", "closing replay, as recorded"]);
-    expect(second).toMatchObject({ verdict: "proven", reusedPairs: 1 });
+    expect(second).toMatchObject({ verdict: "sensitive", reusedPairs: 1 });
     expect(second.mutations.map((m) => [m.id, m.reused])).toEqual([
       ["skip:3", true],
       ["block-write:3", undefined],
@@ -720,7 +724,7 @@ describe("a resume and an errored pair", () => {
     ]);
     const resumed = labelled(proving);
     const report = await proveLabelled(resumed, true);
-    expect(report).toMatchObject({ verdict: "proven", reusedPairs: 1 });
+    expect(report).toMatchObject({ verdict: "sensitive", reusedPairs: 1 });
     expect(resumed.labels).toEqual(["base", "independence replay, as recorded", "block-write:3", "stale-value:2", "closing replay, as recorded"]);
   });
 
@@ -729,7 +733,7 @@ describe("a resume and an errored pair", () => {
     const again = await proveLabelled(labelled(erroringBlock), true);
     expect(again).toMatchObject({ verdict: "inconclusive", reusedPairs: 2 });
     expect(readBody().completed.map((p) => p.id)).toEqual(["skip:3", "block-write:3", "stale-value:2"]);
-    expect((await proveLabelled(labelled(proving), true)).verdict).toBe("proven");
+    expect((await proveLabelled(labelled(proving), true)).verdict).toBe("sensitive");
   });
 
   it("keeps an errored pair on file if the resume dies before it finishes", async () => {
@@ -738,7 +742,7 @@ describe("a resume and an errored pair", () => {
     await expect(proveLabelled(killed, true)).rejects.toBeInstanceOf(JourneyVerifyStalledError);
     expect(readBody().verdict).toBeUndefined();
     const resumed = labelled(proving);
-    expect(await proveLabelled(resumed, true)).toMatchObject({ verdict: "proven", reusedPairs: 2 });
+    expect(await proveLabelled(resumed, true)).toMatchObject({ verdict: "sensitive", reusedPairs: 2 });
     expect(resumed.labels).toContain("block-write:3");
   });
 
@@ -779,7 +783,7 @@ describe("a resume and an errored pair", () => {
   it("the plan's minimum is what a proof that reaches a verdict runs when nothing needs more", async () => {
     const plan = await planJourneyVerification({ dir: join(dir, "journeys"), id: ID, params: {} });
     const l = labelled(proving);
-    expect((await proveLabelled(l, false)).verdict).toBe("proven");
+    expect((await proveLabelled(l, false)).verdict).toBe("sensitive");
     expect(l.labels).toEqual(["base", "independence replay, as recorded", "skip:3", "block-write:3", "stale-value:2", "closing replay, as recorded"]);
     expect(plan.summary.minimumReplays).toBe(l.labels.length);
   });
@@ -803,7 +807,7 @@ describe("a resume and an errored pair", () => {
       delete save.expectRequests;
       save.step.expect = { kind: "visible", target: { testId: "status" } };
       await new FsJourneyStore(join(dir, "journeys")).put(journey);
-      const stopped = { outcome: "quarantined", reason: "step 3 postcondition failed", at: 2 } as RunResult;
+      const stopped = { outcome: "quarantined", reason: "step 3 postcondition failed", at: 2, failurePhase: "postcondition" } as RunResult;
       const endState = { outcome: "quarantined", reason: "end state", outcomeFailures: [{ where: "end-state", index: 0 }] } as unknown as RunResult;
       const l = labelled((label, seen, mutation) => {
         if (label !== "skip:3") return undefined;
@@ -1011,7 +1015,7 @@ describe("resume refuses, by name, and never starts over", () => {
     await prove(run, request(false));
     await pending;
     expect(inner).toBe("live-verifier");
-    expect(readVerifyProgress(path, keyFile, ID).progress?.verdict).toBe("proven");
+    expect(readVerifyProgress(path, keyFile, ID).progress?.verdict).toBe("sensitive");
   });
 
   it("a verifier on another host, which this host cannot check", async () => {
@@ -1084,7 +1088,7 @@ describe("what is at the checkpoint's path", () => {
     expect(readVerifyProgress(path, keyFile, ID)).toMatchObject({ receipt: "not-regular-file", verifier: "none" });
     expect(await refusal(prove(scripted(proofResult).run, request(true)))).toBe("not-regular-file");
     const notices: string[] = [];
-    expect((await prove(scripted(proofResult).run, request(false, { onNotice: (t) => void notices.push(t) }))).verdict).toBe("proven");
+    expect((await prove(scripted(proofResult).run, request(false, { onNotice: (t) => void notices.push(t) }))).verdict).toBe("sensitive");
     expect(notices.join()).toContain("other than a regular file");
     expect(lstatSync(path).isSymbolicLink()).toBe(true);
     expect(readFileSync(target, "utf8")).toBe(held);
@@ -1096,7 +1100,7 @@ describe("what is at the checkpoint's path", () => {
     execFileSync("sh", ["-c", 'mkfifo "$1"', "sh", path]);
     expect(readVerifyProgress(path, keyFile, ID).receipt).toBe("not-regular-file");
     expect(await refusal(prove(scripted(proofResult).run, request(true)))).toBe("not-regular-file");
-    expect((await prove(scripted(proofResult).run, request(false))).verdict).toBe("proven");
+    expect((await prove(scripted(proofResult).run, request(false))).verdict).toBe("sensitive");
   });
 
   it("a directory is no checkpoint", async () => {
@@ -1268,7 +1272,7 @@ describe("MCP (`verify_journey`) and the CLI", () => {
     expect(process.exitCode).toBe(7);
     process.exitCode = undefined;
     release();
-    expect(await proof).toMatchObject({ body: { exitCode: 0, data: { verdict: "proven", reusedPairs: 0 } } });
+    expect(await proof).toMatchObject({ body: { exitCode: 0, data: { verdict: "sensitive", reusedPairs: 0 } } });
   });
 
   it("offer the same resume, reaching the same report field", async () => {
@@ -1281,7 +1285,9 @@ describe("MCP (`verify_journey`) and the CLI", () => {
       return n2 === 1 ? passed : n2 === 2 ? requestBroken : n2 === 3 ? stepBroken : passed;
     };
     const resumed = (await mcp({ id: ID, mutate: true, resume: true })) as unknown as { body: { exitCode: number; data: JourneyVerifyReport } };
-    expect(resumed.body).toMatchObject({ exitCode: 0, data: { verdict: "proven", reusedPairs: 1 } });
+    // #812: the resumed base reports no step to this double, so no independence replay runs on the resume,
+    // and the adjudicator never counts a proof whose replays were not shown independent.
+    expect(resumed.body).toMatchObject({ exitCode: 2, data: { verdict: "inconclusive", reusedPairs: 1, reason: expect.stringContaining("could not establish that the replays stayed independent") } });
   });
 
   it("refuse alike, naming the reason in `data` on both", async () => {

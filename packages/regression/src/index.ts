@@ -4,3 +4,4 @@ export * from "./minimize.js";
 export * from "./commit.js";
 export * from "./oracle.js";
 export * from "./regression-suite.js";
+export * from "./shorten.js";

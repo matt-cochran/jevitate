@@ -11,6 +11,7 @@ import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import type { OutcomeWait } from "@jevitate/recording";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
+import { advisoryCatalogDir } from "./done-check-policy.testkit.js";
 import { useSkippingTime } from "../../explore/src/testkit.js";
 
 // #304: Node and page time skip idle waits — the 2-minute job below takes ~2 min of PAGE time only.
@@ -112,6 +113,7 @@ async function cli(journeysDir: string, args: string[]): Promise<{ out: string; 
     profiles: new ProfileManager("/unused"),
     journeysDir,
     dbPath: join(dir, "no-site-policy.sqlite"),
+    catalogDir: advisoryCatalogDir(dir),
     explore: { browserPortFactory: () => new PlaywrightBrowserPort() },
   });
   program.configureOutput({ writeOut: (s) => out.push(s), writeErr: () => undefined });
@@ -187,7 +189,7 @@ describe("#409 waitFor — a per-step outcome wait for a long-running job (serve
       expect(Number(wait![1])).toBeLessThan(BASE_READS_AT_MOST_MS * 1.25 + 1_000);
     }
     expect(report.assertions.find((a) => a.site === "step:2")).toEqual(expect.objectContaining({ verdict: "sensitive", provedBy: "skip:2" }));
-    expect(report.verdict).toBe("proven");
+    expect(report.verdict).toBe("sensitive");
     expect(r.exitCode).toBe(0);
     // The base, independence, closing and any control replays wait out the 2-minute job, and each mutation a little past it: never the 20 min of `maxMs`, each.
     expect(elapsed).toBeLessThan(ALL_REPLAYS * BASE_READS_AT_MOST_MS * 1.25);

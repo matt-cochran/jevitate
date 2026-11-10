@@ -59,7 +59,7 @@ export async function earlyVerdict(ctx: Adjudication, run: ExploreRun, intermitt
   if (!hasChecks) {
     const succeeded = run.outcome.status === "completed";
     return {
-      outcome: succeeded ? "succeeded" : run.stop === "exhausted" ? "exhausted" : "blocked",
+      outcome: succeeded ? "succeeded" : run.boundary !== undefined ? "boundary" : run.stop === "exhausted" ? "exhausted" : "blocked",
       assertionPassed: succeeded,
       checks: [],
       run,

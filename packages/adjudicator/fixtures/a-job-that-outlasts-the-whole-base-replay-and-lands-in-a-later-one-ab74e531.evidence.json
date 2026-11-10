@@ -1,0 +1,220 @@
+{
+  "schema": "jevitate.evidence",
+  "version": 1,
+  "producedAt": "2026-11-09T12:50:40.241Z",
+  "producer": {
+    "jevitate": "0.29.0-source-e71fb65e",
+    "commit": "e71fb65e"
+  },
+  "subject": {
+    "kind": "mutation-proof",
+    "journey": {
+      "id": "probe",
+      "hash": "0ffae598fd82107e03501c24d9f76218f4460974cff4b31d64b201dc62d7da33"
+    }
+  },
+  "run": {
+    "mode": "automation",
+    "channel": "cli",
+    "target": {
+      "origin": "http://127.0.0.1:44009",
+      "trust": "unknown"
+    },
+    "paramsDigest": "unkeyed",
+    "secretParamNames": []
+  },
+  "steps": [],
+  "writes": {
+    "sent": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "answered": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "aborted": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "openAtClose": {
+      "known": true,
+      "value": 0
+    },
+    "shapes": []
+  },
+  "mutation": {
+    "plan": {
+      "mutations": [
+        {
+          "id": "skip:2",
+          "kind": "skip",
+          "step": 2
+        },
+        {
+          "id": "block-write:2",
+          "kind": "block-write",
+          "step": 2
+        }
+      ],
+      "pairs": [
+        {
+          "site": "step:2",
+          "mutation": "skip:2"
+        },
+        {
+          "site": "step-request:2:0",
+          "mutation": "skip:2"
+        },
+        {
+          "site": "end-state:0",
+          "mutation": "skip:2"
+        },
+        {
+          "site": "step:2",
+          "mutation": "block-write:2"
+        },
+        {
+          "site": "step-request:2:0",
+          "mutation": "block-write:2"
+        },
+        {
+          "site": "end-state:0",
+          "mutation": "block-write:2"
+        }
+      ],
+      "sites": [
+        {
+          "site": "step:1",
+          "check": "page visible"
+        },
+        {
+          "site": "step:2",
+          "check": "page textIncludes"
+        },
+        {
+          "site": "step-request:2:0",
+          "check": "responseStatus POST",
+          "required": true
+        },
+        {
+          "site": "end-state:0",
+          "check": "reloadThen textIncludes",
+          "required": true
+        }
+      ]
+    },
+    "replays": [
+      {
+        "ordinal": 0,
+        "role": "base",
+        "outcome": "passed",
+        "failedSites": [],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 0
+          },
+          "shapes": []
+        }
+      },
+      {
+        "ordinal": 1,
+        "role": "independence",
+        "outcome": "failed",
+        "failedSites": [],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 0
+          },
+          "shapes": []
+        }
+      },
+      {
+        "ordinal": 2,
+        "role": "independence",
+        "outcome": "failed",
+        "failedSites": [],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 0
+          },
+          "shapes": []
+        }
+      },
+      {
+        "ordinal": 3,
+        "role": "independence",
+        "outcome": "failed",
+        "failedSites": [],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 0
+          },
+          "shapes": []
+        }
+      }
+    ],
+    "restore": "none",
+    "isolation": {
+      "known": true,
+      "value": "state-crossed"
+    },
+    "taint": {
+      "note": "state-stuck"
+    }
+  },
+  "judgments": [],
+  "notes": []
+}

@@ -24,7 +24,7 @@ async function seed(dir: string): Promise<void> {
     recording: { version: "1", site: ORIGIN, pages: [] },
   } as never as Journey;
   // #788: MCP runs a promoted Journey whose approval is current.
-  journey.metadata.approval = { contentHash: journeyReviewHash(journey), at: "2026-09-25T00:00:00Z" };
+  journey.metadata.approval = { contentHash: journeyReviewHash(journey), at: "2026-09-25T00:00:00Z", provenance: { channel: "tty", agentSignals: [] } };
   await new JourneyRegistry(new FsJourneyStore(dir)).put(journey);
 }
 

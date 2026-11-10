@@ -10,7 +10,7 @@
  * replay whose steps all passed but whose outcome is absent is a failed run, never `ok`.
  */
 import type { Page } from "playwright";
-import { isLoadRefusedName, journeyEndState, type Journey } from "@jevitate/journey";
+import { isLoadRefusedName, journeyEndState, needsFinalNetworkObservation, type Journey } from "@jevitate/journey";
 import type { NetworkCheck } from "@jevitate/recording";
 import type { JourneyRunResult } from "@jevitate/runtime";
 import type { Actor } from "@jevitate/screenplay";
@@ -34,7 +34,7 @@ const SETTLE_CEILING_MS = 5_000;
  * `journeyEndState(journey)` order: `metadata.endState` first, then a legacy `metadata.networkChecks`.
  */
 export type OutcomeCheckFailure =
-  | { readonly where: "step-request"; readonly step: number; readonly checkIndex: number; readonly detail: string }
+  | { readonly where: "step-request"; readonly step: number; readonly checkIndex: number; readonly detail: string; readonly evaluated?: true }
   | { readonly where: "end-state"; readonly index: number; readonly detail: string }
   | { readonly where: "unevaluable"; readonly detail: string };
 
@@ -64,10 +64,12 @@ interface StepWindow {
 interface JudgedCheck {
   readonly result: SuccessCheckResult;
   readonly slowStep?: SlowStepFinding;
+  readonly evaluated?: true;
 }
 
 export class JourneyOutcomeChecks {
   readonly #page: Page;
+  readonly #beforeFinalNetworkCaptureClose: (() => Promise<void>) | undefined;
   readonly #end;
   readonly #steps: StepWindow[];
   readonly #secrets: readonly string[];
@@ -83,6 +85,7 @@ export class JourneyOutcomeChecks {
     page: Page,
     journey: Journey | undefined,
     opts: {
+      readonly beforeFinalNetworkCaptureClose?: () => Promise<void>;
       readonly relaxedStepRequests?: readonly string[];
       readonly secrets?: readonly string[];
       readonly stepResponseTimeoutMs?: number;
@@ -97,6 +100,7 @@ export class JourneyOutcomeChecks {
     } = {},
   ) {
     this.#page = page;
+    this.#beforeFinalNetworkCaptureClose = journey !== undefined && needsFinalNetworkObservation(journey) ? opts.beforeFinalNetworkCaptureClose : undefined;
     this.#relaxedStepRequests = new Set(opts.relaxedStepRequests ?? []);
     this.#httpProbe = opts.httpProbe;
     this.#resolveRef = opts.resolveRef;
@@ -182,21 +186,26 @@ export class JourneyOutcomeChecks {
         continue;
       }
       // #486: a request still awaiting its response (a cold start) is waited for, up to the bound.
-      out.push(
-        await evaluateNetworkCheckAwaiting(
-          c,
-          () => ({
-            requests: window
-              .sent()
-              .filter((q) => (
-                (ownCapture || since === undefined || (q.startedAt !== undefined && q.startedAt >= since)) &&
-                (until === undefined || (q.startedAt !== undefined && q.startedAt <= until))
-              )),
-            truncated: window.truncated,
-          }),
-          s.responseTimeoutMs ?? this.#responseTimeoutMs,
-        ),
+      const judged = await evaluateNetworkCheckAwaiting(
+        c,
+        () => ({
+          requests: window
+            .sent()
+            .filter((q) => (
+              (ownCapture || since === undefined || (q.startedAt !== undefined && q.startedAt >= since)) &&
+              (until === undefined || (q.startedAt !== undefined && q.startedAt <= until))
+            )),
+          truncated: window.truncated,
+        }),
+        s.responseTimeoutMs ?? this.#responseTimeoutMs,
       );
+      // Dropped requests cannot establish a negative request claim. Only a real own-step window
+      // supplies the direct-evaluation evidence used alongside a failed DOM postcondition.
+      out.push({
+        ...judged,
+        ...(ownCapture && !window.truncated && judged.result.unevaluable !== true ? { evaluated: true as const } : {}),
+        ...(!judged.result.passed && window.truncated ? { result: { ...judged.result, unevaluable: true as const } } : {}),
+      });
     }
     return out;
   }
@@ -282,11 +291,21 @@ export class JourneyOutcomeChecks {
       // reported no step boundaries. A request in flight when the step began (the previous step's
       // write) finishes inside its window: only requests SENT within the window count.
       const judged = s.judged ?? (await this.#judge(s, capture));
-      for (const [checkIndex, { result: r, slowStep }] of judged.entries()) {
+      for (const [checkIndex, { result: r, slowStep, evaluated }] of judged.entries()) {
         if (slowStep !== undefined) this.#slowSteps.push({ ...slowStep, step: s.index + 1 });
         if (r.passed) continue;
-        stepFailureSites.push({ where: "step-request", step: s.index + 1, checkIndex, detail: `${r.check} — ${r.detail}` });
+        stepFailureSites.push(r.unevaluable === true
+          ? { where: "unevaluable", detail: `${r.check} — ${r.detail}` }
+          : { where: "step-request", step: s.index + 1, checkIndex, detail: `${r.check} — ${r.detail}`, ...(evaluated === true ? { evaluated } : {}) });
         stepFailureReasons.push(`step ${s.index + 1} (${s.label}): ${r.check} — ${r.detail}`);
+      }
+    }
+    // Step judgments retain their original membership. Only the still-open final capture extends.
+    if (this.#beforeFinalNetworkCaptureClose !== undefined) {
+      try { await this.#beforeFinalNetworkCaptureClose(); }
+      catch {
+        this.#stopCaptures(monitor, capture);
+        throw new Error("final-network capture observation failed");
       }
     }
     // The captures stay live through the waits above (#486): a pending request's response lands in them.

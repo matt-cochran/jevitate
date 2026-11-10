@@ -116,6 +116,35 @@ persona with no session yet (no `storageState`, no `login`) is a catalog-only pe
 }
 ```
 
+### The job's done check
+
+A job can say how to tell, from the application's state alone, that the job is done: a `done`
+check that is false before the job and true after, whichever path got there (0.30.0 design §3).
+It is read in a fresh session, so a page that says "Saved" with nothing stored reads false.
+
+```json
+{
+  "id": "invite",
+  "trigger": "a colleague joins my team",
+  "motivation": "invite them by email",
+  "outcome": "work together from their first day",
+  "done": { "version": 1, "at": "/members", "check": "textIncludes:#member-list|${email}", "distinguishedBy": ["email"] }
+}
+```
+
+| Field | What |
+|---|---|
+| `version` | `1`. |
+| `at` | a path on the target origin, opened in a fresh session. `${param}` placeholders are allowed; a secret is refused. |
+| `check` | a state-naming reading in the `--success` syntax: `textIncludes`, `count`, `attr`, `valueEquals` or `http`. Never a step or an anchor. |
+| `session` | `fresh` (the default and only value). |
+| `distinguishedBy` | optional: the placeholders whose value makes the "before" reading false for a Journey that creates its own data. |
+
+`done` is part of the job's content hash: editing it makes an approved job stale. A `done` that
+does not parse is reported as `job.done-check-unparseable` (a gap, a warning). MCP `find_capabilities`
+shows the linked job's check (`job.done.at`, `job.done.check`), and lint
+warns `missing-done-check` on a promoted Journey whose job has none.
+
 ## Linking a Journey
 
 Set the Journey's `metadata.job` to a job id and `metadata.persona` to a persona id. A
@@ -180,6 +209,7 @@ stable code, a path into the item and a fix:
 | `journey.unknown-job-step` | an anchor's `jobStep` is not a step of the linked job | structural |
 | `journey.job-step-without-job` | an anchor's `jobStep` on a Journey that links no job | structural |
 | `job.unmeasurable-metric` | a metric's `from`/`to`/`at` is neither `job_start`/`job_end` nor an anchor some Journey linked to the job declares | gap |
+| `job.done-check-unparseable` | the job's `done` check does not parse (bad kind or syntax, a secret or path-bound reference) | gap |
 | `job.target-unit-mismatch` | a target's unit does not fit its metric (a duration is `s`, a `share_under` duration is `percent`, an `error` is `count` or `percent`, the rest `percent`) | gap |
 
 **Severity.** On data as loaded, every problem is a `warning`: nothing here blocks a load, a run,
@@ -458,13 +488,19 @@ twice:
 [Journeeze](https://app.journeeze.dev) can import the catalog as a catalog bundle (v1.0).
 
 The CLI package ships Jevitate's current immutable repository-catalog contract under
-`contracts/jevitate-catalog/v2/` and preserves the previous-major v1.0.0 contract under
-`contracts/jevitate-catalog/v1/`. Each contains the JSON Schemas for `.jevitate/personas.json`,
-`.jevitate/jobs.json` and each Journey file, approval-hash vectors, conformance fixtures and a
-SHA-256 manifest. Consumers vendor one exact released package and verify the manifest; they do not
-fetch a mutable schema URL at runtime. Contract v2 writes portable, unsigned-UTF-16-ordered approval
-hashes; because v1-only consumers cannot reproduce those hashes, v2 is a new contract major rather
-than an in-place v1 revision. The Job and Journey schemas are closed. The repository persona
+`contracts/jevitate-catalog/v3/` (v3.0.0) and preserves the previous-major v2.0.0 and v1.0.0
+contracts, unchanged, under `contracts/jevitate-catalog/v2/` and `contracts/jevitate-catalog/v1/`.
+Each contains the JSON Schemas for `.jevitate/personas.json`, `.jevitate/jobs.json` and each Journey
+file, approval-hash vectors, conformance fixtures and a SHA-256 manifest. Consumers vendor one exact
+released package and verify the manifest; they do not fetch a mutable schema URL at runtime. A
+published contract never changes: a schema change is a new contract version beside the old ones.
+Contract v2 writes portable, unsigned-UTF-16-ordered approval hashes; because v1-only consumers
+cannot reproduce those hashes, v2 is a new contract major rather than an in-place v1 revision.
+Contract v3 adds the job done check (`jobs[].done`) and typed Journey parameters
+(`metadata.parameters[].type` and `enum`). The Job and Journey schemas are closed, so a v2 validator
+refuses a file that uses them, and v3 is a new contract major; every file valid under v2 is valid
+under v3, so a v3 reader may accept files written for v2. The repository-catalog layout is unchanged
+(`repositoryCatalogMajor` 1) and v3 keeps the v2 approval hashes. The repository persona
 schema retains its pre-contract descriptive-key extension behavior; those keys participate in the
 persona approval hash, while session/login keys do not.
 
@@ -487,7 +523,8 @@ Each check also carries the app's release label (`check.appVersion`, #479) besid
 run was given `--app-version` (or `JEVITATE_APP_VERSION`); an invalid label is left out with a warning
 and the check still exports.
 The bundle is catalog bundle **v1, minor 2**. Minor 2 adds `catalogContract`, which binds the bundle
-to the exact v2 manifest used by its producer. The additions in minor 1 over minor 0 are the optional
+to the exact contract manifest used by its producer (`version` and `manifestSha256`; v3.0.0 since
+0.30.0, v2.0.0 before). The additions in minor 1 over minor 0 are the optional
 `finding.locator` object, one per brittle element of an exported Journey (`kind: "ux"`, claim
 `other`, producerClaim `locator-brittle` — a fix for the app, de-duplicated across steps and
 Journeys, dated at the latest approval of the Journeys it occurs in), and the optional

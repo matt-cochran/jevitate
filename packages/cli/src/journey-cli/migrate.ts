@@ -1,3 +1,4 @@
+import { REPLAY_SECRET_FIELD_HELP, collectSecretField } from "../secret-params.js";
 import { existsSync } from "node:fs";
 import { Command } from "commander";
 import { ok, fail } from "../envelope.js";
@@ -22,6 +23,7 @@ export function registerJourneyMigrate(journey: Command, program: Command, deps:
     .option("--labels", "#497: replay the Journeys and store each step's visible label (exclusive with --step-ids; needs the app running)")
     .option("--id <id...>", "#497: with --labels, only these Journeys (default: every local Journey)")
     .option("--param <kv>", "#497: with --labels, a replay param as key=value (repeatable; each Journey gets only the ones it declares)", collectParam, {} as Record<string, string>)
+    .option("--secret-field <binding>", `with --labels: ${REPLAY_SECRET_FIELD_HELP}`, collectSecretField, [] as string[])
     .option("--storage-state <file>", "#497: with --labels, Playwright storageState JSON to start the replays authenticated; must exist")
     .option("--dry-run", "report what would change, write nothing (with --labels the replay still runs)")
     .option("--dir <path>", DEPRECATED_DIR_HELP)
@@ -31,11 +33,12 @@ export function registerJourneyMigrate(journey: Command, program: Command, deps:
       const layout = journeyLayout(program, deps, { dir: locationFlags.dir, project: locationFlags.project, journeysDir: locationFlags.journeysDir });
       if (layout === null) return;
       const migrateJourneysDir = layout.journeysDir;
-      const { stepIds, labels, id: ids, param, storageState: storageStateFlag, dryRun, json } = this.opts<{
+      const { stepIds, labels, id: ids, param, secretField, storageState: storageStateFlag, dryRun, json } = this.opts<{
         stepIds?: boolean;
         labels?: boolean;
         id?: string[];
         param: Record<string, string>;
+        secretField: string[];
         storageState?: string;
         dryRun?: boolean;
         json?: boolean;
@@ -92,6 +95,9 @@ export function registerJourneyMigrate(journey: Command, program: Command, deps:
             ...(ids === undefined ? {} : { ids }),
             dryRun: dryRun === true,
             params: param,
+            ...(secretField.length === 0 ? {} : { secretFields: secretField }),
+            ...(deps.explore?.env === undefined ? {} : { secretEnv: deps.explore.env }),
+            warn: (line: string) => program.configureOutput().writeErr?.(line),
             run: {
               ...(siteGate === undefined ? {} : { siteGate }),
               ...(deps.explore?.browserPortFactory === undefined ? {} : { browserPortFactory: deps.explore.browserPortFactory }),

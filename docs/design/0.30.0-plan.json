@@ -1,0 +1,3945 @@
+{
+  "deliverables": [
+    {
+      "id": "d-0290-shipped",
+      "owned_files": [
+        ".delivery/rel-030/0290-shipped.md"
+      ],
+      "prerequisites": [],
+      "estimated_effort_hours": 0.5,
+      "earning_rule": "zero_hundred",
+      "metadata": {
+        "owner": "owner",
+        "artifact": "v0.29.0 tag published and main back-merged into dev (the owner's act), recorded in .delivery/rel-030/0290-shipped.md with the tag sha.",
+        "kind": "manual"
+      }
+    },
+    {
+      "id": "d-line-open",
+      "owned_files": [
+        ".delivery/rel-030/line.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-0290-shipped",
+          "consumes": "dev with 0.29.0 back-merged"
+        }
+      ],
+      "estimated_effort_hours": 0.5,
+      "earning_rule": "zero_hundred",
+      "metadata": {
+        "owner": "manager",
+        "artifact": "Integration branch integration/0.30.0 created from dev after the back-merge, pushed, with .delivery/rel-030/line.md naming its base sha and the plan id.",
+        "junior": {
+          "acceptance": [
+            "`git merge-base integration/0.30.0 dev` prints dev's head sha after the 0.29.0 back-merge, and line.md quotes that sha"
+          ],
+          "checks": [
+            {
+              "command": "test",
+              "args": [
+                "-s",
+                ".delivery/rel-030/line.md"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "docs/ci.md"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-811-land",
+      "owned_files": [
+        "packages/cli/src/journey-verify.ts",
+        "packages/journey/src/mutation-proof.ts",
+        "packages/journey/src/lint.ts",
+        "packages/cli/src/journey-network-checks.ts",
+        "packages/cli/src/mutation-proof-policy.ts",
+        "packages/cli/src/journey-proof-context.ts",
+        "packages/explore/src/goal-loop/observe.ts",
+        "packages/domain/src/capability-scope.ts",
+        ".delivery/rel-030/811-merge.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-line-open",
+          "consumes": "the integration branch"
+        }
+      ],
+      "estimate": {
+        "optimistic": 3,
+        "likely": 5,
+        "pessimistic": 10
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "frontier",
+        "artifact": "PR #811 (fix/template-authoring-effect-proof-dev) merged into integration/0.30.0 with its conflicts resolved in journey-verify.ts, mutation-proof.ts, lint.ts and the network-check files; build, lint, no-fallback and the journey + cli focused suites green; .delivery/rel-030/811-merge.md lists each conflict hunk, which side won and why.",
+        "junior": {
+          "acceptance": [
+            "`pnpm exec vitest run packages/journey/src/mutation-proof.test.ts packages/cli/src/journey-verify-failure-phase.test.ts` exits 0 on the merged tree",
+            "`pnpm -r build && pnpm lint && pnpm check:no-fallback` exit 0 on the merged tree",
+            "811-merge.md has one row per conflicting hunk (file, lines, side kept, reason)"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/journey/src/mutation-proof.test.ts"
+              ]
+            },
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/journey-verify-failure-phase.test.ts"
+              ]
+            },
+            {
+              "command": "test",
+              "args": [
+                "-s",
+                ".delivery/rel-030/811-merge.md"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/journey/src/mutation-proof.ts"
+            },
+            {
+              "path": "packages/cli/src/journey-verify.ts"
+            },
+            {
+              "path": "packages/journey/src/lint.ts"
+            },
+            {
+              "path": ".delivery/rel-0283/security-final6.md"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-nav-lab-land",
+      "owned_files": [
+        "test/fixtures/nav-lab/",
+        "scripts/nav-lab/",
+        "docs/accuracy.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-line-open",
+          "consumes": "the integration branch"
+        }
+      ],
+      "estimate": {
+        "optimistic": 2,
+        "likely": 3,
+        "pessimistic": 6
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "feat/navigation-lab landed on the line: test/fixtures/nav-lab/** (the 39 cases plus lure-trap-branch, lure-one-broken, lure-dead-end-disabled, sign-in-goal, password-on-route) and scripts/nav-lab/** (run-matrix, run-cell, score with the boundary-aware rule, --guards), plus scripts/nav-lab/score.test.mjs, a node:test guard that scoring the recorded n=10 baseline results reproduces the numbers in .delivery/nav-lab/remediations.md. test/fixtures/accuracy-lab and scripts/accuracy-lab unchanged.",
+        "issues": [
+          807
+        ],
+        "junior": {
+          "acceptance": [
+            "`node --test scripts/nav-lab/score.test.mjs` exits 0 and asserts route-exists failures 67/220 and looks-done-wrong-page false pass 8/10 from the recorded baseline",
+            "`git diff --stat <line base> -- test/fixtures/accuracy-lab scripts/accuracy-lab` prints nothing"
+          ],
+          "checks": [
+            {
+              "command": "node",
+              "args": [
+                "--test",
+                "scripts/nav-lab/score.test.mjs"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": ".delivery/nav-lab/baseline.md"
+            },
+            {
+              "path": ".delivery/nav-lab/remediations.md"
+            },
+            {
+              "path": "test/fixtures/accuracy-lab/README.md"
+            },
+            {
+              "path": "scripts/accuracy-lab/score.test.mjs"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "m-line-open",
+      "owned_files": [
+        ".delivery/rel-030/m1-line-open.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-811-land",
+          "consumes": "merged tree"
+        },
+        {
+          "id": "d-nav-lab-land",
+          "consumes": "lab on the line"
+        }
+      ],
+      "estimated_effort_hours": 0.25,
+      "earning_rule": "zero_hundred",
+      "metadata": {
+        "owner": "manager",
+        "artifact": "Milestone note .delivery/rel-030/m1-line-open.md: #811 merged and the navigation lab landed on one tree, naming the sha every lane branches from."
+      },
+      "milestone": true
+    },
+    {
+      "id": "d-exit-code-decision",
+      "owned_files": [
+        ".delivery/rel-030/decisions/exit-codes.md"
+      ],
+      "prerequisites": [],
+      "estimated_effort_hours": 0.5,
+      "earning_rule": "zero_hundred",
+      "metadata": {
+        "owner": "owner",
+        "artifact": "Decision record .delivery/rel-030/decisions/exit-codes.md: the owner's answer to design doc \u00a76.3 decisions 1-4 (boundary runs to exit 2; done-check false exits 1; no-check pass stays exit 0 behind doneCheckPolicy; proven\u2192sensitive with verdictLegacy).",
+        "issues": [
+          807,
+          812
+        ],
+        "kind": "manual"
+      }
+    },
+    {
+      "id": "c-evidence-schema",
+      "owned_files": [
+        "packages/adjudicator/src/evidence.ts",
+        "packages/adjudicator/src/evidence.test.ts"
+      ],
+      "prerequisites": [],
+      "estimate": {
+        "optimistic": 4,
+        "likely": 6,
+        "pessimistic": 10
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "frontier",
+        "artifact": "packages/adjudicator/src/evidence.ts: the RunEvidence v1 zod schema and inferred types exactly as design doc \u00a72.1 lists them (Known<T>, UnknownReason, RunEvidence, EvidenceSubject, RunContext, StepEvidence, WritesEvidence, WriteShape, MutationEvidence, ReplayEvidence, DoneCheckSpec, DoneCheckEvidence, DoneReading, BoundaryEvidence, AdvisoryJudgment), every object .strict(), every string with a .max(), exported as RunEvidenceSchema and friends; evidence.test.ts.",
+        "issues": [
+          812,
+          800
+        ],
+        "contract": true,
+        "junior": {
+          "acceptance": [
+            "evidence.test.ts parses a complete fixture and refuses: an extra key at any level, a reason over 500 chars, a `value` key on WriteShape, and openAtClose given as a bare number",
+            "evidence.test.ts asserts `{known:true,value:0}` and `{known:false,reason:'page-not-watched'}` both parse and are not deep-equal",
+            "`grep -c 'z.string()' evidence.ts` equals the count of `.max(` on string fields (every string bounded)"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/adjudicator/src/evidence.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/cli/src/journey-run-record.ts"
+            },
+            {
+              "path": "packages/cli/src/journey-verify.ts"
+            },
+            {
+              "path": "packages/journey/src/mutation-proof.ts"
+            },
+            {
+              "path": "packages/journey/src/approval-schema.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "c-verdict-rules",
+      "owned_files": [
+        "packages/adjudicator/src/adjudicate.ts",
+        "packages/adjudicator/src/rules-v1.ts",
+        "packages/adjudicator/src/adjudicate.test.ts",
+        "packages/adjudicator/src/verdict.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "c-evidence-schema",
+          "consumes": "RunEvidence types",
+          "kind": "interface"
+        }
+      ],
+      "estimate": {
+        "optimistic": 6,
+        "likely": 8,
+        "pessimistic": 14
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "frontier",
+        "artifact": "packages/adjudicator/src/verdict.ts (Verdict, JobVerdict, ChecksVerdict, BoundaryVerdict, RulesVersion as design doc \u00a74.1), rules-v1.ts (classifyMutation, classifyMutationPlain, provenSensitive, judgeAssertions, mutationProofVerdict moved verbatim from packages/journey/src/mutation-proof.ts as #811 leaves them, plus the done-check table of \u00a73.1, boundary \u2192 inconclusive, harness \u2192 unverified/harness, countsForGate from target trust), adjudicate.ts exporting adjudicate(evidence, rules='v1') and rejudge(evidence, from, to); adjudicate.test.ts as a browserless table.",
+        "issues": [
+          812,
+          800
+        ],
+        "contract": true,
+        "junior": {
+          "acceptance": [
+            "adjudicate.test.ts has one `it` per row of the \u00a73.1 done-check table (5 rows) asserting attainment and basis",
+            "adjudicate.test.ts asserts adjudicate(e) deep-equals adjudicate({...e, judgments: []}) for every table fixture",
+            "a fast-check property in adjudicate.test.ts: for any fixture and any Known<T> field flipped to {known:false}, attainment \u2208 {unchanged, unverified} and checks.verdict \u2208 {unchanged, inconclusive}",
+            "a fixture with mutation present and trust 'unknown' yields countsForGate false; with trust 'test' true"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/adjudicator/src/adjudicate.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/journey/src/mutation-proof.ts"
+            },
+            {
+              "path": "packages/journey/src/mutation-proof.test.ts"
+            },
+            {
+              "path": "docs/outcomes.md"
+            },
+            {
+              "path": ".delivery/rel-0283/triz/mutation-uncontrolled.decision.md"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "c-done-check",
+      "owned_files": [
+        "packages/journey/src/done-check.ts",
+        "packages/journey/src/done-check.test.ts",
+        "packages/journey/src/index.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "c-evidence-schema",
+          "consumes": "DoneCheckEvidence shape",
+          "kind": "interface"
+        }
+      ],
+      "estimate": {
+        "optimistic": 3,
+        "likely": 5,
+        "pessimistic": 8
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "frontier",
+        "artifact": "packages/journey/src/done-check.ts: parseDoneCheck(spec) \u2192 DoneCheckSpec | DoneCheckIssue[] (allowed kinds textIncludes, count, attr, valueEquals, http; `at` a path on the origin; ${name} placeholders resolved against non-secret params and extracts; a ${secret} or credential-named placeholder refused E_DONE_CHECK_SECRET_REF; a step:, anchor or reloadThen reference refused E_DONE_CHECK_PATH_BOUND), lintDoneCheck(job, journeys) \u2192 findings missing-done-check and done-check-cannot-be-false; exported from the package index; done-check.test.ts.",
+        "issues": [
+          800
+        ],
+        "contract": true,
+        "junior": {
+          "acceptance": [
+            "done-check.test.ts: a spec with `${password}` returns an issue with code E_DONE_CHECK_SECRET_REF; with `step:3` returns E_DONE_CHECK_PATH_BOUND; a valid `at:'/invoices', check:'textIncludes:testId=row|${invoiceNo}'` parses",
+            "done-check.test.ts: a job whose linked Journey has a write step and whose check lacks distinguishedBy yields done-check-cannot-be-false; the same with distinguishedBy:['invoiceNo'] yields nothing"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/journey/src/done-check.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/journey/src/assertions.ts"
+            },
+            {
+              "path": "packages/journey/src/catalog-schema.ts"
+            },
+            {
+              "path": "docs/success-checks.md"
+            },
+            {
+              "path": "packages/journey/src/intent.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "c-run-mode",
+      "owned_files": [
+        "packages/cli/src/run-mode.ts",
+        "packages/cli/src/run-mode.test.ts",
+        "packages/cli/src/environments.ts",
+        "packages/cli/src/target-config.ts"
+      ],
+      "prerequisites": [],
+      "estimate": {
+        "optimistic": 3,
+        "likely": 4,
+        "pessimistic": 8
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "frontier",
+        "artifact": "packages/cli/src/run-mode.ts: TargetTrust ('test'|'harness'|'production'|'unknown'), RunMode, runModeFor(trust), resolveTargetTrust({environment?, targetConfig?, origin}) with the stricter-wins order production > unknown > harness > test and production:true \u2192 'production'; the `trust` key parsed and validated in environments.ts (ENV_KEYS) and target-config.ts (TargetConfig.trust); run-mode.test.ts holding design doc \u00a75.2's table as rows.",
+        "issues": [
+          792,
+          799,
+          802
+        ],
+        "contract": true,
+        "junior": {
+          "acceptance": [
+            "run-mode.test.ts: runModeFor has the signature (trust: TargetTrust) => RunMode and a type-level test (`// @ts-expect-error`) shows it accepts no second argument",
+            "run-mode.test.ts: resolveTargetTrust for an origin absent from both files returns 'unknown' and runModeFor gives 'automation'",
+            "run-mode.test.ts: environments.json trust:'test' + targets.json trust:'production' for one origin returns 'production'; synthetic:true alone returns 'unknown'",
+            "environments.test.ts: an unknown trust value is refused with the allowed list in the message"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/run-mode.test.ts"
+              ]
+            },
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/environments.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/cli/src/environments.ts"
+            },
+            {
+              "path": "packages/cli/src/target-config.ts"
+            },
+            {
+              "path": "packages/cli/src/mcp-run-guard.ts"
+            },
+            {
+              "path": "docs/safety.md"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "c-result-vocab",
+      "owned_files": [
+        "packages/domain/src/job-attainment.ts",
+        "packages/domain/src/mission-outcome.ts",
+        "packages/domain/src/mission-outcome.test.ts",
+        "packages/domain/src/index.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-exit-code-decision",
+          "consumes": "which exit codes change"
+        }
+      ],
+      "estimate": {
+        "optimistic": 2,
+        "likely": 3,
+        "pessimistic": 6
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "frontier",
+        "artifact": "packages/domain/src/job-attainment.ts exporting JOB_ATTAINMENTS ['achieved','not-achieved','unverified'], JOB_BASES, JobVerdict; mission-outcome.ts gaining goal outcome 'boundary' in GOAL_ONLY_OUTCOMES with GOAL_OUTCOME_FOLD boundary \u2192 inconclusive, journeyExitCode's 'done-check-failed' \u2192 1, MUTATION_PROOF_VERDICTS ['sensitive','insensitive','inconclusive'] with legacyProofVerdict(v) returning 'proven' for 'sensitive', per the owner's exit-code decision; MISSION_EXIT_CODES unchanged; exported from the domain index; mission-outcome.test.ts rows for every new fold.",
+        "issues": [
+          807,
+          812,
+          800
+        ],
+        "contract": true,
+        "junior": {
+          "acceptance": [
+            "mission-outcome.test.ts asserts Object.keys(MISSION_EXIT_CODES) is unchanged from 0.29.0 (snapshot) and outcomeExitCode('boundary') === 2",
+            "mission-outcome.test.ts asserts journeyExitCode for a run with outcome ok and job.attainment 'not-achieved' is the code the decision record names (1 if accepted)",
+            "legacyProofVerdict('sensitive') === 'proven' and is the identity on the other two values"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/domain/src/mission-outcome.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/domain/src/mission-outcome.ts"
+            },
+            {
+              "path": "packages/cli/src/exit-codes.ts"
+            },
+            {
+              "path": "docs/outcomes.md"
+            },
+            {
+              "path": ".delivery/rel-030/decisions/exit-codes.md"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "c-typed-params",
+      "owned_files": [
+        "packages/journey/src/parameters.ts",
+        "packages/journey/src/parameters.test.ts",
+        "docs/contracts/journey-handoff.md"
+      ],
+      "prerequisites": [],
+      "estimate": {
+        "optimistic": 2,
+        "likely": 3,
+        "pessimistic": 5
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "frontier",
+        "artifact": "packages/journey/src/parameters.ts: ParameterType ('string'|'number'|'boolean'|'enum'|'email'|'url'|'date'), the optional `type` and `enum` keys on parameters[] in the Journey schema, validateParams(journey, params) \u2192 ParamIssue[] (name, expected, never the value), compatible with Journeys declaring no type; docs/contracts/journey-handoff.md names the same types for chain handoff; parameters.test.ts.",
+        "issues": [
+          796
+        ],
+        "contract": true,
+        "junior": {
+          "acceptance": [
+            "parameters.test.ts: a Journey with parameters:[{name:'qty'}] and params {qty:'abc'} returns no issue (untyped stays untyped)",
+            "parameters.test.ts: {name:'qty', type:'number'} with 'abc' returns one issue {name:'qty', expected:'number'} and the issue object has no `value` key",
+            "docs/contracts/journey-handoff.md lists exactly the ParameterType values"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/journey/src/parameters.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/journey/src/journey.ts"
+            },
+            {
+              "path": "docs/contracts/journey-handoff.md"
+            },
+            {
+              "path": "docs/journeys.md"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "m-contracts-frozen",
+      "owned_files": [
+        ".delivery/rel-030/m2-contracts.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "c-verdict-rules",
+          "consumes": "verdict function"
+        },
+        {
+          "id": "c-done-check",
+          "consumes": "done-check spec"
+        },
+        {
+          "id": "c-run-mode",
+          "consumes": "mode resolver"
+        },
+        {
+          "id": "c-result-vocab",
+          "consumes": "vocabulary"
+        },
+        {
+          "id": "c-typed-params",
+          "consumes": "parameter types"
+        }
+      ],
+      "estimated_effort_hours": 0.25,
+      "earning_rule": "zero_hundred",
+      "metadata": {
+        "owner": "manager",
+        "artifact": "Milestone note .delivery/rel-030/m2-contracts.md: the six contracts synced and their tests green; implementations may start consuming them."
+      },
+      "milestone": true
+    },
+    {
+      "id": "d-adjudicator-package",
+      "owned_files": [
+        "packages/adjudicator/package.json",
+        "packages/adjudicator/tsconfig.json",
+        "packages/adjudicator/src/index.ts",
+        "packages/adjudicator/src/purity.test.ts",
+        "packages/adjudicator/src/rejudge.test.ts",
+        "packages/cli/package.json",
+        "pnpm-lock.yaml"
+      ],
+      "prerequisites": [
+        {
+          "id": "c-verdict-rules",
+          "consumes": "adjudicate/rejudge signatures",
+          "kind": "interface"
+        }
+      ],
+      "estimate": {
+        "optimistic": 3,
+        "likely": 4,
+        "pessimistic": 8
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "packages/adjudicator as a private workspace package: package.json (name @jevitate/adjudicator, private, dependencies exactly {zod}), tsconfig.json like packages/domain, src/index.ts re-exporting evidence, verdict, adjudicate and rejudge; @jevitate/cli depends on it and the esbuild bundle includes it; src/purity.test.ts; src/rejudge.test.ts.",
+        "issues": [
+          812
+        ],
+        "junior": {
+          "acceptance": [
+            "purity.test.ts reads packages/adjudicator/package.json and fails unless dependencies is exactly {zod}; it reads every src/*.ts and fails on an import specifier matching /^(node:|playwright|@jevitate\\/|openai|@typesafe)/",
+            "rejudge.test.ts: rejudge(e,'v1','v1').moved is [] for a table fixture",
+            "`pnpm -r build && pnpm --filter @jevitate/cli run bundle && pnpm check:no-fallback` exit 0"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/adjudicator/src/purity.test.ts"
+              ]
+            },
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/adjudicator/src/rejudge.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/domain/package.json"
+            },
+            {
+              "path": "packages/domain/tsconfig.json"
+            },
+            {
+              "path": "packages/cli/package.json"
+            },
+            {
+              "path": "scripts/check-clock.mjs"
+            },
+            {
+              "path": "AGENTS.md"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-evidence-writer-a",
+      "owned_files": [
+        "packages/cli/src/journey-run-evidence.ts",
+        "packages/cli/src/journey-run-evidence.test.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-adjudicator-package",
+          "consumes": "the importable package with the RunEvidence schema"
+        }
+      ],
+      "estimate": {
+        "optimistic": 3,
+        "likely": 4,
+        "pessimistic": 6
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "packages/cli/src/journey-run-evidence.ts: JourneyRunEvidenceWriter that builds a RunEvidence v1 for one `journey run` (subject, run context with channel and placeholder mode 'automation', steps, writes with Known openAtClose, notes), paramsDigest as HMAC-SHA256 keyed by ~/.jevitate/verify-checkpoint.key over sorted non-secret name=value pairs with secret names listed separately, writes evidence.json next to the result through the RunEvidenceSchema; journey-run-evidence.test.ts with in-memory runs.",
+        "issues": [
+          812,
+          790
+        ],
+        "junior": {
+          "acceptance": [
+            "journey-run-evidence.test.ts: a run whose three writes all answered yields writes.openAtClose {known:true,value:0}; a run where the page watcher never attached yields {known:false,reason:'page-not-watched'}",
+            "journey-run-evidence.test.ts: two runs with the same non-secret params and different secret values produce the same paramsDigest; changing a non-secret value changes it",
+            "the written file parses with RunEvidenceSchema.parse"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/journey-run-evidence.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/cli/src/journey-run-record.ts"
+            },
+            {
+              "path": "packages/cli/src/journey-verify-checkpoint.ts"
+            },
+            {
+              "path": "packages/adjudicator/src/evidence.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-evidence-writer-b",
+      "owned_files": [
+        "packages/cli/src/journey-api.ts",
+        "packages/cli/src/journey-run-record.ts",
+        "packages/cli/src/journey-run-hooks.ts",
+        "packages/cli/src/journey-run-hooks.test.ts",
+        "packages/cli/src/journey-run-evidence-served.test.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-evidence-writer-a",
+          "consumes": "JourneyRunEvidenceWriter"
+        }
+      ],
+      "estimate": {
+        "optimistic": 2,
+        "likely": 3,
+        "pessimistic": 5
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "journey-api.ts wires the evidence writer into runJourneyProgrammatically (CLI and MCP) and exposes RunHooks {resolveMode, readDoneCheck, validateParams, beforeWrite, onHold} registered by other modules through registerRunHooks() in journey-run-hooks.ts; the #790 run record is derived from the evidence and its file marked deprecated in a comment; journey-run-evidence-served.test.ts runs a real Journey with marker values.",
+        "issues": [
+          812,
+          790
+        ],
+        "junior": {
+          "acceptance": [
+            "journey-run-evidence-served.test.ts: a served run with parameter value MARKER_P, fixture output MARKER_F and page text MARKER_T writes evidence.json and `grep -c MARKER_` on it is 0",
+            "journey-run-hooks.test.ts: two hooks registered from separate modules run in registration order, and a hook that throws fails the run with E_RUN_HOOK"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/journey-run-evidence-served.test.ts"
+              ]
+            },
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/journey-run-hooks.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/cli/src/journey-api.ts"
+            },
+            {
+              "path": "packages/cli/src/journey-run-secrets.test.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-verify-gathers",
+      "owned_files": [
+        "packages/cli/src/journey-verify.ts",
+        "packages/cli/src/journey-verify-evidence.ts",
+        "packages/journey/src/mutation-proof.ts",
+        "packages/cli/src/journey-verify-soundness-served.test.ts",
+        "packages/cli/src/journey-verify-served.test.ts",
+        "packages/cli/src/journey-verify-dropped-write.test.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-811-land",
+          "consumes": "#811's planning and classification rules"
+        },
+        {
+          "id": "d-adjudicator-package",
+          "consumes": "the importable package with adjudicate and MutationEvidence"
+        }
+      ],
+      "estimate": {
+        "optimistic": 8,
+        "likely": 12,
+        "pessimistic": 20
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "frontier",
+        "artifact": "journey verify --mutate as a gatherer: journey-verify-evidence.ts builds MutationEvidence replay by replay (ReplayEvidence role, mutation, outcome, failedSites, Known writes, waitsCut, reused, retries; restore; isolation from the independence replay); journey-verify.ts calls adjudicate() and renders JourneyVerifyReport from the Verdict with every existing field kept; the five verdict functions deleted from mutation-proof.ts; the soundness suite honours JEVITATE_RECORD_EVIDENCE=<dir> by writing <row>.evidence.json; every served expectation unchanged.",
+        "issues": [
+          812
+        ],
+        "junior": {
+          "acceptance": [
+            "`grep -rln 'mutationProofVerdict\\|judgeAssertions\\|classifyMutation' packages/journey/src packages/cli/src --include=*.ts` lists only files that import them from @jevitate/adjudicator",
+            "`pnpm exec vitest run packages/cli/src/journey-verify-soundness-served.test.ts` exits 0 with the test file's expectations unchanged except imports, and with JEVITATE_RECORD_EVIDENCE set it writes one parseable evidence.json per row",
+            "journey-verify-dropped-write.test.ts (H1/H2 rows) still reads inconclusive, and the written evidence shows writes.openAtClose {known:true,value:>=1} for those rows"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/journey-verify-dropped-write.test.ts"
+              ]
+            },
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/journey-verify-served.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/cli/src/journey-verify.ts"
+            },
+            {
+              "path": "packages/journey/src/mutation-proof.ts"
+            },
+            {
+              "path": "packages/cli/src/journey-verify-soundness-served.test.ts"
+            },
+            {
+              "path": ".delivery/rel-0283/security-final6.md"
+            },
+            {
+              "path": "docs/outcomes.md"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-rejudge-fixtures",
+      "owned_files": [
+        "packages/adjudicator/fixtures/",
+        "packages/adjudicator/src/rejudge-fixtures.test.ts",
+        "packages/adjudicator/src/secret-scan.test.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-verify-gathers",
+          "consumes": "the evidence recording switch"
+        }
+      ],
+      "estimate": {
+        "optimistic": 2,
+        "likely": 3,
+        "pessimistic": 6
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "packages/adjudicator/fixtures/<row>.evidence.json recorded once from the soundness rows and from journey-verify-dropped-write.test.ts (H1/H2 shapes) via JEVITATE_RECORD_EVIDENCE, with expected.json beside them holding the recorded verdicts; rejudge-fixtures.test.ts asserts adjudicate(fixture) equals the expected verdict assertion by assertion; secret-scan.test.ts asserts no fixture contains /MARKER_|Bearer |eyJ|\\?[a-z]+=/.",
+        "issues": [
+          812
+        ],
+        "junior": {
+          "acceptance": [
+            "rejudge-fixtures.test.ts iterates every file in fixtures/ and has at least as many fixtures as the soundness suite has rows (count asserted against the suite's exported ROWS)",
+            "`pnpm exec vitest run packages/adjudicator/src` finishes in under 10 s on this machine (no browser)"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/adjudicator/src/rejudge-fixtures.test.ts"
+              ]
+            },
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/adjudicator/src/secret-scan.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/cli/src/journey-verify-soundness-served.test.ts"
+            },
+            {
+              "path": "packages/cli/src/journey-verify-dropped-write.test.ts"
+            },
+            {
+              "path": "packages/adjudicator/src/adjudicate.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-done-check-run-a",
+      "owned_files": [
+        "packages/cli/src/journey-done-check.ts",
+        "packages/cli/src/journey-done-check.test.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "c-done-check",
+          "consumes": "DoneCheckSpec and the parse/lint API",
+          "kind": "interface"
+        },
+        {
+          "id": "c-result-vocab",
+          "consumes": "JobAttainment and basis",
+          "kind": "interface"
+        }
+      ],
+      "estimate": {
+        "optimistic": 3,
+        "likely": 4,
+        "pessimistic": 7
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "packages/cli/src/journey-done-check.ts: readDoneCheck({spec, origin, auth, params, extracts, browserPort}) opens a NEW browser context with the run's storageState or persona, navigates to spec.at, evaluates spec.check, closes the context and returns a DoneReading with Known value and durationMs; evaluateJobDoneCheck(before, after) \u2192 {attainment, basis} using the adjudicator's table; unit tests with a fake browser port.",
+        "issues": [
+          800
+        ],
+        "junior": {
+          "acceptance": [
+            "journey-done-check.test.ts: the fake port records that readDoneCheck opened a context id different from the run's and closed it",
+            "journey-done-check.test.ts: a reading whose navigation threw returns {known:false, reason:'session-unavailable'} and evaluateJobDoneCheck then returns unverified/reading-unknown",
+            "journey-done-check.test.ts covers the five \u00a73.1 rows"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/journey-done-check.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/journey/src/done-check.ts"
+            },
+            {
+              "path": "packages/explore/src/goal-loop/read-back.ts"
+            },
+            {
+              "path": "packages/cli/src/journey-api.ts"
+            },
+            {
+              "path": "packages/playwright/src/index.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-done-check-run-b",
+      "owned_files": [
+        "packages/cli/src/journey-done-check-hook.ts",
+        "packages/cli/src/journey-done-check-served.test.ts",
+        "packages/cli/src/journey-cli.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-done-check-run-a",
+          "consumes": "readDoneCheck and evaluateJobDoneCheck"
+        },
+        {
+          "id": "d-evidence-writer-b",
+          "consumes": "RunHooks.readDoneCheck"
+        }
+      ],
+      "estimate": {
+        "optimistic": 3,
+        "likely": 4,
+        "pessimistic": 7
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "journey run evaluates the linked job's done check (jobs.json done, else metadata.done) before step 1 and after the end state through RunHooks.readDoneCheck (journey-done-check-hook.ts), writes DoneCheckEvidence into the evidence, reports job:{attainment,basis} in the result and --json, sets the exit code per c-result-vocab, and takes --no-done-check and --require-done-check (also doneCheckPolicy in project.json); journey-done-check-served.test.ts.",
+        "issues": [
+          800
+        ],
+        "junior": {
+          "acceptance": [
+            "journey-done-check-served.test.ts: a served app whose Save shows 'Saved' but stores nothing yields job.attainment 'not-achieved' and the process exit code the decision record names",
+            "journey-done-check-served.test.ts: the same app seeded so the check is true before step 1 yields 'unverified' basis 'already-true' and exit 0",
+            "journey-done-check-served.test.ts: --no-done-check yields 'unverified' basis 'no-check'; --require-done-check on a job without a check exits 2",
+            "evidence.json from the served run has doneCheck.before.session 'fresh' and doneCheck.after.session 'fresh'"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/journey-done-check-served.test.ts"
+              ]
+            },
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/journey-cli.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/cli/src/journey-cli.ts"
+            },
+            {
+              "path": "packages/cli/src/journey-run-hooks.ts"
+            },
+            {
+              "path": "packages/cli/src/exit-codes.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-done-check-explore-a",
+      "owned_files": [
+        "packages/explore/src/conversation.ts",
+        "packages/explore/src/goal-loop/handle-done.ts",
+        "packages/explore/src/goal-loop/read-back.ts",
+        "packages/explore/src/conversation.test.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "c-done-check",
+          "consumes": "the check-kind grammar and placeholder resolution",
+          "kind": "interface"
+        },
+        {
+          "id": "c-result-vocab",
+          "consumes": "JobAttainment",
+          "kind": "interface"
+        }
+      ],
+      "estimate": {
+        "optimistic": 3,
+        "likely": 4,
+        "pessimistic": 6
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "The goal loop's done verdict carries job attainment: conversation.ts DoneVerdict gains {attainment, basis}; a verdict accepted by grounded-judgment, sign-in-signals or save-signals alone is basis 'no-check' / attainment 'unverified'; with a job done check (passed in as cfg.doneCheck) read-back.ts evaluates it in a fresh context after the model's done and that decides attainment; unit tests on the verdict function.",
+        "issues": [
+          800,
+          807
+        ],
+        "junior": {
+          "acceptance": [
+            "conversation.test.ts: a verdict with verifiedBy 'grounded-judgment' and no doneCheck has attainment 'unverified'",
+            "conversation.test.ts: with cfg.doneCheck and a fresh-context reading false, the verdict is rejected and attainment 'not-achieved'"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/explore/src/conversation.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/explore/src/conversation.ts"
+            },
+            {
+              "path": "packages/explore/src/goal-loop/handle-done.ts"
+            },
+            {
+              "path": "packages/explore/src/goal-loop/read-back.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-done-check-explore-b",
+      "owned_files": [
+        "packages/cli/src/explore-cli.ts",
+        "packages/explore/src/explore-done-check-served.test.ts",
+        "packages/cli/src/mcp-tools/explore.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-done-check-explore-a",
+          "consumes": "DoneVerdict with attainment"
+        },
+        {
+          "id": "d-nav-lab-land",
+          "consumes": "looks-done-wrong-page and looks-done-* cases to score against"
+        }
+      ],
+      "estimate": {
+        "optimistic": 2,
+        "likely": 3,
+        "pessimistic": 5
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "explore --goal --job <id> loads the job's done check from jobs.json as cfg.doneCheck; the result and get_mission_result carry job:{attainment,basis}; a judgment-only pass prints a stderr warning naming --success or --job; doneCheckPolicy require / --require-done-check turns an unverified pass into exit 2; explore-done-check-served.test.ts replays the lab's looks-done-wrong-page with --job.",
+        "issues": [
+          800,
+          807
+        ],
+        "junior": {
+          "acceptance": [
+            "explore-done-check-served.test.ts: looks-done-wrong-page with --job reads attainment 'not-achieved' in 3 of 3 served replicates",
+            "explore-done-check-served.test.ts: the same goal without --success or --job exits 0, result.job.attainment is 'unverified', and stderr contains 'add --success or --job'",
+            "with --require-done-check the unverified run exits 2 and missionOutcome is inconclusive"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/explore/src/explore-done-check-served.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/cli/src/explore-cli.ts"
+            },
+            {
+              "path": "packages/cli/src/mcp-tools/explore.ts"
+            },
+            {
+              "path": "test/fixtures/nav-lab/"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-done-check-catalog",
+      "owned_files": [
+        "packages/journey/src/catalog-schema.ts",
+        "packages/journey/src/catalog-schema.test.ts",
+        "packages/cli/src/catalog-refs.ts",
+        "packages/cli/src/catalog-cli.ts",
+        "packages/cli/src/mcp-tools/journey.ts",
+        "docs/catalog.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "c-done-check",
+          "consumes": "the done field schema",
+          "kind": "interface"
+        }
+      ],
+      "estimate": {
+        "optimistic": 3,
+        "likely": 4,
+        "pessimistic": 8
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "jobs.json gains the optional `done` field (JobSchema done: DoneCheckSpec, counted in the content hash), catalog-refs.ts reports job.done-check-unparseable, `jevitate journey link` and find_capabilities expose the linked job's done check, journey lint warns missing-done-check on a promoted Journey whose job has none; docs/catalog.md documents the field with one example.",
+        "issues": [
+          800
+        ],
+        "junior": {
+          "acceptance": [
+            "catalog-schema.test.ts: the existing jobs.json fixtures parse unchanged; a job with done parses and its content hash differs from the same job without it",
+            "catalog-refs.test.ts: an approved job whose done is edited reports status stale",
+            "mcp-cli-parity: find_capabilities output for a linked Journey carries job.done.at and job.done.check"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/journey/src/catalog-schema.test.ts"
+              ]
+            },
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/catalog-refs.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/journey/src/catalog-schema.ts"
+            },
+            {
+              "path": "packages/cli/src/catalog-refs.ts"
+            },
+            {
+              "path": "docs/catalog.md"
+            },
+            {
+              "path": "packages/cli/src/mcp-tools/journey.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-boundary-outcomes-a",
+      "owned_files": [
+        "packages/explore/src/goal-loop/boundary.ts",
+        "packages/explore/src/goal-loop/boundary.test.ts",
+        "packages/explore/src/goal-loop/handle-blocked.ts",
+        "packages/explore/src/goal-loop/settled-checks.ts",
+        "packages/explore/src/goal-loop/finish.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "c-result-vocab",
+          "consumes": "goalOutcome boundary and its fold",
+          "kind": "interface"
+        },
+        {
+          "id": "d-811-land",
+          "consumes": "merged goal-loop/observe.ts"
+        }
+      ],
+      "estimate": {
+        "optimistic": 3,
+        "likely": 4,
+        "pessimistic": 7
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "Wall and session boundaries on the goal loop (from experiment/h-wall-boundary and experiment/h-session-boundary): boundary.ts detects a 401/403 document or write response and a refused paid control (kind wall) and a settled step landing on a login URL guarded by goal words (kind session), returning BoundaryEvidence; settled-checks.ts and handle-blocked.ts call it; finish.ts ends the run goalOutcome 'boundary' with goalReason naming the signal; boundary.test.ts unit rows.",
+        "issues": [
+          807
+        ],
+        "junior": {
+          "acceptance": [
+            "boundary.test.ts: a 403 document response, a 403 on a same-origin POST, and a control named 'Upgrade to Pro' each yield kind 'wall' with signals http-403, http-403, paid-control; a 403 on a cross-origin image yields nothing",
+            "boundary.test.ts: a settled step whose URL matches /login|signin/ yields kind 'session' only when the goal has no sign-in word",
+            "finish.ts maps a boundary to goalOutcome 'boundary' and missionOutcome 'inconclusive'"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/explore/src/goal-loop/boundary.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": ".delivery/nav-lab/remediations.md"
+            },
+            {
+              "path": "packages/explore/src/goal-loop/settled-checks.ts"
+            },
+            {
+              "path": "packages/explore/src/goal-loop/handle-blocked.ts"
+            },
+            {
+              "path": "packages/explore/src/goal-loop/finish.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-boundary-outcomes-b",
+      "owned_files": [
+        "packages/explore/src/goal-loop/boundary-navigation.ts",
+        "packages/explore/src/goal-loop/boundary-navigation.test.ts",
+        "packages/explore/src/goal-loop/handle-click.ts",
+        "packages/explore/src/nav-boundary-served.test.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-boundary-outcomes-a",
+          "consumes": "BoundaryEvidence and the boundary ending"
+        },
+        {
+          "id": "d-nav-lab-land",
+          "consumes": "the wall, session, sso-only, newtab and clean cases"
+        }
+      ],
+      "estimate": {
+        "optimistic": 3,
+        "likely": 4,
+        "pessimistic": 7
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "Off-allowlist and new-tab boundaries (from experiment/h-off-allowlist): a click that would navigate the top frame off the allowlist, or that opens a new tab, ends the run boundary kind 'off-allowlist' or 'new-tab' naming the origin, the tab closed not followed; the reason line holds no raw control JSON; nav-boundary-served.test.ts replays wall-403-page, wall-api-403, wall-plan-upgrade, session-expires-midrun, sso-only, newtab-route, clean and incidental-403-asset from the lab.",
+        "issues": [
+          807
+        ],
+        "junior": {
+          "acceptance": [
+            "nav-boundary-served.test.ts: the six boundary cases each end goalOutcome 'boundary' with the expected kind in 2 of 2 served replicates; clean and incidental-403-asset end with no boundary",
+            "for sso-only and newtab-route the result's boundary.origin equals the decoy origin and goalReason does not contain '{'"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/explore/src/goal-loop/boundary-navigation.test.ts"
+              ]
+            },
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/explore/src/nav-boundary-served.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/explore/src/goal-loop/handle-click.ts"
+            },
+            {
+              "path": "packages/explore/src/goal-loop/boundary.ts"
+            },
+            {
+              "path": "test/fixtures/nav-lab/"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-return-to-start-a",
+      "owned_files": [
+        "packages/explore/src/goal-loop/return-to-start.ts",
+        "packages/explore/src/goal-loop/return-to-start.test.ts",
+        "packages/explore/src/goal-loop/decide-step.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-nav-lab-land",
+          "consumes": "lure-trap-branch, lure-one-broken, lure-dead-end-disabled cases"
+        }
+      ],
+      "estimate": {
+        "optimistic": 2,
+        "likely": 3,
+        "pessimistic": 6
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "return-to-start.ts (from experiment/h-return-to-start): the loop remembers pages with untried controls (page signature + untried control ids), and when the current branch dead-ends (no-progress or the model's blocked) decide-step.ts offers a return to the most recent such page as a navigate step recorded in the Recording; return-to-start.test.ts with a scripted page sequence.",
+        "issues": [
+          807
+        ],
+        "junior": {
+          "acceptance": [
+            "return-to-start.test.ts: after a dead end, the next decision is a navigate to the remembered page and that page's untried control is offered",
+            "return-to-start.test.ts: a page with no untried controls is never a return target; the same page is returned to at most twice"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/explore/src/goal-loop/return-to-start.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": ".delivery/nav-lab/remediations.md"
+            },
+            {
+              "path": "packages/explore/src/goal-loop/decide-step.ts"
+            },
+            {
+              "path": "packages/explore/src/goal-loop/handle-blocked.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-return-to-start-b",
+      "owned_files": [
+        "packages/explore/src/return-to-start-served.test.ts",
+        "docs/exploration.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-return-to-start-a",
+          "consumes": "the return step and its Recording entry"
+        }
+      ],
+      "estimate": {
+        "optimistic": 2,
+        "likely": 3,
+        "pessimistic": 6
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "return-to-start-served.test.ts: the three lure cases succeed in served replays, j3-deadend still ends blocked, and a Recording produced with a return step is saved as a Journey and replays through journey run with no model; docs/exploration.md gains a paragraph on returning to an earlier page.",
+        "issues": [
+          807
+        ],
+        "junior": {
+          "acceptance": [
+            "return-to-start-served.test.ts: lure-trap-branch, lure-one-broken, lure-dead-end-disabled succeed in 2 of 2 served replicates each; j3-deadend ends blocked 2 of 2",
+            "the saved Journey from a lure run replays `ok` with the fake AI disabled (no model call recorded)"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/explore/src/return-to-start-served.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/explore/src/record.ts"
+            },
+            {
+              "path": "packages/explore/src/authoring/step-expectations.ts"
+            },
+            {
+              "path": "test/fixtures/nav-lab/"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-sign-in-verb",
+      "owned_files": [
+        "packages/explore/src/read-only.ts",
+        "packages/explore/src/read-only.test.ts",
+        "packages/explore/src/sign-in-goal-served.test.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-nav-lab-land",
+          "consumes": "the sign-in-goal case"
+        }
+      ],
+      "estimate": {
+        "optimistic": 1,
+        "likely": 2,
+        "pessimistic": 4
+      },
+      "earning_rule": "zero_hundred",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "read-only.ts: 'sign in', 'log in', 'login' and 'authenticate' join the change-verb list so a 'Sign in with\u2026' goal may type and submit; the asked-about forms ('how do I sign in') stay read-only; read-only.test.ts rows; sign-in-goal-served.test.ts completes the lab's sign-in-goal case.",
+        "issues": [
+          810
+        ],
+        "junior": {
+          "acceptance": [
+            "read-only.test.ts: goalAsksForChange('Sign in with alice@example.com and password x') is true; goalAsksForChange('How do I sign in?') is false",
+            "sign-in-goal-served.test.ts: the sign-in-goal case ends succeeded 2 of 2 and the lab server saw one POST /login"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/explore/src/read-only.test.ts"
+              ]
+            },
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/explore/src/sign-in-goal-served.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/explore/src/read-only.ts"
+            },
+            {
+              "path": "test/fixtures/nav-lab/"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-run-mode-wire",
+      "owned_files": [
+        "packages/cli/src/journey-run-mode-gate.ts",
+        "packages/cli/src/journey-run-mode-gate.test.ts",
+        "packages/cli/src/mcp-run-guard.ts",
+        "packages/cli/src/mcp-run-guard.test.ts",
+        "packages/cli/src/mcp-api.ts",
+        "packages/cli/src/mcp-cli-tools.ts",
+        "packages/cli/src/cli-shared.ts",
+        "packages/cli/src/mcp-run-mode-served.test.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "c-run-mode",
+          "consumes": "TargetTrust and runModeFor",
+          "kind": "interface"
+        },
+        {
+          "id": "c-result-vocab",
+          "consumes": "refusal outcomes",
+          "kind": "interface"
+        },
+        {
+          "id": "d-evidence-writer-b",
+          "consumes": "RunHooks.resolveMode and run.mode in the evidence"
+        }
+      ],
+      "estimate": {
+        "optimistic": 8,
+        "likely": 12,
+        "pessimistic": 20
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "frontier",
+        "artifact": "Run mode wired into every run surface: journey-run-mode-gate.ts resolves the mode through RunHooks.resolveMode and writes run.mode and target.trust into the evidence; in automation mode a Journey's approval must have channel tty or pr-review (E_APPROVAL_CHANNEL_FOR_MODE) and targets.json secretFields are read over MCP; in test mode a human step fails E_HUMAN_STEP_IN_TEST_MODE before a browser opens; mcp-run-guard.ts takes the mode; site_policy over MCP accepts only a policy no looser on any axis (E_POLICY_LOOSEN_OVER_MCP); mission_targets promote over MCP refuses E_TARGET_PROMOTE_OVER_MCP; authored allowedOrigins join the write allowlist in test mode only; CLI runs warn on stderr for a draft on an automation target.",
+        "issues": [
+          792,
+          799
+        ],
+        "junior": {
+          "acceptance": [
+            "mcp-run-mode-served.test.ts: promote_journey over MCP then run_journey with baseUrl of an undeclared origin returns E_APPROVAL_CHANNEL_FOR_MODE and the browser port's launch count is 0",
+            "mcp-run-mode-served.test.ts: the same Journey approved with channel tty runs on that origin and evidence.json has run.mode 'automation'",
+            "mcp-run-guard.test.ts: site_policy with minIntervalMs lower than the effective policy returns E_POLICY_LOOSEN_OVER_MCP; equal or higher is accepted; mission_targets promote returns E_TARGET_PROMOTE_OVER_MCP",
+            "journey-run-mode-gate.test.ts: a target with trust 'test' and a handback step refuses E_HUMAN_STEP_IN_TEST_MODE with launch count 0"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/journey-run-mode-gate.test.ts"
+              ]
+            },
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/mcp-run-guard.test.ts"
+              ]
+            },
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/mcp-run-mode-served.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/cli/src/mcp-run-guard.ts"
+            },
+            {
+              "path": "packages/cli/src/mcp-cli-tools.ts"
+            },
+            {
+              "path": "packages/cli/src/mcp-api.ts"
+            },
+            {
+              "path": "packages/cli/src/approval-provenance.ts"
+            },
+            {
+              "path": "docs/safety.md"
+            },
+            {
+              "path": "packages/cli/src/run-mode.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-trust-escape-tests",
+      "owned_files": [
+        "packages/cli/src/mcp-trust-escape.test.ts",
+        "packages/cli/src/mcp-trust-escape-served.test.ts",
+        "packages/cli/src/check-trust.ts",
+        "packages/cli/src/check-trust.test.ts",
+        "packages/cli/src/check-cli.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-run-mode-wire",
+          "consumes": "the wired mode gate and refusal codes"
+        }
+      ],
+      "estimate": {
+        "optimistic": 3,
+        "likely": 4,
+        "pessimistic": 8
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "mcp-trust-escape.test.ts: a matrix over every MCP tool that starts a run (run_journey, chain_journeys, verify_journey, journey_readiness, demo_journey, annotate_journey, run_check, run_load_test, run_exploration, queue_exploration) \u00d7 targets declared production, declared unknown, undeclared baseUrl, asserting the resolved mode is 'automation' in every cell whatever the arguments; mcp-trust-escape-served.test.ts for two of them end to end; check-trust.ts adds `jevitate check --require-trust` failing when an environment's trust key differs from the last committed value.",
+        "issues": [
+          792,
+          799
+        ],
+        "junior": {
+          "acceptance": [
+            "mcp-trust-escape.test.ts has 10 \u00d7 3 = 30 cells and every cell asserts mode === 'automation'",
+            "check-trust.test.ts: with trust edited in the working tree, `check --require-trust` exits 1 naming the environment; after commit it exits 0"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/mcp-trust-escape.test.ts"
+              ]
+            },
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/check-trust.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/cli/src/mcp-run-gate.test.ts"
+            },
+            {
+              "path": "packages/cli/src/check-cli.ts"
+            },
+            {
+              "path": "packages/cli/src/acceptance-audit-approval-script.ts"
+            },
+            {
+              "path": "packages/cli/src/journey-run-mode-gate.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-hold-approve",
+      "owned_files": [
+        "packages/cli/src/journey-hold.ts",
+        "packages/cli/src/journey-hold.test.ts",
+        "packages/cli/src/journey-hold-served.test.ts",
+        "packages/cli/src/journey-run-checkpoint.ts",
+        "packages/cli/src/inbox-cli.ts",
+        "packages/inbox/src/types.ts",
+        "packages/inbox/src/store.ts",
+        "packages/cli/src/mcp-tools/inbox.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "c-run-mode",
+          "consumes": "the automation-mode hold requirement",
+          "kind": "interface"
+        },
+        {
+          "id": "d-evidence-writer-b",
+          "consumes": "RunHooks.onHold and the keyed paramsDigest"
+        }
+      ],
+      "estimate": {
+        "optimistic": 8,
+        "likely": 12,
+        "pessimistic": 20
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "frontier",
+        "artifact": "Durable holds for automation runs: journey-hold.ts with HoldRecordSchema exactly as design doc \u00a75.4, written atomically under .jevitate/logs/holds/<id>.json with the #787 key; journey-run-checkpoint.ts saves a resumable value-free run state at the pending step; queue_action (MCP) creates a hold through RunHooks.onHold and the run returns outcome 'held' with the hold id; approve_action over MCP keeps refusing; `jevitate inbox approve <id>` at a TTY writes answer with provenance; `jevitate inbox resume <id>` continues only when journey hash, paramsDigest, target origin and pending action match; an expired hold ends inconclusive E_HOLD_EXPIRED; the inbox types gain the hold kinds.",
+        "issues": [
+          793
+        ],
+        "junior": {
+          "acceptance": [
+            "journey-hold-served.test.ts: a run held at step 3, its process killed, then `inbox approve` at a fake TTY and `inbox resume` complete the Journey `ok` with steps 1-2 not re-run (server request log asserted)",
+            "journey-hold.test.ts: resume refuses with E_HOLD_BINDING for each of: a changed Journey hash, a different paramsDigest, a different origin, a different pending step",
+            "journey-hold.test.ts: approve_action over MCP returns the existing refusal and the hold file is byte-identical before and after",
+            "`grep -c MARKER_` over the hold file and checkpoint written by a run with marker params is 0"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/journey-hold.test.ts"
+              ]
+            },
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/journey-hold-served.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/cli/src/journey-verify-checkpoint.ts"
+            },
+            {
+              "path": "packages/inbox/src/store.ts"
+            },
+            {
+              "path": "packages/inbox/src/types.ts"
+            },
+            {
+              "path": "packages/cli/src/inbox-cli.ts"
+            },
+            {
+              "path": "packages/cli/src/mcp-tools/inbox.ts"
+            },
+            {
+              "path": "packages/cli/src/approval-provenance.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-handback-vault",
+      "owned_files": [
+        "packages/cli/src/journey-handback.ts",
+        "packages/cli/src/journey-secret-mode.ts",
+        "packages/cli/src/journey-secret-mode.test.ts",
+        "packages/cli/src/journey-secret-mode-served.test.ts",
+        "packages/runtime/src/journey-runner.ts",
+        "packages/runtime/src/journey-runner.test.ts",
+        "packages/cli/src/secret-params.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-hold-approve",
+          "consumes": "hold and resume API"
+        }
+      ],
+      "estimate": {
+        "optimistic": 6,
+        "likely": 8,
+        "pessimistic": 14
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "frontier",
+        "artifact": "Automation mode reaches visible-handback and vault-autofill: journey-secret-mode.ts chooses the SecretMode per run (test mode \u2192 fail-closed with E_HUMAN_STEP_IN_TEST_MODE before launch; automation mode \u2192 vault-autofill when targets.json binds a secretField to the origin, else a hold of kind secret/handback that `inbox resume` opens headed for the person); CLI --secret-mode flag; run_journey, verify_journey, journey_readiness and chain_journeys hold instead of refusing a secret parameter in automation mode; E_SECRET_PARAM_OVER_MCP unchanged for a value in arguments; journey-runner.ts resumes from a hold.",
+        "issues": [
+          798,
+          809
+        ],
+        "junior": {
+          "acceptance": [
+            "journey-secret-mode-served.test.ts: a Journey with a recorded handback step on a trust 'unknown' target returns outcome 'held' over MCP, and after a headed completion (scripted) resumes to `ok`",
+            "journey-secret-mode-served.test.ts: with targets.json secretFields bound to the origin, vault-autofill types the value and `grep -c MARKER_S` over result, evidence, hold, checkpoint and logs is 0; bound to another origin it refuses E_SECRET_ORIGIN_REFUSED",
+            "journey-secret-mode.test.ts: the same Journey on a trust 'test' target returns E_HUMAN_STEP_IN_TEST_MODE with launch count 0",
+            "secret-params tests: run_journey with {password:'x'} in arguments still returns E_SECRET_PARAM_OVER_MCP in both modes"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/journey-secret-mode.test.ts"
+              ]
+            },
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/journey-secret-mode-served.test.ts"
+              ]
+            },
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/runtime/src/journey-runner.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/runtime/src/journey-runner.ts"
+            },
+            {
+              "path": "packages/cli/src/journey-handback.ts"
+            },
+            {
+              "path": "packages/cli/src/secret-params.ts"
+            },
+            {
+              "path": "packages/domain/src/run-policy.ts"
+            },
+            {
+              "path": "docs/journeys.md"
+            },
+            {
+              "path": "docs/contracts/handback-outcome.md"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-secret-argv-warnings",
+      "owned_files": [
+        "packages/cli/src/regression-cli.ts",
+        "packages/cli/src/verify-fix-cli.ts",
+        "packages/cli/src/journey-labels-migrate-api.ts",
+        "packages/cli/src/secret-argv-warnings.test.ts"
+      ],
+      "prerequisites": [],
+      "estimate": {
+        "optimistic": 1,
+        "likely": 2,
+        "pessimistic": 4
+      },
+      "earning_rule": "zero_hundred",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "The CLI forms #809 lists without a warning print the existing argv secret warning (secretParamNamesArgvWarning) on stderr by name only: regression run/capture --param, verify-fix --param, journey migrate --labels; secret-argv-warnings.test.ts.",
+        "issues": [
+          809
+        ],
+        "junior": {
+          "acceptance": [
+            "secret-argv-warnings.test.ts: each of the three forms given --param password=MARKER writes a stderr line containing 'password' and not 'MARKER'"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/secret-argv-warnings.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/cli/src/secret-params.ts"
+            },
+            {
+              "path": "packages/cli/src/journey-cli.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-sentinel-shadow-a",
+      "owned_files": [
+        "packages/runtime/src/write-sentinel.ts",
+        "packages/runtime/src/write-sentinel.test.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "c-run-mode",
+          "consumes": "the test-mode exclusion rule",
+          "kind": "interface"
+        }
+      ],
+      "estimate": {
+        "optimistic": 2,
+        "likely": 3,
+        "pessimistic": 5
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "packages/runtime/src/write-sentinel.ts: WriteSentinel.judge({control, method, pathShape, pageSummary, jobStory}) \u2192 AdvisoryJudgment[] (tasks write.destructive, write.outside-intent) through the Jev judgment gateway with the redaction guard applied to pageSummary, returning [] with a note when Jev is unavailable; never throws; write-sentinel.test.ts with a fake gateway.",
+        "issues": [
+          794
+        ],
+        "junior": {
+          "acceptance": [
+            "write-sentinel.test.ts: the fake gateway's received payload for a pageSummary containing MARKER_S (declared secret) does not contain MARKER_S",
+            "write-sentinel.test.ts: a gateway that rejects yields [] and a note 'jev-unavailable', and the promise resolves"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/runtime/src/write-sentinel.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/ai-core/src/judgment.ts"
+            },
+            {
+              "path": "packages/ai-core/src/credential-guard.ts"
+            },
+            {
+              "path": "packages/explore/src/goal-loop/act-gate.ts"
+            },
+            {
+              "path": "packages/journey/src/catalog-schema.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-sentinel-shadow-b",
+      "owned_files": [
+        "packages/cli/src/sentinel-hook.ts",
+        "packages/cli/src/sentinel-hook.test.ts",
+        "packages/cli/src/sentinel-shadow-served.test.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-sentinel-shadow-a",
+          "consumes": "WriteSentinel.judge"
+        },
+        {
+          "id": "d-evidence-writer-b",
+          "consumes": "RunHooks.beforeWrite and the judgments[] writer"
+        }
+      ],
+      "estimate": {
+        "optimistic": 2,
+        "likely": 3,
+        "pessimistic": 5
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "The sentinel runs in shadow mode on automation runs only: a RunHooks.beforeWrite hook (sentinel-hook.ts) calls WriteSentinel before each write step, appends the judgments to evidence.judgments with advisory:true, counts wouldHaveHeld in the result, holds nothing, and is not registered in test mode; sentinel-shadow-served.test.ts.",
+        "issues": [
+          794
+        ],
+        "junior": {
+          "acceptance": [
+            "sentinel-shadow-served.test.ts: an automation run with two writes has two judgments in evidence.json, each advisory:true, and adjudicate(evidence) equals adjudicate({...evidence, judgments:[]})",
+            "sentinel-shadow-served.test.ts: the same Journey on a test target has evidence.judgments [] and the fake gateway received 0 calls"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/sentinel-hook.test.ts"
+              ]
+            },
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/sentinel-shadow-served.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/cli/src/journey-run-hooks.ts"
+            },
+            {
+              "path": "packages/runtime/src/write-sentinel.ts"
+            },
+            {
+              "path": "packages/adjudicator/src/adjudicate.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "x-sentinel-measure",
+      "owned_files": [
+        ".delivery/rel-030/experiments/sentinel-precision.md",
+        "scripts/sentinel-lab/"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-sentinel-shadow-b",
+          "consumes": "the shadow sentinel and its evidence"
+        }
+      ],
+      "estimate": {
+        "optimistic": 4,
+        "likely": 6,
+        "pessimistic": 10
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "frontier",
+        "artifact": ".delivery/rel-030/experiments/sentinel-precision.md: the shadow sentinel scored on a seeded set in scripts/sentinel-lab/** (at least 20 destructive and 20 harmless writes on the accuracy-lab app and the example site), reporting precision, recall, n, model cost per write, the false-stop rate on the accuracy lab's clean cells, and a recommendation on gating for 0.31.0.",
+        "issues": [
+          794
+        ],
+        "junior": {
+          "acceptance": [
+            "sentinel-precision.md has a table with columns case, truth, destructive p, outside-intent p, would-have-held, and totals giving precision and recall with n \u2265 40",
+            "the raw judgments are in scripts/sentinel-lab/results.jsonl and the report's numbers are reproduced by scripts/sentinel-lab/score.mjs"
+          ],
+          "checks": [
+            {
+              "command": "test",
+              "args": [
+                "-s",
+                ".delivery/rel-030/experiments/sentinel-precision.md"
+              ]
+            },
+            {
+              "command": "test",
+              "args": [
+                "-s",
+                "scripts/sentinel-lab/results.jsonl"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "test/fixtures/accuracy-lab/README.md"
+            },
+            {
+              "path": "scripts/accuracy-lab/score.mjs"
+            },
+            {
+              "path": "packages/cli/src/sentinel-hook.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-typed-params-impl-a",
+      "owned_files": [
+        "packages/cli/src/journey-param-types.ts",
+        "packages/cli/src/journey-param-types.test.ts",
+        "packages/cli/src/journey-chain-api.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "c-typed-params",
+          "consumes": "parameter type schema and validateParams",
+          "kind": "interface"
+        },
+        {
+          "id": "d-evidence-writer-b",
+          "consumes": "RunHooks.validateParams"
+        }
+      ],
+      "estimate": {
+        "optimistic": 2,
+        "likely": 3,
+        "pessimistic": 5
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "journey-param-types.ts: a RunHooks.validateParams hook that runs validateParams(journey, params) before any browser opens on journey run (CLI) and run_journey/chain_journeys (MCP), refusing with E_JOURNEY_PARAM_TYPE and the issue list (names and expected types, never values); journey-chain-api.ts applies the same to a consumer's handoff; journey-param-types.test.ts.",
+        "issues": [
+          796
+        ],
+        "junior": {
+          "acceptance": [
+            "journey-param-types.test.ts: a number parameter given 'abc' returns E_JOURNEY_PARAM_TYPE on CLI and MCP paths with identical issue objects and the browser port's launch count 0",
+            "journey-param-types.test.ts: a chain whose producer emits 'abc' for a consumer's number parameter fails closed before the consumer's browser opens"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/journey-param-types.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/journey/src/parameters.ts"
+            },
+            {
+              "path": "packages/cli/src/journey-chain-api.ts"
+            },
+            {
+              "path": "packages/cli/src/journey-run-hooks.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-typed-params-impl-b",
+      "owned_files": [
+        "packages/cli/src/journey-find-api.ts",
+        "packages/cli/src/journey-find-api.test.ts",
+        "packages/cli/src/mcp-cli-parity.test.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-typed-params-impl-a",
+          "consumes": "the validated parameter model"
+        }
+      ],
+      "estimate": {
+        "optimistic": 2,
+        "likely": 3,
+        "pessimistic": 5
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "find_capabilities and `journey find` expose each parameter's type and enum values (journey-find-api.ts); mcp-cli-parity.test.ts covers the new fields; docs/journeys.md's parameters table documents type and enum.",
+        "issues": [
+          796
+        ],
+        "junior": {
+          "acceptance": [
+            "journey-find-api.test.ts: a Journey with {name:'plan', type:'enum', enum:['free','pro']} lists parameters[0].type 'enum' and enum ['free','pro'] in both the CLI --json and the MCP result",
+            "`pnpm exec vitest run packages/cli/src/mcp-cli-parity.test.ts` exits 0"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/journey-find-api.test.ts"
+              ]
+            },
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/mcp-cli-parity.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/cli/src/mcp-tools/journey.ts"
+            },
+            {
+              "path": "packages/cli/src/mcp-cli-parity.test.ts"
+            },
+            {
+              "path": "packages/cli/src/journey-api.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-queue-journeys-a",
+      "owned_files": [
+        "packages/missions/src/schema.ts",
+        "packages/missions/src/schema.test.ts",
+        "packages/cli/src/mission-queue-runner.ts",
+        "packages/cli/src/mission-queue-journey.test.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "c-typed-params",
+          "consumes": "parameter types",
+          "kind": "interface"
+        },
+        {
+          "id": "d-run-mode-wire",
+          "consumes": "the mode gate a queued call must pass"
+        }
+      ],
+      "estimate": {
+        "optimistic": 3,
+        "likely": 4,
+        "pessimistic": 7
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "QueuedJourneyCall in packages/missions/src/schema.ts (kind 'journey', journey {id, hash}, params without secret-named keys, env or baseUrl, requestedAt), QueuedMission accepts it, and mission-queue-runner.ts runs a queued Journey call through the same promotion check, mode gate and prepareMcpRunGuard as run_journey (one shared function, runGuardedJourney, exported from journey-run-mode-gate.ts); schema.test.ts and mission-queue-journey.test.ts.",
+        "issues": [
+          797
+        ],
+        "junior": {
+          "acceptance": [
+            "schema.test.ts: a QueuedJourneyCall with params {password:'x'} fails to parse with a message naming 'password'",
+            "mission-queue-journey.test.ts: a spy on runGuardedJourney shows the queued call and a direct run_journey call go through the same function with the same guard arguments"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/missions/src/schema.test.ts"
+              ]
+            },
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/mission-queue-journey.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/missions/src/schema.ts"
+            },
+            {
+              "path": "packages/cli/src/mission-queue-runner.ts"
+            },
+            {
+              "path": "packages/cli/src/journey-run-mode-gate.ts"
+            },
+            {
+              "path": "packages/cli/src/mcp-run-guard.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-queue-journeys-b",
+      "owned_files": [
+        "packages/cli/src/mission-queue-cli.ts",
+        "packages/cli/src/mission-queue-journey-served.test.ts",
+        "docs/multi-run.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-queue-journeys-a",
+          "consumes": "QueuedJourneyCall and the runner"
+        }
+      ],
+      "estimate": {
+        "optimistic": 2,
+        "likely": 3,
+        "pessimistic": 5
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "`jevitate journey queue <id> [--param k=v] [--env e]` on the CLI writes a QueuedJourneyCall (refusing a secret-named param before writing, E_SECRET_PARAM_IN_QUEUE), `jevitate mission run` drains it, and mission-queue-journey-served.test.ts runs one end to end on a served app; docs/multi-run.md documents queued Journeys.",
+        "issues": [
+          797
+        ],
+        "junior": {
+          "acceptance": [
+            "mission-queue-journey-served.test.ts: a queued promoted Journey runs `ok` when drained and its evidence.json has run.channel 'queue'",
+            "`journey queue login --param password=x` exits 64 with E_SECRET_PARAM_IN_QUEUE and the queue directory is unchanged"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/mission-queue-journey-served.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/cli/src/mission-queue-cli.ts"
+            },
+            {
+              "path": "packages/cli/src/mission-cli.ts"
+            },
+            {
+              "path": "docs/multi-run.md"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-queue-journeys-mcp",
+      "owned_files": [
+        "packages/mcp-facade/src/tools.ts",
+        "packages/mcp-facade/src/boundary.test.ts",
+        "packages/mcp-facade/src/named-tools.test.ts",
+        "packages/cli/src/mcp-tools/queue-journey.ts",
+        "packages/cli/src/mcp-surface-030.test.ts",
+        "scripts/__snapshots__/api-surface.declaration.snapshot.txt",
+        "scripts/__snapshots__/api-surface.runtime.snapshot.txt"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-queue-journeys-b",
+          "consumes": "the CLI queue command the MCP tool mirrors"
+        }
+      ],
+      "estimate": {
+        "optimistic": 3,
+        "likely": 4,
+        "pessimistic": 8
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "frontier",
+        "artifact": "queue_journey added to ALLOWED_TOOLS in packages/mcp-facade/src/tools.ts with the facade's boundary and named-tools tests updated, wired in packages/cli/src/mcp-tools/queue-journey.ts (refusing a secret-named param by name before writing), the api-surface snapshots updated, and mcp-surface-030.test.ts asserting served tools equal ALLOWED_TOOLS with queue_journey the only addition since 0.29.0.",
+        "issues": [
+          797
+        ],
+        "junior": {
+          "acceptance": [
+            "mcp-surface-030.test.ts: buildMcpTools(deps).map(t => t.name) deep-equals ALLOWED_TOOLS, and the set difference from the 0.29.0 list (snapshot) is exactly ['queue_journey']",
+            "boundary.test.ts: queue_journey with {password:'x'} returns E_SECRET_PARAM_OVER_MCP and no file is written under the queue directory"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/mcp-facade/src/boundary.test.ts"
+              ]
+            },
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/mcp-surface-030.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/mcp-facade/src/tools.ts"
+            },
+            {
+              "path": "packages/mcp-facade/src/boundary.test.ts"
+            },
+            {
+              "path": "packages/cli/src/mcp-tools/journey.ts"
+            },
+            {
+              "path": "packages/cli/src/mcp-surface-011.test.ts"
+            },
+            {
+              "path": "AGENTS.md"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-reconcile-a",
+      "owned_files": [
+        "packages/cli/src/journey-reconcile.ts",
+        "packages/cli/src/journey-reconcile.test.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-done-check-run-a",
+          "consumes": "readDoneCheck"
+        },
+        {
+          "id": "d-hold-approve",
+          "consumes": "the resume path"
+        }
+      ],
+      "estimate": {
+        "optimistic": 2,
+        "likely": 3,
+        "pessimistic": 5
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "journey-reconcile.ts: reconcileBeforeRetry({journey, job, auth}) reads the job's done check in a fresh context before a retry or a resume of an automation run and returns {proceed:false, basis:'already-true'} when it reads true, {proceed:true} when false, {proceed:false, basis:'reading-unknown'} when unknown; the retry and resume paths (journey run --retry, inbox resume) call it; journey-reconcile.test.ts.",
+        "issues": [
+          795
+        ],
+        "junior": {
+          "acceptance": [
+            "journey-reconcile.test.ts: a fake reader returning true yields proceed false / already-true; false yields proceed true; {known:false} yields proceed false / reading-unknown"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/journey-reconcile.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/cli/src/journey-done-check.ts"
+            },
+            {
+              "path": "packages/cli/src/journey-hold.ts"
+            },
+            {
+              "path": "docs/design/approach.md"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-reconcile-b",
+      "owned_files": [
+        "packages/cli/src/journey-reconcile-served.test.ts",
+        "docs/journeys.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-reconcile-a",
+          "consumes": "reconcileBeforeRetry"
+        }
+      ],
+      "estimate": {
+        "optimistic": 1,
+        "likely": 2,
+        "pessimistic": 4
+      },
+      "earning_rule": "zero_hundred",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "journey-reconcile-served.test.ts: a run killed after its write and resumed does not repeat the write when the done check reads true; the result's writes[] lists each write's method, path shape, status and refused flag as its receipt; docs/journeys.md documents reconcile and receipts and the #809 limits paragraph is updated.",
+        "issues": [
+          795
+        ],
+        "junior": {
+          "acceptance": [
+            "journey-reconcile-served.test.ts: the served server's request log shows exactly one POST after kill + resume",
+            "the result's writes[0] has keys method, path, status, count and no key named value, body or url"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/journey-reconcile-served.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/cli/src/journey-reconcile.ts"
+            },
+            {
+              "path": "packages/cli/src/journey-hold-served.test.ts"
+            },
+            {
+              "path": "docs/journeys.md"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-harness-trust",
+      "owned_files": [
+        "packages/cli/src/harness-trust-served.test.ts",
+        "docs/harness.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "c-run-mode",
+          "consumes": "TargetTrust harness",
+          "kind": "interface"
+        },
+        {
+          "id": "c-verdict-rules",
+          "consumes": "basis harness",
+          "kind": "interface"
+        }
+      ],
+      "estimate": {
+        "optimistic": 2,
+        "likely": 3,
+        "pessimistic": 6
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "harness-trust-served.test.ts: on an environment with trust 'harness' a passing Journey run with a done check that reads true yields job.attainment 'unverified' with basis 'harness' and checks.countsForGate false; docs/harness.md describes the two-layer pattern (UI harness over MockServer or WireMock, the user's choice, then a real run), the environment declaration, and the rule that recordings used as mock data must pass the secret scan before they are committed.",
+        "issues": [
+          802
+        ],
+        "junior": {
+          "acceptance": [
+            "harness-trust-served.test.ts asserts attainment 'unverified', basis 'harness' and exit 0 on a run whose done check read true",
+            "docs/harness.md has sections: Why, Declare the environment, Record mock data, Run on the harness, Confirm on the real stack, Limits"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/harness-trust-served.test.ts"
+              ]
+            },
+            {
+              "command": "test",
+              "args": [
+                "-s",
+                "docs/harness.md"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/cli/src/run-mode.ts"
+            },
+            {
+              "path": "packages/adjudicator/src/rules-v1.ts"
+            },
+            {
+              "path": "docs/fixtures.md"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "x-witness-experiment",
+      "owned_files": [
+        ".delivery/rel-030/experiments/witness-vs-mutation.md",
+        "scripts/witness-lab/"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-done-check-run-b",
+          "consumes": "the witness arm"
+        },
+        {
+          "id": "d-verify-gathers",
+          "consumes": "the mutation-proof arm with evidence"
+        },
+        {
+          "id": "d-done-check-catalog",
+          "consumes": "done on the lab's jobs"
+        }
+      ],
+      "estimate": {
+        "optimistic": 6,
+        "likely": 8,
+        "pessimistic": 16
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "frontier",
+        "artifact": ".delivery/rel-030/experiments/witness-vs-mutation.md (#800 test-first): three arms (lint only; witness + Jev; mutation proof) in scripts/witness-lab/** on the accuracy lab's seeded defects (j1-5xx, j2-stall, j3-effort, j3-deadend, clean) plus three deliberately weak Journeys (a check that passes without the write; a 'Saved' page over a masked 500; a Journey reading an existing record), against known truth: per arm, caught, false alarms and wall time with n, and whether the prediction (witness catches at least as many as mutation proof, no more false alarms, at most 10% of the time) held, naming which of the design doc \u00a77 outcomes applies.",
+        "issues": [
+          800
+        ],
+        "junior": {
+          "acceptance": [
+            "witness-vs-mutation.md has a table with rows per arm and columns caught/total, false alarms/clean cells, median seconds, n, and a line 'Prediction held: yes|no' per clause",
+            "scripts/witness-lab/results.jsonl holds every cell and scripts/witness-lab/score.mjs reproduces the table",
+            "the report names one of the four \u00a77 outcomes and the plan change it implies"
+          ],
+          "checks": [
+            {
+              "command": "test",
+              "args": [
+                "-s",
+                ".delivery/rel-030/experiments/witness-vs-mutation.md"
+              ]
+            },
+            {
+              "command": "test",
+              "args": [
+                "-s",
+                "scripts/witness-lab/results.jsonl"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "test/fixtures/accuracy-lab/README.md"
+            },
+            {
+              "path": "scripts/accuracy-lab/run-cell.mjs"
+            },
+            {
+              "path": ".delivery/rel-0283/experiments/journeeze-report.md"
+            },
+            {
+              "path": "packages/cli/src/journey-done-check.ts"
+            },
+            {
+              "path": "docs/outcomes.md"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-proof-role-decision",
+      "owned_files": [
+        ".delivery/rel-030/decisions/proof-role.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "x-witness-experiment",
+          "consumes": "the three-arm result"
+        }
+      ],
+      "estimated_effort_hours": 0.5,
+      "earning_rule": "zero_hundred",
+      "metadata": {
+        "owner": "owner",
+        "artifact": "Decision record .delivery/rel-030/decisions/proof-role.md: mutation proof's role in 0.30.0 (default mutationProofPolicy, whether require-sensitive backs the strict gate, the release-note sentence), decided on the witness experiment's numbers.",
+        "issues": [
+          800,
+          812
+        ],
+        "kind": "manual"
+      }
+    },
+    {
+      "id": "m-witness-gate",
+      "owned_files": [
+        ".delivery/rel-030/m3-witness-gate.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-proof-role-decision",
+          "consumes": "the decision"
+        }
+      ],
+      "estimated_effort_hours": 0.25,
+      "earning_rule": "zero_hundred",
+      "metadata": {
+        "owner": "manager",
+        "artifact": "Milestone note .delivery/rel-030/m3-witness-gate.md: the #800 experiment reported and the proof-role decision recorded; vocabulary, policy defaults and docs may proceed."
+      },
+      "milestone": true
+    },
+    {
+      "id": "x-path-search-a",
+      "owned_files": [
+        "scripts/path-search-lab/"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-done-check-run-a",
+          "consumes": "the done check as the candidate oracle"
+        }
+      ],
+      "estimate": {
+        "optimistic": 4,
+        "likely": 6,
+        "pessimistic": 12
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "scripts/path-search-lab/**: a harness that takes a Journey and a job done check, generates candidates by step removal (reusing packages/regression/src/minimize.ts's delta strategy), replays each candidate against the accuracy-lab app with a reset per candidate, decides it by the done check, and records length, verdict and replay count to results.jsonl; the removal-only arm run on the lab's three Journeys with a 30-replay budget.",
+        "issues": [
+          801
+        ],
+        "junior": {
+          "acceptance": [
+            "`node scripts/path-search-lab/run.mjs --arm removal --journey J1 --budget 30` writes results.jsonl rows with fields arm, journey, candidate, steps, verdict, replays",
+            "the harness refuses a candidate that deep-links past a step whose control is a confirmation (name matches confirm|agree|accept)"
+          ],
+          "checks": [
+            {
+              "command": "test",
+              "args": [
+                "-s",
+                "scripts/path-search-lab/run.mjs"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/regression/src/minimize.ts"
+            },
+            {
+              "path": "scripts/accuracy-lab/run-cell.mjs"
+            },
+            {
+              "path": "packages/cli/src/journey-done-check.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "x-path-search-b",
+      "owned_files": [
+        ".delivery/rel-030/experiments/path-search.md",
+        "scripts/path-search-lab/report/"
+      ],
+      "prerequisites": [
+        {
+          "id": "x-path-search-a",
+          "consumes": "the harness and the removal arm's results"
+        }
+      ],
+      "estimate": {
+        "optimistic": 4,
+        "likely": 6,
+        "pessimistic": 12
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": ".delivery/rel-030/experiments/path-search.md (#801 test-first): the annealing arm (alternatives from an exploration Recording) and the Jev-guided arm (Jev ranks candidate moves) added to the harness and run on the same Journeys and budget; the report gives, per arm, the share of Journeys shortened by 25% or more within 30 replays and whether Jev matched the best unguided result in at most half the replays, and says whether the model stays in this for 0.31.0. No product code ships from this in 0.30.0.",
+        "issues": [
+          801
+        ],
+        "junior": {
+          "acceptance": [
+            "path-search.md has a table arm \u00d7 journey with original steps, shortest found, replays used, and both predictions answered yes/no with the numbers",
+            "scripts/path-search-lab/report/results.jsonl holds every candidate of every arm"
+          ],
+          "checks": [
+            {
+              "command": "test",
+              "args": [
+                "-s",
+                ".delivery/rel-030/experiments/path-search.md"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "scripts/path-search-lab/"
+            },
+            {
+              "path": "packages/ai-core/src/judgment.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "x-mock-harness",
+      "owned_files": [
+        ".delivery/rel-030/experiments/mock-harness.md",
+        "scripts/mock-harness-lab/"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-harness-trust",
+          "consumes": "the harness trust that forbids a job verdict"
+        }
+      ],
+      "estimate": {
+        "optimistic": 6,
+        "likely": 8,
+        "pessimistic": 16
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "frontier",
+        "artifact": ".delivery/rel-030/experiments/mock-harness.md (#802 test-first): Journeeze's jz-triager-files-issue run against a MockServer harness (gRPC-Web, mock data recorded from one real run and redacted) declared as a trust 'harness' environment, then on the real stack, 5 repeats each; the false-feasible rate (harness pass, real fail), the time ratio, the mock-drift comparison of responses, and the secret scan of the recorded mock data; a verdict against the predictions (at most 10% false-feasible, at most 20% of the real-run time) and whether the pattern stays in docs/harness.md.",
+        "issues": [
+          802
+        ],
+        "junior": {
+          "acceptance": [
+            "mock-harness.md reports false-feasible k/5, median seconds for harness and real, their ratio, and 'Prediction held: yes|no' per clause",
+            "the report shows the harness run's result had job.attainment 'unverified' basis 'harness' and the real run's attainment from its done check",
+            "scripts/mock-harness-lab/scan.log shows the secret scan over the recorded mock data found 0 matches"
+          ],
+          "checks": [
+            {
+              "command": "test",
+              "args": [
+                "-s",
+                ".delivery/rel-030/experiments/mock-harness.md"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": ".delivery/rel-0283/experiments/journeeze-report.md"
+            },
+            {
+              "path": "docs/harness.md"
+            },
+            {
+              "path": "packages/cli/src/run-mode.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-vocab-migration-a",
+      "owned_files": [
+        "packages/cli/src/mutation-proof-policy.ts",
+        "packages/cli/src/readiness.ts",
+        "packages/cli/src/journey-readiness.ts",
+        "packages/cli/src/journey-verify-checkpoint.ts",
+        "packages/cli/src/vocab-migration.test.ts",
+        "packages/cli/src/readiness.test.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-proof-role-decision",
+          "consumes": "the default policy, with the Verdict renderer and the alias from its ancestors"
+        }
+      ],
+      "estimate": {
+        "optimistic": 2,
+        "likely": 3,
+        "pessimistic": 5
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "The proof policy and readiness carry the new words: mutation-proof-policy.ts accepts require-sensitive, keeps require-proven as an alias that warns once per process, and defaults to what the proof-role decision says; readiness.ts and journey-readiness.ts read verdict 'sensitive' and show countsForGate; the verify checkpoint stores the new word and reads old receipts; vocab-migration.test.ts.",
+        "issues": [
+          812,
+          800
+        ],
+        "junior": {
+          "acceptance": [
+            "vocab-migration.test.ts: project.json {mutationProofPolicy:'require-proven'} behaves as require-sensitive and stderr has exactly one deprecation line naming 0.32.0",
+            "vocab-migration.test.ts: a 0.29.0 checkpoint receipt with verdict 'proven' is read as 'sensitive'",
+            "readiness.test.ts: a sensitive proof on a trust 'unknown' target shows countsForGate false and does not satisfy require-sensitive"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/vocab-migration.test.ts"
+              ]
+            },
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/readiness.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/cli/src/mutation-proof-policy.ts"
+            },
+            {
+              "path": "packages/cli/src/readiness.ts"
+            },
+            {
+              "path": "packages/cli/src/journey-verify-checkpoint.ts"
+            },
+            {
+              "path": ".delivery/rel-030/decisions/proof-role.md"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-vocab-migration-b",
+      "owned_files": [
+        "packages/cli/src/journey-review.ts",
+        "packages/cli/src/journey-review/render.ts",
+        "packages/cli/src/catalog-analysis.ts",
+        "packages/cli/src/journey-review.test.ts",
+        "packages/cli/src/journey-review-readable.test.ts",
+        "packages/cli/src/journey-verify-report.ts"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-vocab-migration-a",
+          "consumes": "the policy and readiness words"
+        }
+      ],
+      "estimate": {
+        "optimistic": 2,
+        "likely": 3,
+        "pessimistic": 5
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "The review sheet, its renderer and catalog analysis print 'sensitive' and show job attainment; `journey verify --json` carries verdict (new word) and verdictLegacy ('proven' for sensitive, else equal) through journey-verify-report.ts; MCP review_journey mirrors it; journey-review.test.ts and journey-review-readable.test.ts updated; no renderer string 'proven' remains except verdictLegacy.",
+        "issues": [
+          812
+        ],
+        "junior": {
+          "acceptance": [
+            "journey-review.test.ts: --json on a sensitive proof has verdict 'sensitive' and verdictLegacy 'proven'; on an inconclusive proof both are 'inconclusive'",
+            "`grep -rn \"'proven'\\|\\\"proven\\\"\" packages/cli/src --include=*.ts | grep -v test | grep -v verdictLegacy | grep -v legacyProofVerdict` prints nothing"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/journey-review.test.ts"
+              ]
+            },
+            {
+              "command": "pnpm",
+              "args": [
+                "exec",
+                "vitest",
+                "run",
+                "packages/cli/src/journey-review-readable.test.ts"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "packages/cli/src/journey-review.ts"
+            },
+            {
+              "path": "packages/cli/src/journey-review/render.ts"
+            },
+            {
+              "path": "packages/cli/src/catalog-analysis.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-docs-outcomes",
+      "owned_files": [
+        "docs/outcomes.md",
+        "docs/contracts/evidence.md",
+        "docs/contracts/done-check.md",
+        "README.md",
+        "docs/success-checks.md",
+        "scripts/check-docs-exit-codes.mjs"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-vocab-migration-b",
+          "consumes": "the shipped words"
+        },
+        {
+          "id": "d-boundary-outcomes-b",
+          "consumes": "boundary kinds and signals"
+        }
+      ],
+      "estimate": {
+        "optimistic": 3,
+        "likely": 4,
+        "pessimistic": 8
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "docs/outcomes.md (job attainment section, boundary outcomes with their signals, the exit-code changes and the verdictLegacy deprecation path with the 0.32.0 removal), docs/contracts/evidence.md and docs/contracts/done-check.md (the two schemas as shipped, field by field), docs/success-checks.md (the done check beside --success), README exit table, and scripts/check-docs-exit-codes.mjs that compares the docs tables to the code; the sentence 'A proof's strength depends on a target you can reset' kept.",
+        "issues": [
+          800,
+          807,
+          812
+        ],
+        "junior": {
+          "acceptance": [
+            "`node --test scripts/check-docs-exit-codes.mjs` exits 0: every exit-code row in docs/outcomes.md matches packages/cli/src/exit-codes.ts and GOAL_OUTCOME_FOLD, and docs/contracts/evidence.md names every schema exported by packages/adjudicator/src/evidence.ts",
+            "`grep -c \"A proof's strength depends on a target you can reset\" docs/outcomes.md` is at least 1"
+          ],
+          "checks": [
+            {
+              "command": "node",
+              "args": [
+                "--test",
+                "scripts/check-docs-exit-codes.mjs"
+              ]
+            },
+            {
+              "command": "test",
+              "args": [
+                "-s",
+                "docs/contracts/evidence.md"
+              ]
+            },
+            {
+              "command": "test",
+              "args": [
+                "-s",
+                "docs/contracts/done-check.md"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "docs/outcomes.md"
+            },
+            {
+              "path": "docs/journeys.md"
+            },
+            {
+              "path": "docs/contracts/handback-outcome.md"
+            },
+            {
+              "path": "packages/adjudicator/src/evidence.ts"
+            },
+            {
+              "path": "packages/domain/src/mission-outcome.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-docs-trust",
+      "owned_files": [
+        "docs/safety.md",
+        "docs/run-modes.md",
+        "docs/authentication.md",
+        "docs/operations.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-run-mode-wire",
+          "consumes": "codes and behaviour"
+        },
+        {
+          "id": "d-handback-vault",
+          "consumes": "hold lifecycle and secret-mode behaviour"
+        }
+      ],
+      "estimate": {
+        "optimistic": 3,
+        "likely": 4,
+        "pessimistic": 8
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": "docs/safety.md rewritten around the trust table (design doc \u00a75.2, same rows and cells as run-mode.test.ts) and the two run modes; docs/run-modes.md (what each mode guarantees, how a secret comes back over MCP, holds and resume, the ratchet, what forged provenance still means, every new E_ code with its way out); docs/authentication.md and docs/operations.md updated for holds; the 'what does not guard a run' list reduced to what 0.30.0 leaves.",
+        "issues": [
+          792,
+          793,
+          798,
+          799
+        ],
+        "junior": {
+          "acceptance": [
+            "docs/run-modes.md lists each of E_APPROVAL_CHANNEL_FOR_MODE, E_HUMAN_STEP_IN_TEST_MODE, E_POLICY_LOOSEN_OVER_MCP, E_TARGET_PROMOTE_OVER_MCP, E_HOLD_EXPIRED, E_HOLD_BINDING once in its codes table with a 'Way out' cell",
+            "docs/safety.md's trust table has the 5 actor rows and 6 capability columns of design doc \u00a75.2"
+          ],
+          "checks": [
+            {
+              "command": "test",
+              "args": [
+                "-s",
+                "docs/run-modes.md"
+              ]
+            },
+            {
+              "command": "test",
+              "args": [
+                "-s",
+                "docs/safety.md"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "docs/safety.md"
+            },
+            {
+              "path": "packages/cli/src/run-mode.test.ts"
+            },
+            {
+              "path": "packages/cli/src/journey-run-mode-gate.ts"
+            },
+            {
+              "path": "packages/cli/src/journey-hold.ts"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-changesets",
+      "owned_files": [
+        ".changeset/"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-docs-outcomes",
+          "consumes": "the shipped behaviour list"
+        },
+        {
+          "id": "d-docs-trust",
+          "consumes": "the shipped trust list"
+        }
+      ],
+      "estimated_effort_hours": 1.0,
+      "earning_rule": "zero_hundred",
+      "metadata": {
+        "owner": "junior",
+        "artifact": ".changeset/*.md for every package that changed, a minor bump for @jevitate/cli and a separate changeset for the jevitate alias, the cli changeset's first paragraph naming the proven\u2192sensitive and boundary exit-code changes and verdictLegacy.",
+        "junior": {
+          "acceptance": [
+            "`pnpm changeset status` lists a minor bump for @jevitate/cli and for jevitate",
+            "the cli changeset's first line mentions 'sensitive' and 'exit 2'"
+          ],
+          "checks": [
+            {
+              "command": "pnpm",
+              "args": [
+                "changeset",
+                "status"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": ".changeset/README.md"
+            },
+            {
+              "path": ".changeset/config.json"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-integration-wave",
+      "owned_files": [
+        ".delivery/rel-030/integration.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-rejudge-fixtures",
+          "consumes": "adjudicator package, gatherer and fixtures branch"
+        },
+        {
+          "id": "d-done-check-explore-b",
+          "consumes": "goal-loop done-check branch"
+        },
+        {
+          "id": "d-return-to-start-b",
+          "consumes": "return-to-start branch"
+        },
+        {
+          "id": "d-sign-in-verb",
+          "consumes": "sign-in verb branch"
+        },
+        {
+          "id": "d-trust-escape-tests",
+          "consumes": "run-mode and escape-test branch"
+        },
+        {
+          "id": "d-secret-argv-warnings",
+          "consumes": "argv-warning branch"
+        },
+        {
+          "id": "x-sentinel-measure",
+          "consumes": "sentinel shadow branch and its report"
+        },
+        {
+          "id": "d-typed-params-impl-b",
+          "consumes": "typed-parameters branch"
+        },
+        {
+          "id": "d-queue-journeys-mcp",
+          "consumes": "queue and facade branch"
+        },
+        {
+          "id": "d-reconcile-b",
+          "consumes": "reconcile, hold and handback branch"
+        },
+        {
+          "id": "x-path-search-b",
+          "consumes": "path-search lab branch (scripts only)"
+        },
+        {
+          "id": "x-mock-harness",
+          "consumes": "harness trust branch and its report"
+        },
+        {
+          "id": "d-changesets",
+          "consumes": "changesets and docs branch"
+        }
+      ],
+      "estimate": {
+        "optimistic": 3,
+        "likely": 4,
+        "pessimistic": 8
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "manager",
+        "artifact": "integration/0.30.0 with every lane merged once: pnpm -r build, pnpm lint (clock check included), pnpm check:no-fallback and the bundle green, vitest --changed <line base> over the changed packages green; .delivery/rel-030/integration.md lists the merged branches, the sha and the command outputs.",
+        "junior": {
+          "acceptance": [
+            "integration.md lists each lane branch once with its merge commit sha",
+            "integration.md quotes exit 0 for build, lint, check:no-fallback, bundle and the changed-scope vitest run on the integration sha"
+          ],
+          "checks": [
+            {
+              "command": "test",
+              "args": [
+                "-s",
+                ".delivery/rel-030/integration.md"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "AGENTS.md"
+            },
+            {
+              "path": "docs/ci.md"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-full-gate",
+      "owned_files": [
+        ".delivery/rel-030/gate.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-integration-wave",
+          "consumes": "the integration sha"
+        }
+      ],
+      "estimate": {
+        "optimistic": 2,
+        "likely": 3,
+        "pessimistic": 6
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "manager",
+        "artifact": "The full suite on the integration sha: PR CI's workspace run (every package, sharded) green once, with .delivery/rel-030/gate.md naming the CI run URL, the sha, the pnpm-lock.yaml hash and the vitest.workspace.ts hash so the evidence is reusable without a rerun.",
+        "junior": {
+          "acceptance": [
+            "gate.md's CI run URL resolves to a green run whose head sha equals the integration sha"
+          ],
+          "checks": [
+            {
+              "command": "test",
+              "args": [
+                "-s",
+                ".delivery/rel-030/gate.md"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "docs/ci.md"
+            },
+            {
+              "path": ".github/workflows/"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-nav-lab-rc",
+      "owned_files": [
+        ".delivery/rel-030/nav-lab-rc.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-full-gate",
+          "consumes": "the gate sha the lab build is bundled from"
+        }
+      ],
+      "estimate": {
+        "optimistic": 3,
+        "likely": 4,
+        "pessimistic": 8
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": ".delivery/rel-030/nav-lab-rc.md: the whole navigation lab (44 cases, 10 replicates, plus --guards over the accuracy lab's goal cells) rerun on a CLI bundled from the gate sha under the quiet-machine lock; one table case \u00d7 (right/10, median decisions, cost) against the n=10 baseline and the remediation numbers; a line per bar: wall 10/10, session 10/10, lure \u2265 28/30, sso-only and newtab 10/10, looks-done-wrong-page false pass 0/10 with --job, sign-in-goal 10/10, no boundary on any clean, J1-J3 or incidental-403-asset cell.",
+        "issues": [
+          807,
+          810,
+          800
+        ],
+        "junior": {
+          "acceptance": [
+            "nav-lab-rc.md has every bar listed with met/not met and the raw count; any not-met bar names the case and replicate",
+            "the report states load stayed under 20 and the results folder path"
+          ],
+          "checks": [
+            {
+              "command": "test",
+              "args": [
+                "-s",
+                ".delivery/rel-030/nav-lab-rc.md"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": ".delivery/nav-lab/remediations.md"
+            },
+            {
+              "path": ".delivery/nav-lab/baseline.md"
+            },
+            {
+              "path": "scripts/nav-lab/"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-accuracy-lab-rc",
+      "owned_files": [
+        ".delivery/rel-030/accuracy-lab-rc.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-full-gate",
+          "consumes": "the gate sha the accuracy run is bundled from"
+        }
+      ],
+      "estimate": {
+        "optimistic": 2,
+        "likely": 3,
+        "pessimistic": 5
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "junior",
+        "artifact": ".delivery/rel-030/accuracy-lab-rc.md: the accuracy lab matrix (3 replicates) on a CLI bundled from the gate sha scored by scripts/accuracy-lab/score.mjs against the frozen baseline and against 0.29.0's run; precision and recall within 5 points of 0.29.0 or the difference explained cell by cell.",
+        "junior": {
+          "acceptance": [
+            "accuracy-lab-rc.md pastes score.mjs --json output for the RC and the 0.29.0 numbers side by side, with precision and recall deltas computed"
+          ],
+          "checks": [
+            {
+              "command": "test",
+              "args": [
+                "-s",
+                ".delivery/rel-030/accuracy-lab-rc.md"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": "test/fixtures/accuracy-lab/README.md"
+            },
+            {
+              "path": "scripts/accuracy-lab/score.mjs"
+            },
+            {
+              "path": "docs/accuracy.md"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-independent-check",
+      "owned_files": [
+        ".delivery/rel-030/independent-check.md",
+        ".delivery/rel-030/check/"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-full-gate",
+          "consumes": "the gate sha and its CI evidence to attack"
+        }
+      ],
+      "estimate": {
+        "optimistic": 6,
+        "likely": 8,
+        "pessimistic": 16
+      },
+      "earning_rule": "fifty_fifty",
+      "metadata": {
+        "owner": "frontier",
+        "artifact": ".delivery/rel-030/independent-check.md: an independent check of the release candidate written like .delivery/rel-0283/security-final6.md (harnesses under .delivery/rel-030/check/), with attack rows for: mode escape through every run-starting MCP tool and argument; a secret value reaching the model, disk, the evidence, a hold record or another origin in both modes; a forged mcp approval starting an automation run; an adjudicator fixture whose verdict moves when judgments change; the H1/H2 and Journeeze no-store shapes under the new gatherer; each row RAN or NOT RUN with its harness path; a verdict: freeze or not.",
+        "issues": [
+          792,
+          799,
+          812
+        ],
+        "junior": {
+          "acceptance": [
+            "independent-check.md has one row per attack listed in the artifact, each marked RAN or NOT RUN with the harness file",
+            "the report ends with 'Freeze: yes' or 'Freeze: no' and lists open High findings, if any"
+          ],
+          "checks": [
+            {
+              "command": "test",
+              "args": [
+                "-s",
+                ".delivery/rel-030/independent-check.md"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": ".delivery/rel-0283/security-final6.md"
+            },
+            {
+              "path": ".delivery/rel-0283/finish/risk-bars.md"
+            },
+            {
+              "path": "docs/safety.md"
+            },
+            {
+              "path": "docs/run-modes.md"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "m-rc-verified",
+      "owned_files": [
+        ".delivery/rel-030/m4-rc-verified.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-nav-lab-rc",
+          "consumes": "lab numbers"
+        },
+        {
+          "id": "d-accuracy-lab-rc",
+          "consumes": "accuracy numbers"
+        },
+        {
+          "id": "d-independent-check",
+          "consumes": "freeze verdict"
+        }
+      ],
+      "estimated_effort_hours": 0.25,
+      "earning_rule": "zero_hundred",
+      "metadata": {
+        "owner": "manager",
+        "artifact": "Milestone note .delivery/rel-030/m4-rc-verified.md: full gate, navigation lab, accuracy lab and the independent check all hold on one sha; the release PR may open."
+      },
+      "milestone": true
+    },
+    {
+      "id": "d-release-pr",
+      "owned_files": [
+        ".delivery/rel-030/pr-body.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "m-rc-verified",
+          "consumes": "the verified sha"
+        }
+      ],
+      "estimated_effort_hours": 1.0,
+      "earning_rule": "zero_hundred",
+      "metadata": {
+        "owner": "manager",
+        "artifact": "The release PR integration/0.30.0 \u2192 dev opened with .delivery/rel-030/pr-body.md (Refs for every issue, the two public-contract changes in the first paragraph, the experiment outcomes, the accepted limits), CI green, no attribution lines.",
+        "junior": {
+          "acceptance": [
+            "pr-body.md contains 'Refs #' for each of 792-802, 807, 810, 812 and its first paragraph mentions 'sensitive' and 'exit 2'"
+          ],
+          "checks": [
+            {
+              "command": "test",
+              "args": [
+                "-s",
+                ".delivery/rel-030/pr-body.md"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": ".delivery/rel-0283/pr-body.md"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "d-owner-merge-dev",
+      "owned_files": [
+        ".delivery/rel-030/merges.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-release-pr",
+          "consumes": "a green PR"
+        }
+      ],
+      "estimated_effort_hours": 0.25,
+      "earning_rule": "zero_hundred",
+      "metadata": {
+        "owner": "owner",
+        "artifact": "The release PR merged into dev by the owner (merge, not squash), recorded in .delivery/rel-030/merges.md.",
+        "kind": "manual"
+      }
+    },
+    {
+      "id": "d-promote-staging",
+      "owned_files": [
+        ".delivery/rel-030/promote-staging.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-owner-merge-dev",
+          "consumes": "dev at the release sha"
+        }
+      ],
+      "estimated_effort_hours": 0.5,
+      "earning_rule": "zero_hundred",
+      "metadata": {
+        "owner": "manager",
+        "artifact": "PR dev \u2192 staging opened with CI green and the one merge command handed over, recorded in .delivery/rel-030/promote-staging.md."
+      }
+    },
+    {
+      "id": "d-owner-merge-staging",
+      "owned_files": [
+        ".delivery/rel-030/merge-staging.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-promote-staging",
+          "consumes": "a green PR"
+        }
+      ],
+      "estimated_effort_hours": 0.25,
+      "earning_rule": "zero_hundred",
+      "metadata": {
+        "owner": "owner",
+        "artifact": "dev \u2192 staging merged by the owner (--merge).",
+        "kind": "manual"
+      }
+    },
+    {
+      "id": "d-promote-main",
+      "owned_files": [
+        ".delivery/rel-030/promote-main.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-owner-merge-staging",
+          "consumes": "staging at the release sha"
+        }
+      ],
+      "estimated_effort_hours": 0.5,
+      "earning_rule": "zero_hundred",
+      "metadata": {
+        "owner": "manager",
+        "artifact": "PR staging \u2192 main opened, the changeset version PR reviewed, CI green, the tag command prepared in .delivery/rel-030/promote-main.md."
+      }
+    },
+    {
+      "id": "d-owner-merge-main",
+      "owned_files": [
+        ".delivery/rel-030/released.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-promote-main",
+          "consumes": "a green PR and the tag command"
+        }
+      ],
+      "estimated_effort_hours": 0.5,
+      "earning_rule": "zero_hundred",
+      "metadata": {
+        "owner": "owner",
+        "artifact": "staging \u2192 main merged and the v0.30.0 tag pushed by the owner (build-once/tag-push publish), npm versions checked, recorded in .delivery/rel-030/released.md.",
+        "kind": "manual"
+      },
+      "milestone": true
+    },
+    {
+      "id": "d-follow-ups",
+      "owned_files": [
+        ".delivery/rel-030/closed.md"
+      ],
+      "prerequisites": [
+        {
+          "id": "d-owner-merge-main",
+          "consumes": "the published release"
+        }
+      ],
+      "estimated_effort_hours": 1.5,
+      "earning_rule": "zero_hundred",
+      "metadata": {
+        "owner": "manager",
+        "artifact": "Follow-ups done: main back-merged into dev (--merge), the site release banner PR for 0.30.0, the global install updated, every 0.30.0 issue closed with its evidence comment, the stale worktrees removed; .delivery/rel-030/closed.md names what shipped, what was accepted, and what opens 0.31.0 (sentinel gating, path search, cryptographic provenance, doneCheckPolicy default).",
+        "junior": {
+          "acceptance": [
+            "`gh issue list -R matt-cochran/jevitate --milestone 0.30.0 --state open` prints nothing",
+            "closed.md has sections Shipped, Accepted limits, Opens 0.31.0"
+          ],
+          "checks": [
+            {
+              "command": "test",
+              "args": [
+                "-s",
+                ".delivery/rel-030/closed.md"
+              ]
+            }
+          ],
+          "context": [
+            {
+              "path": "docs/design/0.30.0-evidence-and-trust.md"
+            },
+            {
+              "path": ".delivery/rel-0283/finish/risk-bars.md"
+            }
+          ]
+        }
+      },
+      "milestone": true
+    }
+  ]
+}

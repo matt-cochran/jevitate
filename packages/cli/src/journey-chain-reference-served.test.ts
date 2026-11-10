@@ -10,6 +10,7 @@ import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
 import { useSkippingTime } from "../../explore/src/testkit.js";
+import { advisoryCatalogDir } from "./done-check-policy.testkit.js";
 
 // #304: Node and page time skip idle waits; assertions unchanged.
 useSkippingTime({ per: "all" });
@@ -170,7 +171,8 @@ interface Project {
 
 async function makeProject(name: string): Promise<Project> {
   const dir = join(root, name);
-  const catalogDir = join(dir, ".jevitate");
+  // H5: `journey chain` folds each run's done check; this test is about the reference URL, so the project is advisory.
+  const catalogDir = advisoryCatalogDir(dir);
   const journeysDir = join(catalogDir, "journeys");
   await mkdir(journeysDir, { recursive: true });
   // Draft (unapproved) catalog entries: approval stays a person's call.

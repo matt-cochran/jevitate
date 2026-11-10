@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { RecordedStep } from "@jevitate/recording";
-import { classifyMutation, journeyAssertions, mutationReplay, planJourneyMutations, type Journey } from "./index.js";
+import { journeyAssertions, mutationReplay, planJourneyMutations, type Journey } from "./index.js";
+import { classifyMutation } from "@jevitate/adjudicator";
 
 // #580: an assertion that compares the page with an INPUT before any action reads it (or with an
 // assertion-only input) is a guard: a `guard-param` gives the whole run a wrong value and the guard

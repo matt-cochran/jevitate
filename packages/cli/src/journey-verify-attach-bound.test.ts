@@ -92,11 +92,11 @@ afterAll(async () => {
 describe("[realtime] a proof whose browser attach is slow or hung", () => {
   it("a browser attach delayed past the 2 s bound still returns a verdict", async () => {
     const report = await prove("delayed");
-    expect(report.verdict).toBe("proven");
+    expect(report.verdict).toBe("sensitive");
   }, 120_000);
 
   it("a browser attach that never returns still returns a verdict", async () => {
     const report = await prove("hung");
-    expect(report.verdict).toBe("proven");
+    expect(report.verdict).toBe("sensitive");
   }, 120_000);
 });

@@ -48,7 +48,9 @@ describe("a step response check awaiting an in-flight request", () => {
   it("keeps the still-awaiting detail when the bound is exceeded", async () => {
     const p = evaluateNetworkCheckAwaiting(check, slowCapture(60_000, 200), 5_000);
     await fake.advanceBy(6_000);
-    expect((await p).result.detail).toContain("are still awaiting a response");
+    const result = (await p).result;
+    expect(result.detail).toContain("are still awaiting a response");
+    expect(result).toMatchObject({ passed: false, unevaluable: true });
   });
 
   it("reports no slow-step for a request already answered", async () => {

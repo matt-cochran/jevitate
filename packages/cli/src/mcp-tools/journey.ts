@@ -1,8 +1,9 @@
 import { SiteGateRefusedError } from "@jevitate/runtime";
 import { findCapabilities, JourneyRunRefusedError } from "@jevitate/mcp-facade";
-import { FsJourneyStore, JourneyRegistry } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, type Journey } from "@jevitate/journey";
 import { type GenerationPort } from "@jevitate/ai-core";
 import { existsSync } from "node:fs";
+import { capabilityParameters } from "../journey-find-api.js";
 import { ParamValidationError } from "@jevitate/journey";
 import type { UsageTracker } from "@jevitate/ai-core";
 import type { SelfHealer } from "@jevitate/runtime";
@@ -14,7 +15,11 @@ import { ExtensionMismatchError, type BrowserRunOptions } from "../browser-run-o
 import { browserRunFromFlags, emulationFromFlags } from "../cli-shared.js";
 import { environmentFromFlags, isEnvironmentError } from "../environments.js";
 import { buildMissionFixtures, checkSetupRefs } from "../fixture-cli.js";
-import { secretParamRefusalBody, secretParamsCarried } from "../secret-params.js";
+import { BoundSecretOutsideFieldError, SecretFieldAmbiguousError, secretParamRefusalBody, secretParamsCarried, withSecretParams } from "../secret-params.js";
+import { mcpMayBindTargetSecrets, resolveRunTarget, RunModeRefusedError, runModeRefusalBody } from "../journey-run-mode-gate.js";
+import { ParamTypeError, paramTypeRefusalBody } from "../journey-param-types.js";
+import { journeyApprovalState } from "../journey-stale-api.js";
+import { heldOutcomeOf } from "../journey-hold.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError, type MissionFixtures } from "../mission-fixtures.js";
 import { parseScreenshotsArg, type ScreenshotsSpec } from "../run-screenshots.js";
 import { makeEvidenceSelfHealer } from "../self-heal-adapter.js";
@@ -25,6 +30,8 @@ import { McpArgError, argErrorBody, optBool, optEnum, optInt, optNamedSessions, 
 import { resourcePreflight } from "../resource-preflight.js";
 import { runRecordErrorOf } from "../journey-run-record.js";
 import { RunGuardRefusedError, runGuardRefusalBody } from "../mcp-run-guard.js";
+import { loadCatalog, resolveCatalogDir } from "../catalog-api.js";
+import { linkedJobDone } from "../catalog-refs.js";
 import type { McpToolCtx, McpToolGroup } from "./shared.js";
 import { jsonResult, errorResult, governanceArgs, withJourneyExitCode, SetupRequired, redactCredentials, tagsArg } from "./shared.js";
 import type { McpJourneyRunOptions } from "../mcp-api.js";
@@ -32,9 +39,44 @@ import type { McpJourneyRunOptions } from "../mcp-api.js";
 /** `find_capabilities` and `run_journey`: the promoted-Journey tools. */
 export function journeyTools(ctx: McpToolCtx): McpToolGroup {
   const { deps, pathRoots, credentialStore, runJourney } = ctx;
-  const findCaps =
+  const baseFindCaps =
     deps.findCapabilities ??
     ((query: string) => findCapabilities(new JourneyRegistry(new FsJourneyStore(deps.journeysDir)), query));
+  /**
+   * #800: each capability that links a catalog job carries `job: { id, status, done?: { at, check } }`,
+   * the job's done check as stored (placeholders, never values). Best effort: no project or an
+   * unreadable catalog leaves the capability as it was.
+   */
+  const findCaps = async (query: string): Promise<unknown> => {
+    const caps = await baseFindCaps(query);
+    if (!Array.isArray(caps) || caps.length === 0) return caps;
+    const store = new FsJourneyStore(deps.journeysDir);
+    // #796: each capability lists its typed parameters (type, enum values); untyped ones add nothing.
+    const withParameters = await Promise.all(
+      caps.map(async (c: unknown) => {
+        try {
+          const id = c !== null && typeof c === "object" ? (c as { id?: unknown }).id : undefined;
+          const parameters = capabilityParameters(typeof id === "string" ? await store.get(id) : null);
+          return parameters === undefined ? c : { ...(c as object), parameters };
+        } catch {
+          return c;
+        }
+      }),
+    );
+    try {
+      const catalog = await loadCatalog(resolveCatalogDir(undefined), deps.journeysDir);
+      return await Promise.all(
+        withParameters.map(async (c: unknown) => {
+          const id = c !== null && typeof c === "object" ? (c as { id?: unknown }).id : undefined;
+          const journey = typeof id === "string" ? await store.get(id) : null;
+          const job = journey === null ? undefined : linkedJobDone(catalog, journey);
+          return job === undefined ? c : { ...(c as object), job };
+        }),
+      );
+    } catch {
+      return withParameters;
+    }
+  };
 
   /**
    * #255: `run_journey`'s CLI-parity options, resolved exactly as `journey run` resolves its flags
@@ -110,6 +152,10 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
     if (stepResponseTimeoutMs !== undefined && stepResponseTimeoutMs > MAX_STEP_RESPONSE_TIMEOUT_MS) {
       throw new McpArgError(`'stepResponseTimeoutMs' must be an integer from 1 to ${MAX_STEP_RESPONSE_TIMEOUT_MS}`);
     }
+    // #800: `journey run --no-done-check` / `--require-done-check`, refused together as the CLI refuses them.
+    const noDoneCheck = optBool(args, "noDoneCheck") === true;
+    const requireDoneCheck = optBool(args, "requireDoneCheck") === true;
+    if (noDoneCheck && requireDoneCheck) throw new McpArgError("'noDoneCheck' and 'requireDoneCheck' cannot be used together");
     const healRequest: JourneyHealRequest = {
       selfHeal,
       ...(changes === undefined ? {} : { changes }),
@@ -151,9 +197,52 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
         ...(screenshots === undefined ? {} : { screenshots }),
         ...(optBool(args, "actionDeltas") === true ? { actionDeltas: true } : {}),
         ...(stepResponseTimeoutMs === undefined ? {} : { stepResponseTimeoutMs }),
+        ...(noDoneCheck ? { noDoneCheck: true } : {}),
+        ...(requireDoneCheck ? { requireDoneCheck: true } : {}),
       },
       ...(usage === undefined ? {} : { usage }),
     };
+  };
+
+  /**
+   * 0.30.0 §5.3, owner decision 6: the secret parameters a run needs and the request leaves out, from
+   * the operator's `targets.json` `secretFields` for the run's origin: in automation mode only when the
+   * Journey carries a current approval a person made (decision 5); in test mode for any current approval
+   * (the test target's own credentials). The values come from the server's environment and go to the
+   * browser, bound to that origin; never to the result or the evidence. Anything else answers as 0.29.0
+   * did: `E_SECRET_PARAM_OVER_MCP` by name.
+   */
+  const secretsFromTargets = async (
+    id: string,
+    needed: readonly string[],
+    resolved: { params: Record<string, string>; options: McpJourneyRunOptions },
+  ): Promise<{ readonly refusal: Record<string, unknown> } | { readonly params: Record<string, string>; readonly options: McpJourneyRunOptions }> => {
+    const refuse = { refusal: secretParamRefusalBody(needed) };
+    let stored: Journey | null;
+    try {
+      stored = await new FsJourneyStore(deps.journeysDir).get(id);
+    } catch {
+      return refuse;
+    }
+    if (stored === null) return refuse;
+    const environment = resolved.options.environment;
+    const target = resolveRunTarget({ origin: environment?.baseUrl ?? stored.recording.site, environment, environmentsFile: deps.environmentsFile, targetsFile: deps.targetsConfigPath });
+    // Rules 5 and 6, the one rule every MCP surface applies (journey-run-mode-gate.ts): a current approval, a person's on an automation-mode target.
+    if (!(await mcpMayBindTargetSecrets(stored, target.mode, { journeysDir: deps.journeysDir, catalogDir: resolveCatalogDir(undefined) }))) return refuse;
+    const fields = target.targetConfig?.secretFields ?? [];
+    // 0.30.0 §5.3: no binding on this origin: in automation mode the run goes on and holds at the secret step
+    // for a person; in test mode it is refused E_HUMAN_STEP_IN_TEST_MODE before any browser (journey-secret-mode.ts).
+    // A binding on another origin refuses E_SECRET_ORIGIN_REFUSED. Never a value here.
+    if (fields.length === 0) return { params: resolved.params, options: resolved.options };
+    let bound: Awaited<ReturnType<typeof withSecretParams>>;
+    try {
+      bound = await withSecretParams({ dir: deps.journeysDir, id, params: resolved.params, flags: [], targetFields: fields, targetOrigin: target.origin, env: deps.secretEnv ?? process.env });
+    } catch (err) {
+      if (err instanceof SecretFieldAmbiguousError || err instanceof BoundSecretOutsideFieldError) return { refusal: { error: "invalid_args", code: err.code, message: err.message } };
+      throw err;
+    }
+    // What the binding leaves out holds at its step for a person, as above.
+    return { params: bound.params, options: { ...resolved.options, ...(bound.bound === undefined ? {} : { boundSecretParams: bound.bound }) } };
   };
 
   return {
@@ -165,7 +254,8 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
     run_journey: {
       description:
         "Run a PUBLISHED Journey by id with string params (fail-closed policy) — `jevitate journey run`. Never accepts inline steps. " +
-        "A Journey that needs a secret parameter is refused ({error: invalid_args, code: E_SECRET_PARAM_OVER_MCP, params}): never send a value. A person runs it on the CLI (`journey run --secret-field`), or the Journey uses a stored session ('storageState'). " +
+        "A secret parameter's value in 'params' is always refused ({error: invalid_args, code: E_SECRET_PARAM_OVER_MCP, params}): never send a value. A Journey that needs one, or has a handback step, runs on an automation-mode target for a Journey a person approved (tty or pr-review): the target's operator file (~/.jevitate/targets.json secretFields) supplies it to the browser on that origin only (vault-autofill), a binding on another origin refuses ({code: E_SECRET_ORIGIN_REFUSED}), and otherwise the run holds at that step ({outcome: held, holdId, exitCode: 2}) until a person runs `jevitate inbox resume <holdId>` at a terminal and completes it in the browser; the value never reaches the result. On a test-mode target the target's own targets.json secretFields supply it the same way (any current approval, an MCP promotion included); with no binding it is refused before any browser ({code: E_HUMAN_STEP_IN_TEST_MODE}), never held. A Journey promoted over MCP, on an automation-mode target, is refused as before. " +
+        "0.30.0 run modes: the mode comes from the target's declared trust (environments.json / targets.json), never an argument; an undeclared origin is automation mode, which runs only a Journey a person approved ({error: refused, code: E_APPROVAL_CHANNEL_FOR_MODE}: an approval over MCP authorises test-mode runs only), and a test-mode target never waits for a person (a handback step: E_HUMAN_STEP_IN_TEST_MODE). " +
         "#788: an unpromoted Journey, or one changed since its approval, is refused before any browser ({error: refused, code: E_JOURNEY_NOT_PROMOTED | E_JOURNEY_APPROVAL_STALE | E_JOURNEY_APPROVAL_UNKNOWN, fix}): promote it with promote_journey, or try a draft on the CLI (`jevitate journey run`). " +
         "#789: a click on a session-ending, destructive or paid control, a write to an origin outside the run's allowlist and a production environment are refused before anything is sent ({error: refused, outcome: refused, code: E_RUN_REFUSED_DESTRUCTIVE | E_RUN_REFUSED_OFF_ALLOWLIST_WRITE | E_RUN_REFUSED_PRODUCTION, setting, retryable: false}): do not retry; only a person lifts it, in the target's mcpRun section of ~/.jevitate/targets.json. " +
         "Optional 'storageState': a PATH (on the machine running this MCP server; inside the project or ~/.jevitate, never a repo's .jevitate/) to a Playwright storageState " +
@@ -174,7 +264,7 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
         "with a clear error when no storageState is given. #255 (same as the CLI flags): 'env' (a named environment in .jevitate/environments.json; its session from ~/.jevitate/targets.json) and/or 'baseUrl'; " +
         "'headed' (needs a display) and 'slowMo'; 'recordVideo' (true, or a directory) → videoPaths; 'screenshots' (true | screens | steps | mode:<dir> | <dir>) → screenshotPaths; " +
         "'viewport' {width,height} or 'device' (mutually exclusive); 'geolocation' '<lat>,<lng>[,<accuracy m>]' (#329); 'fixtures' (a fixtures JSON path: setup before, restore after; 'fixtureIdentity' (#243) 'name=<storageState path>' entries name who a step with auth.identity authenticates as; an environment's shell hooks are never run over MCP — they refuse as the CLI does without --allow-shell-hooks); " +
-        "'extension' (#256: unpacked extension directories inside the project or ~/.jevitate; a Journey recorded with extensions needs the same build); 'selfHeal' fail-closed (default) | hybrid | full with 'real' or 'fakeAi' (a write step never self-heals; 'jevProvider' typesafe | openrouter picks the Jev key with real, #429) — #453: a heal mode needs a change context, 'changes' (a git range such as HEAD~1..HEAD, read-only) and/or 'changeNote' (strings), else it is refused; only a break that change explains is retargeted, one-for-one, and the run ends healed-pending-review (exitCode 5: a proposed revision a person accepts, never a pass); budgets 'healMaxAttempts'/'healMaxModelCalls'/'healMaxMs' (per broken step) and 'healMaxRunAttempts'/'healMaxRunMs' (per run), each >= 1; the result's 'exitCode' is the CLI's (0 ok, 5 pending review, 1 failed); 'actionDeltas' (#303, opt-in: each replayed step's action delta, compared with the recorded one → actionDeltas); 'stepResponseTimeoutMs' (#486, 1..300000, default 15000: how long a step's responseStatus check waits for a request sent but not yet answered, e.g. a cold start — a late 2xx is an advisory slowSteps finding; a step's own responseTimeoutMs overrides it); 'maxBrowsers'/'maxBrowserMemory' (#205: machine-wide browser cap, browser memory ceiling in MiB); 'tags' (#426: {key: value} run metadata, returned on the result — never a secret). A site-policy refusal is {error: throttled, retryAfter}.",
+        "'extension' (#256: unpacked extension directories inside the project or ~/.jevitate; a Journey recorded with extensions needs the same build); 'selfHeal' fail-closed (default) | hybrid | full with 'real' or 'fakeAi' (a write step never self-heals; 'jevProvider' typesafe | openrouter picks the Jev key with real, #429) — #453: a heal mode needs a change context, 'changes' (a git range such as HEAD~1..HEAD, read-only) and/or 'changeNote' (strings), else it is refused; only a break that change explains is retargeted, one-for-one, and the run ends healed-pending-review (exitCode 5: a proposed revision a person accepts, never a pass); budgets 'healMaxAttempts'/'healMaxModelCalls'/'healMaxMs' (per broken step) and 'healMaxRunAttempts'/'healMaxRunMs' (per run), each >= 1; the result's 'exitCode' is the CLI's (0 ok, 5 pending review, 1 failed); 'actionDeltas' (#303, opt-in: each replayed step's action delta, compared with the recorded one → actionDeltas); 'stepResponseTimeoutMs' (#486, 1..300000, default 15000: how long a step's responseStatus check waits for a request sent but not yet answered, e.g. a cold start — a late 2xx is an advisory slowSteps finding; a step's own responseTimeoutMs overrides it); 'maxBrowsers'/'maxBrowserMemory' (#205: machine-wide browser cap, browser memory ceiling in MiB); 'tags' (#426: {key: value} run metadata, returned on the result — never a secret); 'noDoneCheck' (#800, `--no-done-check`: skip the linked job's done check; the job reads unverified, basis no-check, which exits 2 unless project.json doneCheckPolicy is advisory) and 'requireDoneCheck' (`--require-done-check`: an unverified job exits 2 even under the advisory policy), not both. A site-policy refusal is {error: throttled, retryAfter}.",
       inputSchema: {
         type: "object",
         properties: {
@@ -208,6 +298,8 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
           maxBrowserMemory: { type: "integer", minimum: 1 },
           actionDeltas: { type: "boolean" },
           stepResponseTimeoutMs: { type: "integer", minimum: 1, maximum: MAX_STEP_RESPONSE_TIMEOUT_MS },
+          noDoneCheck: { type: "boolean" },
+          requireDoneCheck: { type: "boolean" },
           tags: { type: "object", additionalProperties: { type: "string" } },
         },
         required: ["id"],
@@ -219,8 +311,10 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
         const tagged = tagsArg(args);
         if ("error" in tagged) return errorResult(tagged.error);
         // Before the value reaches anything: a secret parameter's value never travels through a request.
-        const carried = await secretParamsCarried(deps.journeysDir, [args.id], args.params, { needed: true });
+        const carried = await secretParamsCarried(deps.journeysDir, [args.id], args.params);
         if (carried.length > 0) return errorResult(secretParamRefusalBody(carried));
+        // A secret the request leaves out: refused below unless the operator's targets.json supplies it (§5.3).
+        const needed = await secretParamsCarried(deps.journeysDir, [args.id], args.params, { needed: true });
         // Invariant #5: only id + params (+ a storageState PATH and the run options below) are
         // threaded through — any inline `steps`/`recording` in the arguments is deliberately ignored.
         let resolved: { params: Record<string, string>; storageState?: string; options: McpJourneyRunOptions; usage?: UsageTracker };
@@ -234,6 +328,11 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
           }
           if (err instanceof SetupRequired) return errorResult({ error: "setup_required", message: err.message });
           throw err;
+        }
+        if (needed.length > 0) {
+          const supplied = await secretsFromTargets(args.id, needed, resolved);
+          if ("refusal" in supplied) return errorResult(supplied.refusal);
+          resolved = { ...resolved, params: supplied.params, options: supplied.options };
         }
         // #205: the same pre-run checks as `jevitate journey run` (orphan sweep, starved-host refusal).
         const starved = await resourcePreflight({});
@@ -254,6 +353,13 @@ export function journeyTools(ctx: McpToolCtx): McpToolGroup {
             return failed({ error: "throttled", reason: err.reason, retryAfter: err.retryAfter, message: err.message });
           }
           if (err instanceof RunGuardRefusedError) return failed(runGuardRefusalBody(err));
+          // 0.30.0 §5.4: the run is held for a person (`jevitate inbox approve <holdId>` at a terminal); it proves nothing yet.
+          const held = heldOutcomeOf(err);
+          if (held !== undefined) return failed({ ...held, retryable: false, exitCode: 2 });
+          // 0.30.0 §5: the run mode refused it (an approval no person made on an automation target; a human step in test mode).
+          if (err instanceof RunModeRefusedError) return failed(runModeRefusalBody(err));
+          // #796: a parameter not of its declared type (names and expected types, never a value).
+          if (err instanceof ParamTypeError) return failed(paramTypeRefusalBody(err));
           if (err instanceof JourneyRunRefusedError) return failed({ error: "refused", outcome: "refused", code: err.code, id: args.id, message: err.message, fix: err.fix, tryDraft: err.tryDraft, retryable: false });
           if (err instanceof UnknownJourneyError) return failed({ error: "not_found", id: args.id, message: err.message });
           if (err instanceof JourneyRequiresAuthError) return failed({ error: "invalid_args", code: "E_JOURNEY_REQUIRES_AUTH", message: err.message });

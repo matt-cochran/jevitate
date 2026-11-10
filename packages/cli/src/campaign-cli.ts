@@ -1,3 +1,4 @@
+import { REPLAY_SECRET_FIELD_HELP, collectSecretField } from "./secret-params.js";
 import { JEV_PROVIDER_FLAG_HELP, jevProviderArg } from "./cli-shared.js";
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import type { Command } from "commander";
@@ -8,9 +9,11 @@ import { type CliDeps, emitCommandResult, environmentSeams, resolveJourneysDir, 
 import { nonNegativeIntArg, positiveIntArg } from "./cli-args.js";
 import { forwardedArgv } from "./multi-run-cli.js";
 import { CampaignHostStarvedError, CampaignPreflightError, defaultPreflightDeps } from "./campaign-preflight.js";
+import { resolveCatalogDir } from "./catalog-api.js";
+import { doneCheckPolicyOf } from "./journey-done-check-hook.js";
 
 /** `campaign run`'s own options: everything else it declares is forwarded to every mission (#311). */
-const CAMPAIGN_OWNED: ReadonlySet<string> = new Set(["journeysDir", "out", "allowShellHooks", "hookTimeoutMs", "real", "fakeAi", "json", "skipPreflight"]);
+const CAMPAIGN_OWNED: ReadonlySet<string> = new Set(["journeysDir", "out", "allowShellHooks", "hookTimeoutMs", "real", "fakeAi", "json", "skipPreflight", "doneCheck", "requireDoneCheck"]);
 
 const collect = (v: string, prev: string[]): string[] => [...prev, v];
 
@@ -59,6 +62,8 @@ export function formatCampaignHuman(data: unknown): string {
     ...(r.preflight === undefined ? [] : [`preflight ${r.preflight.skipped === true ? "skipped (--skip-preflight)" : r.preflight.ok ? "ok" : `${r.preflight.problems.length} problem(s)`}`]),
     `outcome  ${r.missionOutcome} (exit ${r.exitCode}) · ${r.missions.length} mission(s) · ${r.report.summary.defects} deduped defect(s), ${r.report.summary.advisory} advisory`,
     ...r.discovery.filter((d) => d.outcome !== "ok").map((d) => `STALE    job ${d.job}: journey ${d.journeyId} — ${d.reason ?? d.outcome} (its missions were skipped)`),
+    // H5: a discovery replay whose job was not achieved (or not verified) is named.
+    ...r.discovery.flatMap((d) => (d.outcome === "ok" && d.jobVerdict !== undefined && d.jobVerdict.attainment !== "achieved" ? [`JOB      job ${d.job}: journey ${d.journeyId} — ${d.jobVerdict.attainment} (${d.jobVerdict.basis})`] : [])),
     ...r.missions.map(
       (m) =>
         `${m.status === "ran" ? "RAN" : m.status.toUpperCase()}`.padEnd(9) +
@@ -94,17 +99,24 @@ export function registerCampaignCommands(program: Command, deps: CliDeps, buildP
       "--ignore-host-load",
       "start even when the host is starved (the campaign-start check and every mission) instead of refusing with E_HOST_STARVED; the runs are throttled and their results record it",
     )
+    .option("--no-done-check", "H5 (0.30.0): skip each discovery replay's job done check; the job reads unverified (basis no-check), which makes the campaign exit 2 unless project.json doneCheckPolicy is advisory")
+    .option("--require-done-check", "H5 (0.30.0): a discovery replay whose job is unverified makes the campaign exit 2 even when project.json doneCheckPolicy is advisory")
+    .option("--secret-field <binding>", `${REPLAY_SECRET_FIELD_HELP}. Each job's replay and missions get the bindings for its Journey; a secret value in the spec's params is refused (it sits at rest)`, collectSecretField, [] as string[])
     .option("--real", "use live Jev + OpenRouter gateways for the missions (requires keys)", false)
     .option("--fake-ai", "use deterministic fake gateways (pipeline smoke only)", false)
     .option("--jev-provider <provider>", JEV_PROVIDER_FLAG_HELP, jevProviderArg)
     .option("--json", "emit the JSON envelope (default: a human summary)")
     .option(TAG_FLAG, TAG_HELP, collectTag, [])
     .action(taggedAction(program, "campaign run", async function (this: Command, spec: string) {
-      const o = this.opts<{ journeysDir?: string; out?: string; allowShellHooks?: boolean; hookTimeoutMs?: number; real?: boolean; fakeAi?: boolean; jevProvider?: string; json?: boolean; skipPreflight?: boolean; ignoreHostLoad?: boolean }>();
+      const o = this.opts<{ secretField: string[]; journeysDir?: string; out?: string; allowShellHooks?: boolean; hookTimeoutMs?: number; real?: boolean; fakeAi?: boolean; jevProvider?: string; json?: boolean; skipPreflight?: boolean; ignoreHostLoad?: boolean; doneCheck: boolean; requireDoneCheck?: boolean }>();
       const emit = (envelope: Parameters<typeof emitCommandResult>[1], exitCode?: number): void =>
         emitCommandResult(program, envelope, { json: o.json === true, command: "campaign run", human: formatCampaignHuman, ...(exitCode === undefined ? {} : { exitCode }) });
       if (o.real !== true && o.fakeAi !== true) {
         emit(fail("E_CAMPAIGN_ARGS", "a campaign's missions are model-driven: pass --real (live gateways) or --fake-ai (pipeline smoke only)"));
+        return;
+      }
+      if (!o.doneCheck && o.requireDoneCheck === true) {
+        emit(fail("E_CAMPAIGN_ARGS", "--no-done-check and --require-done-check cannot be used together"));
         return;
       }
       const journeysDir = resolveJourneysDir(deps, o.journeysDir);
@@ -114,6 +126,8 @@ export function registerCampaignCommands(program: Command, deps: CliDeps, buildP
           allowShellHooks: o.allowShellHooks === true,
           ...(o.hookTimeoutMs === undefined ? {} : { hookTimeoutMs: o.hookTimeoutMs }),
           environmentSeams: environmentSeams(deps),
+          ...(o.secretField.length === 0 ? {} : { secretFields: o.secretField }),
+          env: deps.explore?.env ?? process.env,
         });
         const result = await runCampaign(plan, {
           newProgram: () => buildProgram(deps),
@@ -125,6 +139,12 @@ export function registerCampaignCommands(program: Command, deps: CliDeps, buildP
           missionArgs: campaignMissionArgv(this),
           // #746: --ignore-host-load starts the campaign on a starved host (and is forwarded to every mission).
           ...(o.ignoreHostLoad === true ? { ignoreHostLoad: true } : {}),
+          // H5: the discovery replays' done check, folded with the project's policy (or `require`).
+          doneCheck: {
+            policy: o.requireDoneCheck === true ? "require" : doneCheckPolicyOf(resolveCatalogDir(deps.catalogDir)),
+            ...(!o.doneCheck ? { skip: true } : {}),
+            ...(o.requireDoneCheck === true ? { require: true } : {}),
+          },
           // #485: the preflight's checks open the same browser port the missions use.
           preflight:
             o.skipPreflight === true

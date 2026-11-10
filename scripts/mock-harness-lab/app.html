@@ -1,0 +1,71 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="csrf-token" content="__CSRF__">
+<title>Triage</title>
+</head>
+<body>
+<main id="app"><p>Loading…</p></main>
+<script type="module">
+// BROWSER CODE: the lab SPA. Talks gRPC-Web (application/grpc-web+proto) to TriageService.
+import { encode, decode, frame, parseBody } from "/proto.js";
+
+const csrf = document.querySelector('meta[name="csrf-token"]').content;
+const app = document.getElementById("app");
+
+async function call(method, reqType, req, resType) {
+  const res = await fetch(`/journeeze.v1.TriageService/${method}`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/grpc-web+proto", "x-grpc-web": "1", "x-csrf-token": csrf },
+    body: frame(0, encode(reqType, req)),
+  });
+  const parsed = parseBody(new Uint8Array(await res.arrayBuffer()));
+  if (parsed.status !== 0) throw new Error(parsed.message || `grpc-status ${parsed.status}`);
+  return decode(resType, parsed.data);
+}
+
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+
+async function list() {
+  const { clusters } = await call("ListClusters", "ListClustersRequest", {}, "ListClustersResponse");
+  app.innerHTML = `<h1>Clusters</h1><ul>${clusters
+    .map((c) => `<li><a href="/triage/${esc(c.id)}" data-testid="cluster-${esc(c.id)}" data-id="${esc(c.id)}">${esc(c.title)}</a> <span>${c.reports} reports</span></li>`)
+    .join("")}</ul>`;
+  for (const a of app.querySelectorAll("a[data-id]")) {
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      history.pushState({}, "", a.getAttribute("href"));
+      detail(a.dataset.id);
+    });
+  }
+}
+
+function status(c) {
+  return c.issueNumber ? `Issue #${c.issueNumber} filed` : "No issue filed yet";
+}
+
+async function detail(id) {
+  const { cluster: c } = await call("GetCluster", "GetClusterRequest", { id }, "GetClusterResponse");
+  app.innerHTML = `<h1>${esc(c.title)}</h1><p>Reported by ${esc(c.reporterEmail)}</p>
+<p data-testid="issue-status">${esc(status(c))}</p>
+${c.issueNumber ? "" : '<button type="button" data-testid="file-issue">File issue</button>'}`;
+  const btn = app.querySelector("[data-testid=file-issue]");
+  btn?.addEventListener("click", async () => {
+    btn.disabled = true;
+    try {
+      const r = await call("FileIssue", "FileIssueRequest", { clusterId: c.id, title: c.title }, "FileIssueResponse");
+      app.querySelector("[data-testid=issue-status]").textContent = `Issue #${r.issueNumber} filed`;
+      btn.remove();
+    } catch (err) {
+      app.querySelector("[data-testid=issue-status]").textContent = `Could not file issue: ${err.message}`;
+    }
+  });
+}
+
+const m = /^\/triage\/([\w-]+)$/.exec(location.pathname);
+(m ? detail(m[1]) : list()).catch((err) => (app.innerHTML = `<p role="alert">Error: ${esc(err.message)}</p>`));
+</script>
+</body>
+</html>

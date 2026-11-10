@@ -11,6 +11,7 @@ import type { PageTiming } from "../timing.js";
 import type { HostProbe } from "../host-pressure.js";
 import type { HostJudgment } from "../host-health.js";
 import type { HangConfig, SettleConfig, TimingConfig } from "../settle-config.js";
+import type { BoundaryEvidence } from "./boundary.js";
 import type { AuthProgress } from "../auth-completion.js";
 import type { SaveProgress } from "../save-completion.js";
 import type { FieldValueLog, FillHelper } from "../fill.js";
@@ -56,6 +57,8 @@ import type { MutableRunContext, ActionableControlOutcome } from "./context/type
 
 /** The goal loop's run state (#232): every closure variable of `explore()`, one field each, names unchanged. */
 export interface RunContext {
+  /** 0.30.0 (#807): the boundary this run stopped at (`goal-loop/boundary.ts`); `finish.ts` ends it `goalOutcome: "boundary"`. */
+  boundary?: BoundaryEvidence;
   readonly cfg: ExploreConfig;
   readonly startOrigin: string;
   readonly fixture: string | null;
@@ -331,6 +334,12 @@ export interface RunContext {
   readonly waitOpMs: number;
   /** Every page state seen so far (for "the action sent the page back to an earlier state"). */
   readonly seen: Set<string>;
+  /**
+   * The step each page state was first reached by — `forwardStepKey(before, label)` of the action
+   * whose own result it was. An action that lands, again, on the state it first reached from the
+   * same state repeated a forward step: it did not send the page back to an earlier state.
+   */
+  readonly enteredBy: Map<string, string>;
   /** The last executed page-changing action: when, from which state, and its Recording index. */
   readonly track: {
     lastMutation: {
@@ -345,6 +354,8 @@ export interface RunContext {
       linkFromRoute?: string | null;
       /** #289: ANY click — the route it was clicked on (null for any other action). */
       clickFromRoute?: string | null;
+      /** Has the perception right after this action been observed (the action's own result)? */
+      looked?: boolean;
     } | null;
     /** The raw descriptor of the last RECORDED action's target, to check it is still on the page. */
     lastRecordedTarget: string | null;

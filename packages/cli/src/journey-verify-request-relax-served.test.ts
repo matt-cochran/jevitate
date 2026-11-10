@@ -35,10 +35,10 @@ describe("#768 automatic request defense through actual Chromium", () => {
     };
     const automatic = await verify(false);
     expect(automatic.assertions.find((a) => a.site === "end-state:0"), JSON.stringify(automatic)).toMatchObject({ verdict: "sensitive", relaxedSites: ["step-request:2:0", "step:3"] });
-    expect(automatic.verdict).toBe("proven");
+    expect(automatic.verdict).toBe("sensitive");
     const declared = await verify(true);
     expect(declared.assertions.find((a) => a.site === "end-state:0")).toMatchObject({ verdict: "sensitive", declaredProof: true, relaxedSites: ["step-request:2:0", "step:3"] });
-    expect(declared.verdict).toBe("proven");
+    expect(declared.verdict).toBe("sensitive");
     expect(declared.mutations.find((m) => m.id === "swap-param:threadId")?.targeted?.find((p) => p.site === "end-state:0")?.control).toBe("passed");
     expect(writes).toBe(0);
     expect((await store.get("declared"))?.recording.pages[0]!.steps[1]!.expectRequests).toHaveLength(1);

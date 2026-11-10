@@ -11,6 +11,7 @@ import { FsJourneyStore, JourneySchema, type Journey, type JourneyNetworkCheck }
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { BrowseTheWeb, CastActor, type Actor } from "@jevitate/screenplay";
 import { buildProgram } from "./program.js";
+import { advisoryCatalogDir } from "./done-check-policy.testkit.js";
 import { JourneyOutcomeChecks } from "./journey-network-checks.js";
 import { useSkippingTime, withSession } from "../../explore/src/testkit.js";
 
@@ -70,6 +71,7 @@ async function cli(journeysDir: string, args: string[]): Promise<{ out: string; 
     profiles: new ProfileManager("/unused"),
     journeysDir,
     dbPath: join(dir, "no-site-policy.sqlite"),
+    catalogDir: advisoryCatalogDir(dir),
     explore: { browserPortFactory: () => new PlaywrightBrowserPort() },
   });
   program.configureOutput({ writeOut: (s) => out.push(s), writeErr: () => undefined });
@@ -190,7 +192,7 @@ describe("JourneyOutcomeChecks.lastFailures reports the failed assertion sites (
       );
 
       expect(result).toMatchObject({ outcome: "quarantined", at: 2 });
-      expect(checks.lastFailures).toEqual([{ where: "step-request", step: 2, checkIndex: 0, detail: expect.any(String) }]);
+      expect(checks.lastFailures).toEqual([{ where: "step-request", step: 2, checkIndex: 0, detail: expect.any(String), evaluated: true }]);
     });
   }, 120_000);
 
@@ -207,7 +209,7 @@ describe("JourneyOutcomeChecks.lastFailures reports the failed assertion sites (
         return { outcome: "ok", output: null };
       });
 
-      expect(checks.lastFailures).toEqual([{ where: "step-request", step: 2, checkIndex: 0, detail: expect.any(String) }]);
+      expect(checks.lastFailures).toEqual([{ where: "step-request", step: 2, checkIndex: 0, detail: expect.any(String), evaluated: true }]);
     });
   }, 120_000);
 

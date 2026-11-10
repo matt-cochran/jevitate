@@ -193,6 +193,7 @@ export type GoalBasedOutcome =
   | "failed"
   | "defects-found"
   | "hang"
+  | "boundary"
   | "intermittent"
   | "inconclusive"
   | "crashed"

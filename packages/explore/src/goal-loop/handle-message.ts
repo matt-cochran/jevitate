@@ -101,6 +101,9 @@ export async function handleMessage(ctx: RunContext, step: ActStep, op: Decision
       requestsStartedSince(monitorFor(ctx.page), at, sendBackground).length === 0 &&
       newPageText(baseline, await readPageText(ctx.page, ctx.secrets), "").trim() === ""
     ) {
+      // The send owns no read the page starts from here on (its first background poll): a later
+      // quiet `wait` is not made busy by it.
+      monitorFor(ctx.page).markActionInert();
       const reason = `message was not sent: ${r.submittedVia?.kind === "click" ? `clicking ${quote(r.submittedVia.control.name, 40)}` : "Enter"} in ${quote(control.name || control.summary, 60)} started no request and changed nothing on the page`;
       ctx.history.push(`${reason} — look for a send / continue control that submits it (it may need something else first)`);
       record(false, reason, { op, message });

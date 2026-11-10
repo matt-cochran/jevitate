@@ -3,7 +3,10 @@ import { FsJourneyStore, JourneyRegistry } from "@jevitate/journey";
 import { ok, fail } from "../envelope.js";
 import { type CliDeps, emitJson } from "../cli-shared.js";
 import { withProjectFlags } from "../project-layout.js";
-import { DEPRECATED_DIR_HELP, journeyLayout } from "./shared.js";
+import { loadCatalog, resolveCatalogDir } from "../catalog-api.js";
+import { capabilityParameters } from "../journey-find-api.js";
+import { linkedJobDone } from "../catalog-refs.js";
+import { DEPRECATED_DIR_HELP, flaggedCatalogDir, journeyLayout } from "./shared.js";
 
 /** Registers `jevitate journey find`. */
 export function registerJourneyFind(journey: Command, program: Command, deps: CliDeps): void {
@@ -24,19 +27,31 @@ export function registerJourneyFind(journey: Command, program: Command, deps: Cl
         const store = new FsJourneyStore(layout.journeysDir);
         const registry = new JourneyRegistry(store);
         const metas = await registry.find(query);
-        const capabilities = metas.map((m) => ({
-          id: m.id,
-          name: m.name,
-          description: m.description,
-          params: m.params,
-        }));
+        // #800: like MCP find_capabilities, a capability that links a catalog job carries
+        // `job: { id, status, done?: { at, check } }` (best effort: no catalog leaves it out).
+        let catalog: Awaited<ReturnType<typeof loadCatalog>> | undefined;
+        try {
+          catalog = await loadCatalog(resolveCatalogDir(deps.catalogDir, flaggedCatalogDir(layout)), layout.journeysDir);
+        } catch {
+          catalog = undefined;
+        }
+        const capabilities = await Promise.all(
+          metas.map(async (m) => {
+            const journey = await store.get(m.id);
+            const job = catalog === undefined || journey === null ? undefined : linkedJobDone(catalog, journey);
+            const parameters = capabilityParameters(journey);
+            return { id: m.id, name: m.name, description: m.description, params: m.params, ...(parameters === undefined ? {} : { parameters }), ...(job === undefined ? {} : { job }) };
+          }),
+        );
         const envelope = ok(capabilities);
         if (json) {
           emitJson(program, envelope);
         } else {
           const out = program.configureOutput().writeOut;
           for (const c of capabilities) {
-            out?.(`${c.id}\t${c.name}\tparams=[${c.params.join(", ")}]\n`);
+            const done = c.job === undefined ? "" : c.job.done === undefined ? `\tjob=${c.job.id} done=none` : `\tjob=${c.job.id} done=${c.job.done.at} ${c.job.done.check}`;
+            const types = c.parameters === undefined ? "" : `\ttypes=[${c.parameters.map((p) => (p.type === undefined ? p.name : p.type === "enum" ? `${p.name}:enum(${(p.enum ?? []).join("|")})` : `${p.name}:${p.type}`)).join(", ")}]`;
+            out?.(`${c.id}\t${c.name}\tparams=[${c.params.join(", ")}]${types}${done}\n`);
           }
           process.exitCode = 0;
         }

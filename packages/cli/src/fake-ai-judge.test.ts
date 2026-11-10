@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Answer, JudgmentState, Question } from "@jevitate/ai-core";
 import { decide, judgeGoalCompletion, TARGET_FREE_ACTIONS, type Control, type Snapshot } from "@jevitate/explore";
 import { V1_RUBRIC, gradeCandidates, judgeScreen, redactEvidence, type GradeCandidate, type UxEvidence } from "@jevitate/ux";
-import { fakeDoneJudge } from "./program.js";
+import { fakeDoneJudge } from "./cli-shared.js";
 
 /**
  * #213: `--fake-ai`'s judge must be TOTAL — it answers every question shape the product actually

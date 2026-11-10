@@ -14,6 +14,8 @@ import {
   journeyRunParams,
   journeyWriteSteps,
   lintJourney,
+  lintJourneyDoneCheck,
+  type JourneyLintFinding,
   secretParamNames,
   type Journey,
   type JourneyReview,
@@ -34,10 +36,13 @@ import {
   assertionRefsBound,
 } from "@jevitate/journey";
 import type { LocatorHealthDetail } from "./locator-health.js";
-import { evaluateMutationProofPolicy, type MutationProofPolicyMode, type ProofWaiver } from "./mutation-proof-policy.js";
+import { evaluateMutationProofPolicy, type MutationProofPolicySetting, type ProofWaiver } from "./mutation-proof-policy.js";
+import { readProofVerdict } from "./journey-verify-report.js";
 import { SafetyPolicy, describeCheck, explainCheck, type SafetyConfig } from "@jevitate/explore";
 import { navigateUrlParams, writeClassifier, type Step, type TargetDescriptor, type ValueOrVar } from "@jevitate/recording";
-import { currentJourneyProofHash, type JourneyProofContext } from "./journey-proof-context.js";
+import { currentJourneyProof, journeyProofStaleCause, proofTargetKnown, proofTargetNow, type JourneyProofContext, type ProofTargetNow } from "./journey-proof-context.js";
+import type { LatestJourneyRun } from "./journey-run-record.js";
+import { DEFAULT_DONE_CHECK_POLICY, type DoneCheckPolicy } from "@jevitate/domain";
 import {
   createSheetWriter,
   finishSheet,
@@ -82,14 +87,27 @@ export interface JourneyVerifyRecord {
   readonly proofHash?: string;
   /** #721: secret-free effective browser/emulation context included in `proofHash`. */
   readonly proofContext?: JourneyProofContext;
+  /** `sensitive` | `insensitive` | `inconclusive`; a receipt written before 0.30.0 may carry the legacy word, which reads as `sensitive`. */
   readonly verdict: string;
   readonly reason?: string;
+  /** 0.30.0 §5.1: whether the proof's target trust lets it count for a strict gate. Absent before 0.30.0 (counts for none). */
+  readonly countsForGate?: boolean;
   /** #787: the proof resumed, reusing this many pairs from an interrupted run of the same configuration. Absent otherwise. */
   readonly reusedPairs?: number;
   readonly summary: Readonly<Record<string, number>>;
   readonly at: string;
   /** #616: the declared targeted-proof plans the automatic bound refused, read by readiness guidance. */
   readonly suggestedTargetedProofs?: readonly JourneyTargetedProofPlan[];
+  /** #818: the native verify report written beside the receipt (path and SHA-256). Absent when none was written. */
+  readonly nativeReport?: { readonly path: string; readonly sha256: string };
+  /** #818: why the native verify report could not be written. */
+  readonly nativeReportError?: string;
+  /** #816: the engine that recorded the proof. Absent on a receipt written before it was stored: the producer is unknown. */
+  readonly engine?: { readonly version: string; readonly commit: string };
+  /** M5: the target origin the proof ran on. Absent on a receipt written before 0.30.0 (unknown: never counts for require-sensitive). */
+  readonly target?: { readonly origin: string };
+  /** M5: the app's release label the proof ran against (`--app-version` / `JEVITATE_APP_VERSION`), when it was known. */
+  readonly appVersion?: string;
 }
 
 /**
@@ -117,10 +135,10 @@ export interface JourneyReviewContext {
   readonly approvedSnapshot?: Journey | null;
   /** The last recorded mutation-proof verdict, or null when there is none. */
   readonly lastVerify?: JourneyVerifyRecord | null;
-  readonly proofPolicy?: MutationProofPolicyMode;
+  readonly proofPolicy?: MutationProofPolicySetting;
   readonly proofWaiver?: ProofWaiver | null;
   /** #433: the Journey's catalog links and its pre-approval findings (the CLI loads the catalog). */
-  readonly catalog?: { readonly links: JourneyCatalogLinks; readonly findings: readonly Finding[] };
+  readonly catalog?: { readonly links: JourneyCatalogLinks; readonly findings: readonly Finding[]; readonly nativeOwnerFindings?: ReadonlySet<Finding> };
   /** #453: the pending self-heal proposal, with whether it is stale and why it cannot be accepted. */
   readonly proposal?: { readonly proposal: JourneyProposal; readonly stale: boolean; readonly problem?: string };
   /** #466: the anchor-rule problems (`journeyAnchorIssues`), computed by the caller (journey-anchor-gate imports this file). */
@@ -131,6 +149,29 @@ export interface JourneyReviewContext {
   readonly stepIdOnly?: boolean;
   /** #765: the pending annotation draft status (`journey-review-api` loads it; `buildJourneyReview` stays pure). */
   readonly annotationDraft?: JourneyAnnotationDraft;
+  /**
+   * 0.30.0 (owner decision "Proof role"): the Journey's latest run (`latestJourneyRun`), or null when none is
+   * recorded. Absent: the sheet carries no `job` (a caller that did not look).
+   */
+  readonly latestRun?: LatestJourneyRun | null;
+  /** `project.json` `doneCheckPolicy` (default `require`): how an `unverified` job gates. */
+  readonly doneCheckPolicy?: DoneCheckPolicy;
+  /** M5: the target origin and app version a receipt is judged against (default: the Journey's recorded site, `JEVITATE_APP_VERSION`). */
+  readonly proofTarget?: ProofTargetNow;
+}
+
+/** The attention line a job the latest run did not achieve opens with (readiness's `job` check carries it instead). */
+export const JOB_NOT_ACHIEVED_ATTENTION = "Job not achieved";
+
+/** 0.30.0 (owner decision "Proof role"): the job verdict the sheet leads with, from the latest run of this Journey. */
+export function reviewJobVerdict(latest: LatestJourneyRun | null, policy: DoneCheckPolicy = DEFAULT_DONE_CHECK_POLICY): NonNullable<JourneyReview["job"]> {
+  if (latest === null) return { attainment: "unverified", basis: "no-run", doneCheckPolicy: policy };
+  const ran = { at: latest.at, ...(/^[a-z-]{1,40}$/.test(latest.outcome) ? { outcome: latest.outcome } : {}) };
+  if (!latest.current) return { attainment: "unverified", basis: "earlier-version", doneCheckPolicy: policy, ...ran };
+  if (latest.job === undefined) return { attainment: "unverified", basis: "not-recorded", doneCheckPolicy: policy, ...ran };
+  // M4 (the rule readiness's job check applies): `achieved` counts only from a record whose own outcome is ok.
+  if (latest.job.attainment === "achieved" && ran.outcome !== "ok") return { attainment: "unverified", basis: "run-not-passed", doneCheckPolicy: policy, ...ran };
+  return { attainment: latest.job.attainment, basis: latest.job.basis, doneCheckPolicy: policy, ...ran };
 }
 
 function targetOf(step: Step): TargetDescriptor | undefined {
@@ -453,17 +494,28 @@ function multisetDiff(before: readonly string[], after: readonly string[]): { ad
   return { added, removed };
 }
 
-function buildVerify(journey: Journey, hash: string, rec: JourneyVerifyRecord | null | undefined, readRequests: readonly string[] | undefined): JourneyReviewVerify {
+function validEngine(e: unknown): e is { version: string; commit: string } {
+  return e !== null && typeof e === "object" && typeof (e as { version?: unknown }).version === "string" && typeof (e as { commit?: unknown }).commit === "string";
+}
+
+function buildVerify(journey: Journey, rec: JourneyVerifyRecord | null | undefined, readRequests: readonly string[] | undefined, now: ProofTargetNow): JourneyReviewVerify {
   if (rec === null || rec === undefined) {
     return { status: "not-verified", hint: `run \`jevitate journey verify ${journey.metadata.id} --mutate\` to prove each assertion can fail` };
   }
+  const stale = !currentJourneyProof(journey, rec, readRequests, now);
   return {
     status: "recorded",
-    verdict: rec.verdict,
+    verdict: readProofVerdict(rec.verdict),
     at: rec.at,
-    // #523: an executable-content change stales the proof; an old record without it compares the full hash.
-    stale: rec.journeyId !== journey.metadata.id || (rec.proofHash === undefined ? rec.contentHash !== hash : rec.proofHash !== currentJourneyProofHash(journey, rec.proofContext, readRequests)),
+    // Evidence without planner identity, or under another read policy, must be reverified.
+    stale,
+    // #816: only "the Journey changed" when its content differs from what the receipt bound.
+    ...(stale ? { staleCause: journeyProofStaleCause(journey, rec, readRequests, now) } : {}),
+    // M5: a receipt that does not name the target and app version it ran on shows, and never counts for require-sensitive.
+    ...(!stale && !proofTargetKnown(rec, now) ? { targetUnknown: true as const } : {}),
     ...(rec.reason === undefined ? {} : { reason: rec.reason }),
+    ...(rec.countsForGate === undefined ? {} : { countsForGate: rec.countsForGate }),
+    ...(validEngine(rec.engine) ? { recordedBy: { version: rec.engine.version, commit: rec.engine.commit } } : {}),
     summary: { ...rec.summary },
     ...(rec.suggestedTargetedProofs === undefined ? {} : { suggestedTargetedProofs: rec.suggestedTargetedProofs.map((p) => ({ ...p, relax: [...p.relax] })) }),
   };
@@ -495,7 +547,11 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
     ...(ctx.strict === true ? { strictTargets: true } : {}),
     ...(ctx.safety?.readRequests === undefined ? {} : { readRequests: ctx.safety.readRequests }),
   };
-  const findings = lintJourney(journey, lintOptions);
+  // Design §3.1: the Journey's own done check (metadata.done) is linted by the jobs.json rules, on the sheet too.
+  const findings: JourneyLintFinding[] = [
+    ...lintJourney(journey, lintOptions),
+    ...lintJourneyDoneCheck(journey, lintOptions).map((f) => ({ rule: f.rule, level: f.level, message: f.message })),
+  ];
   const stepAssertions = journeyAssertions(journey).flatMap((site) => {
     if (site.where === "end-state") return [];
     const explained = explainCheck(site.check);
@@ -563,8 +619,10 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
       ...(m.acceptedWeak === undefined ? {} : { acceptedWeak: { reason: m.acceptedWeak.reason, rules: [...m.acceptedWeak.rules] } }),
       // #616: the declared targeted-proof plans, copied out of the metadata for review.
       ...(m.targetedProofs === undefined || m.targetedProofs.length === 0 ? {} : { targetedProofs: m.targetedProofs.map((p) => ({ check: p.check, mustFailWhen: p.mustFailWhen, relax: [...p.relax] })) }),
-      verify: buildVerify(journey, hash, ctx.lastVerify, ctx.safety?.readRequests),
-      policy: evaluateMutationProofPolicy({ journey, contentHash: hash, record: ctx.lastVerify, mode: ctx.proofPolicy, waiver: ctx.proofWaiver, readRequests: ctx.safety?.readRequests }),
+      // Design §3.1: the Journey's own done check, when it carries one (placeholders only, never a value).
+      ...(m.done === undefined ? {} : { doneCheck: { source: "journey" as const, at: m.done.at, check: m.done.check, ...(m.done.distinguishedBy === undefined ? {} : { distinguishedBy: [...m.done.distinguishedBy] }) } }),
+      verify: buildVerify(journey, ctx.lastVerify, ctx.safety?.readRequests, ctx.proofTarget ?? proofTargetNow(journey)),
+      policy: evaluateMutationProofPolicy({ journey, contentHash: hash, record: ctx.lastVerify, mode: ctx.proofPolicy, waiver: ctx.proofWaiver, readRequests: ctx.safety?.readRequests, now: ctx.proofTarget ?? proofTargetNow(journey) }),
     },
     changeSinceApproval: buildChange(journey, hash, ctx.approvedSnapshot, ctx.stepIdOnly === true),
     ...(m.approval === undefined
@@ -590,9 +648,10 @@ export function buildJourneyReview(journey: Journey, ctx: JourneyReviewContext =
     ...(anchors.length === 0 ? {} : { anchors }),
     // #765: the pending draft's status, when the API loaded one (the drafted text is never here).
     ...(ctx.annotationDraft === undefined ? {} : { annotationDraft: ctx.annotationDraft }),
+    ...(ctx.latestRun === undefined ? {} : { job: reviewJobVerdict(ctx.latestRun, ctx.doneCheckPolicy) }),
     contentHash: hash,
   };
-  return { ...review, attention: buildAttention(review, endStateExplained.filter((e) => e.weak).map((e) => e.text), m.goal) };
+  return { ...review, attention: buildAttention(review, endStateExplained.filter((e) => e.weak).map((e) => e.text), m.goal, ctx.catalog?.nativeOwnerFindings) };
 }
 
 /** An upload step's file in words: the recorded path, `{var}` or «redacted». */
@@ -604,10 +663,25 @@ function describeFile(step: Extract<Step, { kind: "upload" }>): string | undefin
 }
 
 /** Everything that needs the reviewer's decision, warnings first (stable within a severity). */
-function buildAttention(r: Omit<JourneyReview, "attention">, weakEndState: readonly string[], goal: string | undefined): JourneyReviewAttention[] {
+function buildAttention(r: Omit<JourneyReview, "attention">, weakEndState: readonly string[], goal: string | undefined, nativeOwnerFindings?: ReadonlySet<Finding>): JourneyReviewAttention[] {
   const out: JourneyReviewAttention[] = [];
-  const warn = (text: string, hint?: string, settledBy?: "catalog-approval"): void =>
-    void out.push({ severity: "warn", text, ...(hint === undefined ? {} : { hint }), ...(settledBy === undefined ? {} : { settledBy }) });
+  const warn = (text: string, hint?: string, settledBy?: "catalog-approval", ownerActions?: JourneyReviewAttention["ownerActions"]): void =>
+    void out.push({ severity: "warn", text, ...(hint === undefined ? {} : { hint }), ...(settledBy === undefined ? {} : { settledBy }), ...(ownerActions === undefined || ownerActions.length === 0 ? {} : { ownerActions }) });
+  const owner = [{ kind: "journey-promote" as const, id: r.id }];
+  const c = r.changeSinceApproval;
+  const changed = (c.kind === "diff" || c.kind === "snapshot-missing") && c.changed;
+  const catalogActions: NonNullable<JourneyReviewAttention["ownerActions"]> = [];
+  const linksKnown = r.catalog !== undefined && r.catalog.job !== undefined && r.catalog.persona !== undefined && r.catalog.job.status !== "unknown" && r.catalog.persona.status !== "unknown";
+  if (linksKnown) {
+    if (r.catalog!.job!.status !== "approved") catalogActions.push({ kind: "job-approve", id: r.catalog!.job!.id });
+    if (r.catalog!.persona!.status !== "approved") catalogActions.push({ kind: "persona-approve", id: r.catalog!.persona!.id });
+  }
+  const reReviewActions = linksKnown && r.promoted ? [
+    ...(changed ? owner : []),
+    ...(r.catalog!.job!.status === "stale" ? [{ kind: "job-approve" as const, id: r.catalog!.job!.id }] : []),
+    ...(r.catalog!.persona!.status === "stale" ? [{ kind: "persona-approve" as const, id: r.catalog!.persona!.id }] : []),
+  ] : [];
+  const knownReReview = reReviewActions.length > 0 && reReviewActions.length === r.catalog?.needsReReview.length ? reReviewActions : undefined;
   const info = (text: string, hint?: string): void => void out.push({ severity: "info", text, ...(hint === undefined ? {} : { hint }) });
 
   const weakSteps = [...new Set(r.proof.stepAssertions.filter((a) => a.weak).map((a) => a.step))];
@@ -631,16 +705,19 @@ function buildAttention(r: Omit<JourneyReview, "attention">, weakEndState: reado
     else info(`${text}, exempted by allowControl`);
   }
   if (r.catalog !== undefined) {
-    if (r.catalog.unvetted.length > 0) warn(`Unvetted catalog links: ${r.catalog.unvetted.join(", ")}`, `approve them, or promote with --accept-unvetted "<reason>"`, "catalog-approval");
-    if (r.catalog.needsReReview.length > 0) warn(`Catalog links need re-review: ${r.catalog.needsReReview.join("; ")}`);
+    if (r.catalog.unvetted.length > 0) warn(`Unvetted catalog links: ${r.catalog.unvetted.join(", ")}`, `approve them, or promote with --accept-unvetted "<reason>"`, "catalog-approval", catalogActions);
+    if (r.catalog.needsReReview.length > 0) warn(`Catalog links need re-review: ${r.catalog.needsReReview.join("; ")}`, undefined, undefined, knownReReview);
   }
   for (const f of r.findings ?? []) {
     if (f.analyzer === "catalog-analysis") continue;
     // #608: an unvetted link is a person's catalog approval, as the line above says.
-    if (f.severity !== "info") warn(f.message, f.fix, f.analyzer === "catalog-links" && f.code === "journey.unvetted" ? "catalog-approval" : undefined);
+    const findingActions = nativeOwnerFindings?.has(f) === true && !f.requiresAcknowledgment && f.severity === "warn" ?
+      f.analyzer === "catalog-links" && f.code === "journey.unvetted" ? catalogActions :
+      f.analyzer === "catalog-links" && f.code === "journey.needs-re-review" ? knownReReview :
+      f.analyzer === "readiness" && f.code === "readiness.links-approved" ? catalogActions : undefined : undefined;
+    if (f.severity !== "info") warn(f.message, f.fix, f.analyzer === "catalog-links" && f.code === "journey.unvetted" ? "catalog-approval" : undefined, findingActions);
     else if (f.analyzer === "readiness" || f.analyzer === "readiness-jev") info(f.message, f.fix);
   }
-  const c = r.changeSinceApproval;
   if ((c.kind === "diff" || c.kind === "snapshot-missing") && c.changed) {
     if (c.kind === "diff") {
       const bit = (sign: string, n: number, word: string, many?: string): string[] => (n === 0 ? [] : [`${sign}${plural(n, word, many)}`]);
@@ -652,9 +729,9 @@ function buildAttention(r: Omit<JourneyReview, "attention">, weakEndState: reado
         ...bit("+", c.sideEffects.added.length, "side effect"),
         ...bit("−", c.sideEffects.removed.length, "side effect"),
       ];
-      warn(`Changed since approval${parts.length === 0 ? "" : `: ${parts.join(", ")}`}${c.stepIdOnly === true ? " (step ids only)" : ""}`, "--full lists every change");
+      warn(`Changed since approval${parts.length === 0 ? "" : `: ${parts.join(", ")}`}${c.stepIdOnly === true ? " (step ids only)" : ""}`, "--full lists every change", undefined, owner);
     } else {
-      warn(`Changed since approval (its approved snapshot is missing, so only the hash differs)${c.stepIdOnly === true ? " (step ids only)" : ""}`);
+      warn(`Changed since approval (its approved snapshot is missing, so only the hash differs)${c.stepIdOnly === true ? " (step ids only)" : ""}`, undefined, undefined, owner);
     }
   }
   for (const w of r.anchorWarnings ?? []) warn(`Anchor ${w.severity} ${w.path}${w.step === undefined ? "" : ` (step ${w.step})`}: ${w.message}`, w.fix);
@@ -670,15 +747,54 @@ function buildAttention(r: Omit<JourneyReview, "attention">, weakEndState: reado
     else info("An annotation draft is stale: the Journey changed since it was made — re-draft it", r.annotationDraft.next);
   }
   const v = r.proof.verify;
-  if (v.status === "not-verified") info("Not mutation-tested", `jevitate journey verify ${r.id} --mutate`);
-  else if (v.stale) warn("The mutation proof is out of date: the Journey changed after it ran", `jevitate journey verify ${r.id} --mutate`);
-  else if (v.verdict === "insensitive") warn("Mutation proof: some checks cannot fail", `jevitate journey verify ${r.id} --mutate`);
   const policy = r.proof.policy;
+  // Owner decision "Proof role" (2026-11-09): job gates, proof advisory. Under `advisory` (the default) a
+  // missing, stale or insensitive proof is a checks-strength line (○), never a strict failure; an opt-in
+  // policy (`require-attempt`, `require-sensitive`) keeps it a ⚠.
+  const proofNote = (policy?.mode ?? "advisory") === "advisory" ? info : (text: string, hint?: string) => warn(text, hint);
+  const reverify = `jevitate journey verify ${r.id} --mutate`;
+  if (v.status === "not-verified") info("Not mutation-tested", reverify);
+  else if (v.stale) {
+    const stale = staleProofAttention(v.staleCause, r.id, v.recordedBy);
+    proofNote(stale.text, stale.hint);
+  } else if (v.verdict === "insensitive") proofNote("Checks strength: the mutation proof is insensitive (some checks cannot fail)", reverify);
+  // M5: shown, with a warning; under require-sensitive the policy line below says it does not count.
+  if (v.status === "recorded" && !v.stale && v.verdict === "sensitive" && v.targetUnknown === true && (policy?.mode ?? "advisory") !== "require-sensitive") info("The mutation proof's receipt does not name the target origin and app version it ran on (written before 0.30.0, or without the app version set now): it would not count for require-sensitive", reverify);
   if (policy !== undefined && !policy.passed && !(v.status === "recorded" && (v.stale || v.verdict === "insensitive"))) warn(`Mutation proof policy (${policy.mode}): ${policy.reason}`, policy.next);
-  else if (v.status === "recorded" && !v.stale && v.verdict !== "proven" && v.verdict !== "insensitive") info(`Mutation proof (${policy?.mode ?? "advisory"}): ${policy?.reason ?? v.verdict}`, policy?.next);
+  else if (v.status === "recorded" && !v.stale && v.verdict !== "sensitive" && v.verdict !== "insensitive") info(`Mutation proof (${policy?.mode ?? "advisory"}): ${policy?.reason ?? v.verdict}`, policy?.next);
   if (r.proof.acceptedWeak !== undefined) info(`Weak checks were accepted: "${r.proof.acceptedWeak.reason}"`);
+  // The job verdict (the header leads with it): a job the latest run did not achieve is a ⚠ (strict fails, as
+  // `journey run` exits 1). An unverified one is shown in the header with its fix; `journey readiness` gates it per doneCheckPolicy.
+  if (r.job?.attainment === "not-achieved") warn(`${JOB_NOT_ACHIEVED_ATTENTION}: the latest run's done check read false before and after it, in a fresh session`, `jevitate journey run ${r.id}`);
   if (r.locatorHealth !== undefined && r.locatorHealth.brittle > 0) info(`${plural(r.locatorHealth.brittle, "step")} on brittle locators`, "--full lists the fixes");
   return [...out.filter((a) => a.severity === "warn"), ...out.filter((a) => a.severity === "info")];
+}
+
+/** #816: the stale-proof line names what actually differs; only a changed Journey is blamed on the Journey. */
+function staleProofAttention(cause: string | undefined, id: string, recordedBy?: { readonly version: string; readonly commit: string }): { text: string; hint: string } {
+  const reverify = `jevitate journey verify ${id} --mutate`;
+  switch (cause) {
+    case "engine":
+      return {
+        text: `The mutation proof was recorded by another jevitate engine${recordedBy === undefined ? "" : ` (${recordedBy.version}, ${recordedBy.commit})`}: the Journey is unchanged since it ran, but this engine computes its proof identity differently`,
+        hint: `review it with the jevitate version that recorded the proof${recordedBy === undefined ? "" : ` (${recordedBy.version})`}, or re-run \`${reverify}\` with this one`,
+      };
+    case "engine-unknown":
+      return {
+        text: "The mutation proof does not match this engine, and its receipt does not say which engine recorded it (written before 0.30.0); the Journey's reviewed content is unchanged",
+        hint: reverify,
+      };
+    case "read-policy":
+      return { text: "The mutation proof is out of date: the target's safety.readRequests changed since it ran", hint: reverify };
+    case "no-planner-identity":
+      return { text: "The mutation proof predates proof identity (recorded before 0.14.0), so it cannot be matched to this Journey", hint: reverify };
+    case "target":
+      return { text: "The mutation proof ran on another target origin than the Journey's recorded site: the Journey is unchanged, but the proof is for another target", hint: reverify };
+    case "app-version":
+      return { text: "The mutation proof ran on another app version than JEVITATE_APP_VERSION names now: the Journey is unchanged, but the app is not", hint: reverify };
+    default:
+      return { text: "The mutation proof is out of date: the Journey changed after it ran", hint: reverify };
+  }
 }
 
 /** #437: a copy of an approval's provenance (the sheet never shares the Journey's objects). */

@@ -11,7 +11,9 @@ import { FakeGenerationGateway, type Answer, type CredentialStore, type Judgment
 import { GOAL_ALREADY_MET_QUESTION, GOAL_MET_QUESTION } from "@jevitate/explore";
 import { ALLOWED_TOOLS } from "@jevitate/mcp-facade";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
+import { FsMissionTargetStore, MissionTargetRegistry } from "@jevitate/missions";
 import { buildProgram } from "./program.js";
+import { approveJourneyAnnotations } from "./journey-annotate-api.js";
 import { buildMcpTools, type McpApiDeps, type McpTool } from "./mcp-api.js";
 import { makeInProcessCliRunner } from "./mcp-cli-runner.js";
 import { CLI_TOOL_SPECS } from "./mcp-cli-tools.js";
@@ -62,7 +64,7 @@ beforeAll(async () => {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   root = await mkdtemp(join(tmpdir(), "jev-255-cli-tools-"));
-  writeFileSync(join(root, "environments.json"), JSON.stringify({ staging: { baseUrl: origin }, prod: { baseUrl: origin, production: true } }));
+  writeFileSync(join(root, "environments.json"), JSON.stringify({ staging: { baseUrl: origin, trust: "test" }, prod: { baseUrl: "http://127.0.0.1:9", production: true } }));
 });
 
 afterAll(async () => {
@@ -179,11 +181,16 @@ describe("#255 the Journey lifecycle over MCP", () => {
 
       // Draft: the Journey is untouched; approve applies it.
       const before = readFileSync(join(dirs.journeys, "save-name.json"), "utf8");
-      const draft = await tool("annotate_journey").handler({ id: "save-name", fakeAi: true });
+      const draft = await tool("annotate_journey").handler({ id: "save-name", env: "staging", fakeAi: true }) // 0.30.0: a draft replays over MCP on a test-mode target (staging declares trust test);
       expect(draft.isError, JSON.stringify(body(draft))).toBeUndefined();
       expect(readFileSync(join(dirs.journeys, "save-name.json"), "utf8")).toBe(before);
-      const approved = await tool("annotate_journey").handler({ id: "save-name", approve: true });
-      expect(approved.isError, JSON.stringify(body(approved))).toBeUndefined();
+      // #821: an annotation approval needs a person at a terminal; MCP has no approval authority.
+      const annotateRefused = await tool("annotate_journey").handler({ id: "save-name", approve: true });
+      expect(annotateRefused.isError).toBe(true);
+      expect(body(annotateRefused)).toMatchObject({ code: "E_APPROVAL_NEEDS_HUMAN" });
+      expect(readFileSync(join(dirs.journeys, "save-name.json"), "utf8")).toBe(before);
+      // A person approves it at a terminal, typing the Journey id.
+      await approveJourneyAnnotations(dirs.journeys, "save-name", { approval: { stdinIsTTY: () => true, stdoutIsTTY: () => true, prompt: async () => "save-name", env: {} } });
       const annotated = await new FsJourneyStore(dirs.journeys).get("save-name");
       expect(flatJourneySteps(annotated!).every((s) => (s.recorded.objective ?? "") !== "")).toBe(true);
 
@@ -192,6 +199,14 @@ describe("#255 the Journey lifecycle over MCP", () => {
 
       const video = join(root, "life", "out", "demo.webm");
       const guide = join(root, "life", "out", "guide.md");
+      // 0.30.0 §5 (owner decision 5), changed by design: an approval over MCP authorises test-mode runs only,
+      // and the recorded origin is undeclared (automation mode).
+      const refused = await tool("demo_journey").handler({ id: "save-name", video, guide, pace: 0 });
+      expect(body(refused)).toMatchObject({ error: "refused", code: "E_APPROVAL_CHANNEL_FOR_MODE" });
+      // A person approves it at a terminal (`journey promote`): its approval says tty.
+      const store = new FsJourneyStore(dirs.journeys);
+      const promoted = (await store.get("save-name"))!;
+      await store.put({ ...promoted, metadata: { ...promoted.metadata, approval: { ...promoted.metadata.approval!, provenance: { channel: "tty", agentSignals: [] } } } });
       const demo = await tool("demo_journey").handler({ id: "save-name", video, guide, pace: 0 });
       expect(demo.isError, JSON.stringify(body(demo))).toBeUndefined();
       expect(body(demo).exitCode).toBe(0);
@@ -244,7 +259,9 @@ describe("#255 missions over MCP: targets → queue → drain", () => {
       });
       const add = await tool("mission_targets").handler({ action: "add", id: "profile", name: "Profile", authorizedOrigin: origin, baseUrl: `${origin}/` });
       expect(add.isError, JSON.stringify(body(add))).toBeUndefined();
-      expect((await tool("mission_targets").handler({ action: "promote", id: "profile" })).isError).toBeUndefined();
+      // 0.30.0 §5.4, changed by design: promoting a target is a person's act, never an MCP call's.
+      expect(body(await tool("mission_targets").handler({ action: "promote", id: "profile" }))).toMatchObject({ error: "refused", code: "E_TARGET_PROMOTE_OVER_MCP" });
+      await new MissionTargetRegistry(new FsMissionTargetStore(join(root, "missions", "targets"))).promote("profile");
       const listed = body(await tool("mission_targets").handler({ action: "list" }));
       expect(listed.data).toEqual([expect.objectContaining({ id: "profile", promoted: true })]);
 

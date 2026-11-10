@@ -58,6 +58,7 @@ import {
   type RunOutcome,
 } from "./conversation.js";
 import type { ActionableControlOutcome } from "./goal-loop/context/types.js";
+import type { BoundaryEvidence, BoundarySignal } from "./goal-loop/boundary.js";
 
 export type { ActionableControlCandidate, ActionableControlOutcome } from "./goal-loop/context/types.js";
 import { ChromeTracker } from "./feature/relevance.js";
@@ -101,6 +102,7 @@ import { viewPage } from "./goal-loop/page-view.js";
 import { decideStep } from "./goal-loop/decide-step.js";
 import { finishRun } from "./goal-loop/finish.js";
 import { openRun } from "./goal-loop/start.js";
+import type { DoneCheckReader } from "./goal-loop/read-back.js";
 
 export type { TranscriptEntry } from "./transcript.js";
 export type { RunOutcome } from "./conversation.js";
@@ -164,6 +166,8 @@ export function isActionOrChromeName(c: Control, chrome: ChromeTracker): boolean
  */
 
 export interface ExploreConfig {
+  /** 0.30.0 (#800): the job done check, read in a fresh session after the model proposes done; its reading decides attainment. */
+  readonly doneCheck?: DoneCheckReader;
   readonly actor: Actor;
   readonly judge: JudgmentPort;
   readonly gen: GenerationPort;
@@ -412,7 +416,7 @@ export interface ExploreConfig {
 }
 
 /** #423: the structured cause of a goal miss code can name (see `ExploreRun.missCause`). */
-export type MissCause = "not-found" | "ungrounded" | "blocked-by-policy" | "no-controls";
+export type MissCause = "not-found" | "ungrounded" | "blocked-by-policy" | "no-controls" | "no-route-found" | BoundarySignal;
 
 export interface ExploreRun {
   readonly stop: StopReason;
@@ -456,6 +460,13 @@ export interface ExploreRun {
    * Absent for a completed run and for every other stop.
    */
   readonly missCause?: MissCause;
+  /** 0.30.0 (#807): the wall or session boundary the run stopped at; the goal ends `boundary` (exit 2), `missCause` names its signal. */
+  readonly boundary?: BoundaryEvidence;
+  /**
+   * rc-030b (#807): why a run that stopped `blocked`, `no-progress` or `exhausted` did not end
+   * `no-route-found` — the no-route floor's first shortfall or the other cause that kept its ending.
+   */
+  readonly noRouteShortfall?: string;
   /**
    * #688 — the distinct, machine-readable terminal outcome when a blocked run stopped with an
    * actionable control: the candidate a manager resumes through (locator, label, visible/enabled

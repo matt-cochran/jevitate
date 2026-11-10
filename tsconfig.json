@@ -24,6 +24,7 @@
     { "path": "packages/skills" },
     { "path": "packages/ux" },
     { "path": "packages/findings" },
+    { "path": "packages/adjudicator" },
     { "path": "apps/example-site" }
   ]
 }

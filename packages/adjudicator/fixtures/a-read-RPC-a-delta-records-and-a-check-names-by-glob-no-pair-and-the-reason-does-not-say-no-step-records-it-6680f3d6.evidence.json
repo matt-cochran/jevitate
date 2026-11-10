@@ -1,0 +1,101 @@
+{
+  "schema": "jevitate.evidence",
+  "version": 1,
+  "producedAt": "2026-11-09T12:53:21.707Z",
+  "producer": {
+    "jevitate": "0.29.0-source-e71fb65e",
+    "commit": "e71fb65e"
+  },
+  "subject": {
+    "kind": "mutation-proof",
+    "journey": {
+      "id": "probe",
+      "hash": "e4e551e1e51448c11f02df9fb5c67aa6f93d806e8c03babb1832e91203be046c"
+    }
+  },
+  "run": {
+    "mode": "automation",
+    "channel": "cli",
+    "target": {
+      "origin": "http://127.0.0.1:42159",
+      "trust": "unknown"
+    },
+    "paramsDigest": "unkeyed",
+    "secretParamNames": []
+  },
+  "steps": [],
+  "writes": {
+    "sent": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "answered": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "aborted": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "openAtClose": {
+      "known": true,
+      "value": 0
+    },
+    "shapes": []
+  },
+  "mutation": {
+    "plan": {
+      "mutations": [],
+      "pairs": [],
+      "sites": [
+        {
+          "site": "step:1",
+          "check": "page visible"
+        },
+        {
+          "site": "step:2",
+          "check": "page urlIncludes"
+        },
+        {
+          "site": "end-state:0",
+          "check": "responseStatus POST",
+          "required": true
+        }
+      ]
+    },
+    "replays": [
+      {
+        "ordinal": 0,
+        "role": "base",
+        "outcome": "passed",
+        "failedSites": [],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 0
+          },
+          "shapes": []
+        }
+      }
+    ],
+    "restore": "none",
+    "isolation": {
+      "known": false,
+      "reason": "not-gathered"
+    }
+  },
+  "judgments": [],
+  "notes": []
+}

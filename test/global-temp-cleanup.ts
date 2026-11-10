@@ -30,6 +30,10 @@ function browserCacheOf(home: string): string {
  * `~/.jevitate` for a project, in the workers and in every CLI they spawn. Pinned by
  * `packages/cli/src/test-home-isolated.test.ts`.
  *
+ * The run dir is also the ceiling of every upward search for a project or a repo (see
+ * `testRunCeiling` in `packages/cli/src/project-dir.ts`): a stray `/tmp/.jevitate` or `/tmp/.git` on the
+ * machine must not turn a "no project here" fixture into one. Pinned by `project-dir-git-root.test.ts`.
+ *
  * Vitest runs this once per workspace project, in one process: the second call keeps the first's home.
  */
 export default async function setup(): Promise<() => Promise<void>> {
@@ -37,6 +41,10 @@ export default async function setup(): Promise<() => Promise<void>> {
   const runDir = mkdtempSync(join(base, "jvt-run-"));
   process.env.TMPDIR = runDir;
   process.env.JEVITATE_TEST_RUN_TMPDIR = runDir;
+  // Nothing above the run dir is a fixture's repo or project. `findProjectDir`/`findGitRoot` stop at
+  // JEVITATE_TEST_RUN_TMPDIR; this tells every `git` a test spawns the same, so a sandbox's `/tmp/.git`
+  // (or a checkout, when TMPDIR is inside one) is never the repo of a fixture that has none.
+  process.env.GIT_CEILING_DIRECTORIES = runDir;
   if (process.env.JEVITATE_TEST_REAL_HOME === undefined) {
     const realHome = homedir();
     process.env.JEVITATE_TEST_REAL_HOME = realHome;

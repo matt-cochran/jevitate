@@ -1,10 +1,18 @@
 import { argErrorBody, McpArgError, optRecordVideo, optScreenshots, optViewport, type McpArgs } from "./mcp-args.js";
 import { confineMcpPath, McpPathError } from "./mcp-paths.js";
-import { resolve as resolvePath } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 import { homeDataRoot } from "./project-dir.js";
 import { CATALOG_EXPORT_FORMATS } from "./catalog-bundle-api.js";
 import type { McpCliRunner } from "./mcp-cli-runner.js";
-import { RunGuardRefusedError, runGuardRefusalBody } from "./mcp-run-guard.js";
+import { policyLoosenings, policyLoosenRefusalBody, RunGuardRefusedError, runGuardRefusalBody, targetPromoteRefusalBody } from "./mcp-run-guard.js";
+import { RunModeRefusedError, runModeRefusalBody } from "./journey-run-mode-gate.js";
+import { heldOutcomeOf } from "./journey-hold.js";
+import { ProofHoldRefusedError, proofHoldRefusalBody } from "./journey-run-hooks.js";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { SitePolicySchema, type SitePolicy } from "@jevitate/domain";
+import { withSitePolicyRepository } from "./cli-shared.js";
+import { sitePolicyKey } from "./site-gate-cli.js";
 import { secretParamRefusalBody, secretParamsCarried } from "./secret-params.js";
 
 /**
@@ -300,11 +308,14 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "readiness: true adds the #434 Readiness section (links, intent, lint, mutation proof; with real: true and a judgment key, advisory Jev questions with probabilities); the #435 catalog analysis of its pairs is always included. " +
       "Pass that hash as promote_journey reviewedHash to bind an approval to exactly what was reviewed. " +
       "#523: strict: true exits 1 (defects) when the sheet has any ⚠ attention item (and runs the code-only readiness link checks — missing job / persona — even without readiness); ○ items and Jev never fail it. " +
+      "M5: env / baseUrl judge the mutation proof's freshness for that target, as verify_journey ran it (default: the Journey's recorded site, where a proof made on another target reads stale, cause target). " +
       "#467: stale: true (and no id) instead lists every promoted Journey whose approval is stale — each with its approved and current hash and stepIdOnly: true when the only change is minted step ids — for a person to re-approve; it never approves.",
     command: {
       path: "journey review",
-      params: { id: { kind: "string", positional: true }, stale: b("--stale"), readiness: b("--readiness"), strict: b("--strict"), ...JEV_ADVICE },
-      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--markdown": OMIT.reviewRendering, "--full": OMIT.reviewRendering, "--out": OMIT.reviewRendering, ...JSON_FLAG },
+      params: { id: { kind: "string", positional: true }, stale: b("--stale"), readiness: b("--readiness"), strict: b("--strict"), ...JEV_ADVICE, ...ENVIRONMENT },
+      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--markdown": OMIT.reviewRendering, "--full": OMIT.reviewRendering, "--out": OMIT.reviewRendering,
+        "--pre-approval": "CLI-only native human-owner queue preflight; a typed pending-action projection, not approval or a new MCP review capability",
+        ...JSON_FLAG },
     },
   },
   {
@@ -359,7 +370,10 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       path: "journey annotate",
       paramJourneys: (a) => [a["id"]],
       params: { ...EXTENSION, id: pos(), approve: b("--approve"), params: { kind: "params", flag: "--param" }, storageState: session("--storage-state"), fixtures: path("--fixtures"), fixtureIdentity: FIXTURE_IDENTITY, screenshots: { kind: "screenshots", flag: "--screenshots" }, actionDeltas: b("--action-deltas"), ...ENVIRONMENT, ...EMULATION, ...AI },
-      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir,
+        "--status": "CLI-only native annotation transaction status/resume protocol; no new MCP transaction capability",
+        "--reviewed-hash": "binds standalone annotation apply to the exact native terminal-reviewed transaction; MCP cannot supply human TTY approval",
+        ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
   },
   {
@@ -385,7 +399,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         ...EMULATION,
         ...DEMO_SHOW,
       },
-      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+      omitted: { "--secret-field": OMIT.envSecret, ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
   },
   {
@@ -406,13 +420,42 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         storageState: session("--storage-state"),
         fixtures: path("--fixtures"),
         fixtureIdentity: FIXTURE_IDENTITY,
+        // M5: the app version the proof's receipt binds (as run_check's).
+        appVersion: s("--app-version"),
         ...ENVIRONMENT,
         ...EMULATION,
       },
-      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--allow": OMIT.mcpOrigins, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+      omitted: { "--secret-field": OMIT.envSecret, ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--allow": OMIT.mcpOrigins, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
     // The command takes `status` first and runs no proof, whatever else is set.
     answersWhileBusy: (args) => args["status"] === true,
+  },
+  {
+    // 0.30.0 #801 (owner decision): the authoring-time shortest-path search, the tool twin of `journey shorten`.
+    name: "shorten_journey",
+    description:
+      "`jevitate journey shorten <id> --job <jobId> [--budget n] [--out-id <id>]` (#801): authoring time only, no model. Searches for a shorter path to the same job by removing steps; every candidate is a full replay of the DRAFT Journey (real writes), on env/baseUrl like verify_journey (the environment's targets.json secretFields supply a secret parameter; never params), with its fixtures set up before and restored after it, decided only by the job's done check (.jevitate/jobs.json jobs[].done) read in a fresh browser context. A candidate that drops a confirm/agree/accept click, or navigates past one it dropped, is refused and costs no replay. budget (default 30) counts every replay, the recorded path's included. " +
+      "A promoted Journey is refused ({code: E_JOURNEY_SHORTEN_PROMOTED}); the run-mode gate and the run guard decide as for run_journey before any replay (an unapproved draft runs on a test-mode target only). A secret parameter's value in params is refused by name ({code: E_SECRET_PARAM_OVER_MCP}). " +
+      "Returns the CLI's report: wording (\"shortest found within budget\", never optimal), originalSteps, shortestSteps, replaysUsed, budget, stopped (searched | budget | recorded-path-fails), baseline, removed (step, kind), refused, and draftId: a NEW unpromoted draft a person reviews and promotes. The source Journey is not changed.",
+    command: {
+      path: "journey shorten",
+      paramJourneys: (a) => [a["id"]],
+      params: {
+        id: pos(),
+        job: s("--job", { required: true }),
+        budget: n("--budget"),
+        outId: s("--out-id"),
+        params: { kind: "params", flag: "--param" },
+        storageState: session("--storage-state"),
+        fixtures: path("--fixtures"),
+        fixtureIdentity: FIXTURE_IDENTITY,
+        stepResponseTimeoutMs: n("--step-response-timeout"),
+        ...EXTENSION,
+        ...ENVIRONMENT,
+        ...EMULATION,
+      },
+      omitted: { "--secret-field": OMIT.envSecret, "--allow": OMIT.mcpOrigins, ...LOCATION_FLAGS, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+    },
   },
   {
     name: "journey_readiness",
@@ -433,7 +476,8 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         ...EXTENSION,
         ...ENVIRONMENT,
       },
-      omitted: { ...LOCATION_FLAGS, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+      // #827: secret fields come from targets.json for the run's --env/--base-url, never from the request.
+      omitted: { "--secret-field": OMIT.envSecret, ...LOCATION_FLAGS, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
   },
   {
@@ -468,7 +512,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         ...EMULATION,
         ...ENVIRONMENT,
       },
-      omitted: { ...LOCATION_FLAGS, 
+      omitted: { "--secret-field": OMIT.envSecret, ...LOCATION_FLAGS, 
         "--allow-draft": "#580: over MCP a chain runs promoted Journeys only, as run_journey does; running drafts is the operator's CLI call",
         "--dir": OMIT.storeDir,
         "--allow": OMIT.mcpOrigins,
@@ -558,6 +602,9 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         success: many("--success"),
         successWhen: s("--success-when", { enum: ["final", "held", "each"] }),
         allowVacuousChecks: b("--allow-vacuous-checks"),
+        // 0.30.0 (#800): the job whose done check (jobs.json, read in a fresh context) verifies the goal run.
+        job: s("--job"),
+        requireDoneCheck: b("--require-done-check"),
         actionDeltas: b("--action-deltas"),
         feature: s("--feature"),
         route: many("--route"),
@@ -655,7 +702,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "run_campaign",
     description:
-      "`jevitate campaign run <spec>` (#293): a bounded campaign of journey-anchored missions — replay each job's promoted Journey (discovery), run its anchored missions in order with the spec's fixtures restore between runs, and return ONE deduped report (each defect with the Journey steps it branched from). An invalid spec is refused listing every problem. #485: before any mission it runs a preflight (every start URL reachable, every session signed in, no allow-list origin slip) and refuses with the problems listed; skipPreflight: true runs without it (recorded on the report as preflight.skipped). allowDestructive/allowWrites/deny/paid/invariants and the media flags are forwarded to every mission. Needs real or fakeAi.",
+      "`jevitate campaign run <spec>` (#293): a bounded campaign of journey-anchored missions — replay each job's promoted Journey (discovery), run its anchored missions in order with the spec's fixtures restore between runs, and return ONE deduped report (each defect with the Journey steps it branched from). An invalid spec is refused listing every problem. #485: before any mission it runs a preflight (every start URL reachable, every session signed in, no allow-list origin slip) and refuses with the problems listed; skipPreflight: true runs without it (recorded on the report as preflight.skipped). allowDestructive/allowWrites/deny/paid/invariants and the media flags are forwarded to every mission. H5 (0.30.0): each discovery replay reads its job's done check, as run_journey does (discovery[].job): a job not achieved makes the campaign exit 1 (done-check-failed), an unverified one exit 2 under project.json doneCheckPolicy require (the default; a harness target excepted). doneCheck: false (`--no-done-check`) skips the readings; requireDoneCheck (`--require-done-check`) folds unverified to 2 even under advisory; not both. Needs real or fakeAi.",
     command: {
       path: "campaign run",
       params: {
@@ -676,9 +723,12 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         skipPreflight: b("--skip-preflight"),
         // #205/#746: start on a starved host (the campaign-start check and every mission) instead of E_HOST_STARVED.
         ignoreHostLoad: b("--ignore-host-load"),
+        // H5 (0.30.0): the discovery replays' done check, as run_journey's noDoneCheck / requireDoneCheck.
+        doneCheck: b("--no-done-check"),
+        requireDoneCheck: b("--require-done-check"),
         ...JEV_AI,
       },
-      omitted: {
+      omitted: { "--secret-field": OMIT.envSecret,
         "--journeys-dir": OMIT.storeDir,
         "--allow-shell-hooks": OMIT.hooks,
         "--hook-timeout-ms": OMIT.hooks,
@@ -829,7 +879,9 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
       "#453 selfHeal hybrid|full (+ changes <git range> and/or changeNote[], and a gateway — real or fakeAi; healMax* budgets): a Journey that quarantines is re-run ONCE with a change-aware self-heal; a proposed revision is pending review (exit 5), never a pass. " +
       "#437 requireApprovals (+ allowChannels: a comma list of tty, non-interactive, mcp, ci, pr-review; default tty): also an `approval` finding for each promoted Journey or approved persona/job whose approval is missing, stale or made over a channel not allowed. " +
       "#469: pr-review is a channel you may ALLOW, never one a caller sets — jevitate records it only after verifying the merged PR's approving review through the forge API in CI. " +
-      "#470 maxBrittleSteps n: opt-in locator gate — a Journey item with more than n brittle steps (missing the project's testIdAttributes convention) is a gating finding; without it locator health is advisory.",
+      "#799 requireTrust: also fails (exit 1, naming the environment) when an environment's trust in .jevitate/environments.json differs from the last commit — a trust change is PR-reviewed and committed first; it can only make the check stricter. " +
+      "#470 maxBrittleSteps n: opt-in locator gate — a Journey item with more than n brittle steps (missing the project's testIdAttributes convention) is a gating finding; without it locator health is advisory. " +
+      "H5 (0.30.0): each Journey item reads its job's done check, as run_journey does, and its item carries `job`: a job not achieved is a gating done-check-failed finding (exit 1); a pass with an unverified job makes the check exit 2 under project.json doneCheckPolicy require (the default; a harness target excepted), 0 under advisory. doneCheck: false (`--no-done-check`) skips the readings (every job reads unverified, no-check); requireDoneCheck (`--require-done-check`) folds unverified to exit 2 even under advisory; not both.",
     command: {
       path: "check",
       params: { tags: TAGS, ...EXTENSION,
@@ -848,7 +900,11 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         evidenceDecisionOut: { kind: "project-path", flag: "--evidence-decision-out" },
         requireApprovals: b("--require-approvals"),
         allowChannels: s("--allow-channels"),
+        requireTrust: b("--require-trust"),
         maxBrittleSteps: n("--max-brittle-steps"),
+        // H5 (0.30.0): the Journey items' done check, as run_journey's noDoneCheck / requireDoneCheck.
+        doneCheck: b("--no-done-check"),
+        requireDoneCheck: b("--require-done-check"),
         selfHeal: s("--self-heal", { enum: ["fail-closed", "hybrid", "full"] }),
         changes: s("--changes"),
         changeNote: many("--change-note"),
@@ -924,7 +980,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         ...ENVIRONMENT,
         ...EMULATION,
       },
-      omitted: { "--dir": OMIT.storeDir, ...BROWSER_FLAGS, ...JSON_FLAG },
+      omitted: { "--secret-field": OMIT.envSecret, "--dir": OMIT.storeDir, ...BROWSER_FLAGS, ...JSON_FLAG },
     },
   },
   {
@@ -954,7 +1010,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
   {
     name: "mission_targets",
     description:
-      "`jevitate mission target add | list | update | promote`: the targets queue_exploration may enqueue against (only PROMOTED ones). add/update may set the target's session (storageState / saveStorageState paths); which environment variables a target's secret fields read is the operator's (`--secret-field` on the CLI, or targets.json), never an MCP argument.",
+      "`jevitate mission target add | list | update | promote`: the targets queue_exploration may enqueue against (only PROMOTED ones). 0.30.0: promote over MCP is refused ({error: refused, code: E_TARGET_PROMOTE_OVER_MCP}): promoting a target is a person's act, `jevitate mission target promote <id>` at a terminal. add/update may set the target's session (storageState / saveStorageState paths); which environment variables a target's secret fields read is the operator's (`--secret-field` on the CLI, or targets.json), never an MCP argument.",
     actions: {
       add: {
         path: "mission target add",
@@ -1039,18 +1095,18 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
           ...EMULATION,
           ...DEMO_SHOW,
         },
-        omitted: { "--dir": OMIT.storeDir, "--param": OMIT.branchParams, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+        omitted: { "--secret-field": OMIT.envSecret, "--dir": OMIT.storeDir, "--param": OMIT.branchParams, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
       },
       run: {
         path: "regression run",
         params: { tags: TAGS, ...EXTENSION, id: pos(), attempts: n("--attempts"), storageState: session("--storage-state"), ...ENVIRONMENT, ...EMULATION, ...DEMO_SHOW },
-        omitted: { "--dir": OMIT.storeDir, "--param": OMIT.branchParams, ...BROWSER_FLAGS, ...JSON_FLAG },
+        omitted: { "--secret-field": OMIT.envSecret, "--dir": OMIT.storeDir, "--param": OMIT.branchParams, ...BROWSER_FLAGS, ...JSON_FLAG },
       },
     },
   },
   {
     name: "site_policy",
-    description: "`jevitate site policy get | set | rules` and `site simulate`: per-origin pacing, throttles, budgets and quiet hours (run_journey honours them); `rules` lists the control safety rules (ids, what they match, whether --allow-control can waive them).",
+    description: "`jevitate site policy get | set | rules` and `site simulate`: per-origin pacing, throttles, budgets and quiet hours (run_journey honours them); `rules` lists the control safety rules (ids, what they match, whether --allow-control can waive them). 0.30.0: set over MCP only tightens: a policy looser than the effective one on any axis (pacing, interval, budget, quiet hours) is refused ({error: refused, code: E_POLICY_LOOSEN_OVER_MCP, axes}); a person loosens one at a terminal.",
     actions: {
       get: { path: "site policy get", params: { site: pos(), account: s("--account") }, omitted: { "--db": OMIT.storeDir, ...JSON_FLAG } },
       rules: { path: "site policy rules", params: {}, omitted: JSON_FLAG },
@@ -1073,7 +1129,7 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         // The Journey is resolved through the source's run gate: runSourceJourney refuses there.
         paramJourneys: () => [],
         params: { tags: TAGS, ...EXTENSION, name: pos(), journeyId: pos(), params: { kind: "params", flag: "--param" }, storageState: session("--storage-state"), ...EMULATION },
-        omitted: { ...BROWSER_FLAGS, ...JSON_FLAG },
+        omitted: { "--secret-field": OMIT.envSecret, ...BROWSER_FLAGS, ...JSON_FLAG },
       },
     },
   },
@@ -1289,6 +1345,49 @@ export function buildCliArgv(spec: CliToolSpec, args: McpArgs, roots: readonly s
   return [...command.path.split(" "), ...flags, ...(command.omitted["--json"] === undefined ? [] : ["--json"]), "--", ...positionals];
 }
 
+/**
+ * 0.30.0 §5.4 (#799), the ratchet: what an MCP call may not do that the CLI command it mirrors may.
+ * - `mission_targets promote` refuses (`E_TARGET_PROMOTE_OVER_MCP`): promoting a target is a CLI act.
+ * - `site_policy set` sets only a policy at least as strict as the effective one on every axis
+ *   (`E_POLICY_LOOSEN_OVER_MCP`). The file is read once, here: the command is handed a private copy of
+ *   exactly what was judged, so the file cannot change between the check and the write.
+ * Returns a refusal body, or the argv to run (possibly with the copy's path), and a cleanup.
+ */
+async function mcpRatchet(
+  spec: CliToolSpec,
+  args: McpArgs,
+  argv: string[],
+  deps: { readonly sitePolicyDbPath?: string | undefined },
+): Promise<{ readonly refusal: Record<string, unknown> } | { readonly argv: string[]; readonly cleanup: () => void }> {
+  const none = { argv, cleanup: () => undefined };
+  if (spec.name === "mission_targets" && args.action === "promote") return { refusal: targetPromoteRefusalBody(typeof args.id === "string" ? args.id : "<id>") };
+  if (spec.name !== "site_policy" || args.action !== "set") return none;
+  const fileFlag = argv.find((a) => a.startsWith("--file="));
+  const site = typeof args.site === "string" ? args.site : undefined;
+  if (fileFlag === undefined || site === undefined) return none;
+  let proposed: SitePolicy;
+  let raw: string;
+  try {
+    raw = readFileSync(fileFlag.slice("--file=".length), "utf8");
+    proposed = SitePolicySchema.parse(JSON.parse(raw));
+  } catch {
+    // Unreadable or invalid: the command refuses it on its own (E_INVALID_POLICY), and nothing is set.
+    return none;
+  }
+  if (deps.sitePolicyDbPath === undefined) {
+    return { refusal: { error: "refused", outcome: "refused", code: "E_POLICY_LOOSEN_OVER_MCP", message: "site_policy set over MCP compares the policy with the effective one, and this server was not given the policy database, so nothing was set", retryable: false, exitCode: 2 } };
+  }
+  const account = typeof args.account === "string" ? args.account : "primary";
+  const key = sitePolicyKey(site);
+  const effective = await withSitePolicyRepository(deps.sitePolicyDbPath, (repository) => repository.get(key, account));
+  const axes = policyLoosenings(effective, proposed);
+  if (axes.length > 0) return { refusal: policyLoosenRefusalBody(key, axes) };
+  const dir = mkdtempSync(join(tmpdir(), "jev-mcp-policy-"));
+  const copy = join(dir, "policy.json");
+  writeFileSync(copy, raw, { encoding: "utf8", mode: 0o600 });
+  return { argv: argv.map((a) => (a === fileFlag ? `--file=${copy}` : a)), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
 export interface CliToolOutcome {
   readonly isError: boolean;
   readonly body: Record<string, unknown>;
@@ -1312,7 +1411,7 @@ function lastEnvelope(stdout: string): { ok: boolean; data?: unknown; error?: { 
  * Runs one CLI-backed tool call: argv from the typed arguments, the CLI in process, its envelope back.
  * `redact` strips credential values from the output text (belt-and-braces over the CLI's own redaction).
  */
-export async function runCliTool(spec: CliToolSpec, args: McpArgs, deps: { runCli?: McpCliRunner; roots: readonly string[]; redact: (text: string) => string; journeysDir: string }): Promise<CliToolOutcome> {
+export async function runCliTool(spec: CliToolSpec, args: McpArgs, deps: { runCli?: McpCliRunner; roots: readonly string[]; redact: (text: string) => string; journeysDir: string; sitePolicyDbPath?: string }): Promise<CliToolOutcome> {
   let argv: string[];
   try {
     argv = buildCliArgv(spec, args, deps.roots);
@@ -1326,15 +1425,36 @@ export async function runCliTool(spec: CliToolSpec, args: McpArgs, deps: { runCl
     const carried = await secretParamsCarried(deps.journeysDir, paramJourneys(args), args["params"]);
     if (carried.length > 0) return { isError: true, body: secretParamRefusalBody(carried) };
   }
+  const ratchet = await mcpRatchet(spec, args, argv, deps);
+  if ("refusal" in ratchet) return { isError: true, body: ratchet.refusal };
   if (deps.runCli === undefined) {
+    ratchet.cleanup();
     return { isError: true, body: { error: "not_configured", message: `${spec.name} runs \`jevitate ${commandFor(spec, args).path}\` in process, which this server was not given` } };
   }
-  const { stdout: raw, exitCode, refusal } = await (spec.answersWhileBusy?.(args) === true ? deps.runCli(argv, { unqueued: true }) : deps.runCli(argv));
+  const runCli = deps.runCli;
+  let ran: Awaited<ReturnType<McpCliRunner>>;
+  try {
+    ran = await (spec.answersWhileBusy?.(args) === true ? runCli(ratchet.argv, { unqueued: true }) : runCli(ratchet.argv));
+  } finally {
+    ratchet.cleanup();
+  }
+  const { stdout: raw, exitCode, refusal } = ran;
   const stdout = deps.redact(raw);
   let envelope = lastEnvelope(stdout);
   // #789: a refused replay is the answer, whatever the command made of it. What the command did report before it stays beside it.
-  if (refusal instanceof RunGuardRefusedError) {
-    return { isError: true, body: { ...runGuardRefusalBody(refusal), ...(envelope?.data === undefined || envelope.data === null ? {} : { partial: envelope.data }) } };
+  // 0.30.0 §5: so is a run the run mode refused.
+  const refusedBody = refusal instanceof RunGuardRefusedError ? runGuardRefusalBody(refusal) : refusal instanceof RunModeRefusedError ? runModeRefusalBody(refusal) : undefined;
+  // 0.30.0 §5.4: a proof that reached a step only a person can do ends inconclusive; nothing was held.
+  if (refusal instanceof ProofHoldRefusedError) {
+    return { isError: true, body: { ...proofHoldRefusalBody(refusal), ...(envelope?.data === undefined || envelope.data === null ? {} : { partial: envelope.data }) } };
+  }
+  // 0.30.0 §5.3: a run held at a step only a person can do; it proves nothing yet (`jevitate inbox resume <holdId>`).
+  const held = heldOutcomeOf(refusal);
+  if (held !== undefined) {
+    return { isError: true, body: { ...held, retryable: false, exitCode: 2, ...(envelope?.data === undefined || envelope.data === null ? {} : { partial: envelope.data }) } };
+  }
+  if (refusedBody !== undefined) {
+    return { isError: true, body: { ...refusedBody, ...(envelope?.data === undefined || envelope.data === null ? {} : { partial: envelope.data }) } };
   }
   if (envelope === undefined && exitCode === 0) {
     // A command without --json (`recording promote`) prints its result as plain JSON.

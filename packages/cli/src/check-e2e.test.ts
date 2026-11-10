@@ -8,6 +8,7 @@ import { ProfileManager } from "@jevitate/daemon";
 import { FsJourneyStore } from "@jevitate/journey";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
+import { advisoryCatalogDir } from "./done-check-policy.testkit.js";
 import type { CheckResult } from "./check-api.js";
 import { useSkippingTime } from "../../explore/src/testkit.js";
 
@@ -112,6 +113,8 @@ describe("jevitate check — served suite (#137)", () => {
       const program = buildProgram({
         profiles: new ProfileManager("/unused"),
         journeysDir,
+        // 0.30.0 (H5): this test is about the invariant gate; its Journey links no done check (advisory keeps its exit).
+        catalogDir: advisoryCatalogDir(dir),
         explore: { browserPortFactory: () => new PlaywrightBrowserPort(), targetsConfigPath: join(dir, "no-targets.json") },
       });
       program.configureOutput({ writeOut: (s) => lines.push(s) });
@@ -127,6 +130,8 @@ describe("jevitate check — served suite (#137)", () => {
       const r = env.data;
       expect(exitCode).toBe(1);
       expect(r).toMatchObject({ verdict: "fail", exitCode: 1, targetBuild: "sha-abc" });
+      // H5: the Journey item carries its job verdict (no done check: unverified, no-check).
+      expect(r.items[0]?.job).toEqual({ attainment: "unverified", basis: "no-check" });
       expect(r.items.map((i) => [i.kind, i.name, i.verdict])).toEqual([
         ["journey", "imports-page", "passed"],
         ["mission", "invariants", "failed"],

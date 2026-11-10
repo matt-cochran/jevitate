@@ -10,7 +10,7 @@
     "build": "tsc --build",
     "test": "vitest run",
     "test:live": "vitest run packages/cli/src/ai-live.integration.test.ts packages/cli/src/ux-quality.integration.test.ts",
-    "lint": "eslint . && node scripts/check-clock.mjs && knip",
+    "lint": "eslint . && node scripts/check-clock.mjs && knip && node scripts/check-docs-exit-codes.mjs",
     "knip": "knip",
     "docs:cli": "pnpm --filter @jevitate/cli run build && node packages/cli/scripts/generate-cli-reference.mjs",
     "check:no-fallback": "node scripts/check-no-permissive-fallback.mjs",

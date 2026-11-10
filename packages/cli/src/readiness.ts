@@ -2,7 +2,9 @@ import { GTWR_RULES, checkJobStory, checkPersona, type Finding, type JourneyRevi
 import type { Answer, JudgmentState, Question } from "@jevitate/ai-core";
 import { advisoryReadRequests } from "./target-config.js";
 import { catalogJourney, findJob, findPersona, journeyLinks, type Catalog, type CatalogJob, type CatalogJourney, type CatalogPersona } from "./catalog.js";
-import { buildJourneyReview } from "./journey-review.js";
+import { buildJourneyReview, reviewJobVerdict } from "./journey-review.js";
+import { jobUnverifiedFix } from "./journey-review/render.js";
+import { journeyRunLogsRoot, latestJourneyRun } from "./journey-run-record.js";
 import { readVerifyRecord, readProofWaiver } from "./journey-review-store.js";
 import { dirname } from "node:path";
 import { findProjectDir } from "./project-dir.js";
@@ -112,6 +114,14 @@ async function journeyChecks(j: CatalogJourney, catalog: Catalog): Promise<Findi
   const out: Finding[] = [];
   const links = journeyLinks(catalog, j);
   const id = j.id;
+  const catalogFile = catalog.personasFile ?? catalog.jobsFile;
+  const project = catalogFile === null ? findProjectDir() : dirname(catalogFile);
+  const config = loadProjectConfig(project);
+  // 0. the job verdict leads (owner decision "Proof role": the done check is the strict gate, the proof advises)
+  if (links.job !== undefined && links.job.status !== "unknown") {
+    const latest = catalog.journeysDir === undefined ? null : latestJourneyRun(journeyRunLogsRoot(catalog.journeysDir), id, j.journey) ?? null;
+    out.push(jobVerdictCheck(findJob(catalog, links.job.id), links.job.id, reviewJobVerdict(latest, config.doneCheckPolicy), id));
+  }
   // 1. it links an existing job and persona
   if (links.job === undefined || links.persona === undefined) {
     out.push(
@@ -135,10 +145,8 @@ async function journeyChecks(j: CatalogJourney, catalog: Catalog): Promise<Findi
     );
   }
   const lastVerify = catalog.journeysDir === undefined ? null : await readVerifyRecord(catalog.journeysDir, id);
-  const catalogFile = catalog.personasFile ?? catalog.jobsFile;
-  const project = catalogFile === null ? findProjectDir() : dirname(catalogFile);
   const readRequests = advisoryReadRequests(j.journey);
-  const review = buildJourneyReview(j.journey, { lastVerify, ...(readRequests === undefined ? {} : { safety: { readRequests } }), proofPolicy: loadProjectConfig(project).mutationProofPolicy ?? "advisory", proofWaiver: catalog.journeysDir === undefined ? null : await readProofWaiver(catalog.journeysDir, id) });
+  const review = buildJourneyReview(j.journey, { lastVerify, ...(readRequests === undefined ? {} : { safety: { readRequests } }), proofPolicy: config.mutationProofPolicy ?? "advisory", proofWaiver: catalog.journeysDir === undefined ? null : await readProofWaiver(catalog.journeysDir, id) });
   // 3. the intent is complete: goal, success criteria, each step's objective and expected result
   const noExpected = review.steps.filter((s) => s.expectedResult === undefined).map((s) => s.number);
   const gaps = [...review.summary.missingIntent, ...(noExpected.length === 0 ? [] : [`${noExpected.length} of ${review.steps.length} step(s) have no expected result (step ${noExpected.join(", ")})`])];
@@ -156,20 +164,56 @@ async function journeyChecks(j: CatalogJourney, catalog: Catalog): Promise<Findi
           characteristic: "verifiable",
         }),
   );
-  // 4b. the mutation proof is known and current
+  // 4b. the mutation proof: how strong its checks are (owner decision "Proof role": the job gates, the proof advises)
   out.push(verifyCheck(review, id));
   return out;
+}
+
+/**
+ * Owner decision "Proof role" (2026-11-09): the strict gate is the job's done check (`job.attainment`),
+ * so readiness leads with it, as the latest run of this Journey read it. Advisory here (it never asks for
+ * an acknowledgment); `journey readiness` gates on it per doneCheckPolicy.
+ */
+function jobVerdictCheck(job: CatalogJob | undefined, jobId: string, verdict: NonNullable<JourneyReview["job"]>, id: string): Finding {
+  if (job?.job.done === undefined) {
+    return check("readiness.job", "warn", `job '${jobId}' declares no done check, so a run cannot say the job happened (job attainment: unverified)`, {
+      fix: `add a "done" check to job '${jobId}' in .jevitate/jobs.json`,
+      characteristic: "verifiable",
+    });
+  }
+  if (verdict.attainment === "achieved") return check("readiness.job", "info", `job '${jobId}' was achieved on the latest run: its done check read false before it and true after, in a fresh session`);
+  if (verdict.attainment === "not-achieved") {
+    return check("readiness.job", "fail", `job '${jobId}' was not achieved on the latest run: its done check read false before it and still false after, in a fresh session`, { fix: `fix what the run left undone, then \`jevitate journey run ${id}\``, characteristic: "verifiable" });
+  }
+  return check("readiness.job", "warn", `job '${jobId}' attainment is unverified (${verdict.basis}; doneCheckPolicy ${verdict.doneCheckPolicy})`, { fix: jobUnverifiedFix(verdict.basis, id), characteristic: "verifiable" });
 }
 
 function verifyCheck(review: JourneyReview, id: string): Finding {
   const v = review.proof.verify;
   const policy = review.proof.policy;
-  if (policy?.waiver.status === "valid" && policy.mode !== "require-proven") return check("readiness.verify", "info", policy.reason);
+  if (policy?.waiver.status === "valid" && policy.mode !== "require-sensitive") return check("readiness.verify", "info", policy.reason);
   const fix = `jevitate journey verify ${id} --mutate`;
-  if (v.status === "not-verified") return check("readiness.verify", "warn", "its mutation proof is unknown: `journey verify --mutate` never ran", { fix, characteristic: "verifiable" });
-  if (v.stale) return check("readiness.verify", "warn", `its mutation proof (${v.verdict}, ${v.at}) is for an older version: the Journey changed since`, { fix, characteristic: "verifiable" });
-  if (v.verdict !== "proven") return check("readiness.verify", "warn", `its mutation proof is ${v.verdict} (${v.at})${v.reason === undefined ? "" : `: ${v.reason}`}`, { fix, characteristic: "verifiable" });
-  return check("readiness.verify", "info", `its mutation proof is current and proven (${v.at})`);
+  // Owner decision "Proof role": under `advisory` (the default) a weak or missing proof is a checks-strength
+  // note (info, so `review --strict --readiness` does not fail on it); an opt-in policy keeps it a warning.
+  const advisory = (policy?.mode ?? "advisory") === "advisory";
+  const note = (message: string, extra: { fix?: string; characteristic?: string }): Finding =>
+    advisory ? finding(READINESS, "readiness.verify", "info", `${message} (mutationProofPolicy advisory: it does not gate)`, extra) : check("readiness.verify", "warn", message, extra);
+  if (v.status === "not-verified") return note("checks strength unknown: `journey verify --mutate` never ran", { fix, characteristic: "verifiable" });
+  if (v.stale) {
+    const why = v.staleCause === "engine-unknown" ? "does not match this engine, and its receipt does not say which engine recorded it (the Journey is unchanged)" : v.staleCause === "engine" ? "was recorded by another jevitate engine (the Journey is unchanged, but this engine computes its proof identity differently)" : v.staleCause === "read-policy" ? "ran under other safety.readRequests" : `(${v.verdict}, ${v.at}) is for an older version: the Journey changed since`;
+    return note(`checks strength: its mutation proof ${why}`, { fix, characteristic: "verifiable" });
+  }
+  if (v.verdict !== "sensitive") return note(`checks strength: its mutation proof is ${v.verdict} (${v.at})${v.reason === undefined ? "" : `: ${v.reason}`}`, { fix, characteristic: "verifiable" });
+  // §5.1: countsForGate false (or a receipt from before 0.30.0, which has none) is reported, never counted by require-sensitive.
+  if (v.countsForGate !== true) {
+    const gate = "countsForGate false: a proof's strength depends on a target you can reset";
+    return policy?.mode === "require-sensitive"
+      ? check("readiness.verify", "warn", `checks strength: its mutation proof is sensitive (${v.at}), but ${gate}, so it does not satisfy require-sensitive`, { fix: `${fix} on a target with trust test or harness`, characteristic: "verifiable" })
+      : check("readiness.verify", "info", `checks strength: its mutation proof is current and sensitive (${v.at}); ${gate}`);
+  }
+  // #816: a receipt that does not say which engine recorded it does not satisfy require-sensitive.
+  if (policy?.mode === "require-sensitive" && !policy.passed) return check("readiness.verify", "warn", `checks strength: ${policy.reason}`, { fix, characteristic: "verifiable" });
+  return check("readiness.verify", "info", `checks strength: its mutation proof is current and sensitive (${v.at}); countsForGate true`);
 }
 
 function subjectJourney(subject: ApprovalSubject, catalog: Catalog, ctx: PreApprovalContext): CatalogJourney | undefined {

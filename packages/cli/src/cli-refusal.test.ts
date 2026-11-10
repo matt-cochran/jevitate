@@ -263,6 +263,18 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   // #435: an invalid catalog file, and a --max-pairs that is not a positive integer.
   "catalog analyze": { cases: [["--dir", badCatalog], ["--max-pairs", "0"]] },
   "journey verify": { cases: [["nope", "--mutate"], ["nope"], ["nope", "--mutate", "--storage-state", missing]] },
+  // #801: a budget outside 1-500 is refused at parse time; a missing session or an unknown environment before any replay.
+  "journey shorten": {
+    base: ["nope", "--job", "j"],
+    cases: [
+      ["nope", "--job", "j", "--budget", "0"],
+      ["nope", "--job", "j", "--budget", "501"],
+      ["nope", "--job", "j", "--storage-state", missing],
+      ["nope", "--job", "j", "--env", "no-such-env"],
+    ],
+  },
+  // 0.30.0 decision 8 (queue_journey): a secret-named param is refused by name before anything is queued.
+  "journey queue": { cases: [["nope", "--param", "password=x", "--dir", join(dir, "queue")], ["nope", "--env", "no-such-env", "--dir", join(dir, "queue")]] },
   // #293: an unknown Journey (or an id that tries to leave the store) is refused.
   "journey anchors": { cases: [["nope"], ["../x"], ["nope", "--suggest"], ["../x", "--suggest"]] },
   // #487: an unknown Journey (or traversal id), a bad or unknown step, a bad name; removing an unknown anchor.
@@ -395,6 +407,8 @@ const REFUSALS = (): Readonly<Record<string, Refusals | { readonly exempt: strin
   "inbox queue-action": { cases: [[], ["--run", "r", "--journey", "j", "--step", "s", "--reason", "x", "--agent", "a", "--kind", "bogus"]] },
   "inbox approve": { cases: [["x"]] },
   "inbox cancel": { cases: [["x"]] },
+  // #793: a resume of an unknown or unsafe hold id refuses before any key or browser (E_HOLD_NOT_FOUND).
+  "inbox resume": { cases: [["nope"], ["../x"]] },
   mcp: { cases: [["--print-config", "bogus"]] },
   ui: { exempt: "no file or id input (its --port is covered by the numeric sweep)" },
   ux: {

@@ -1,0 +1,333 @@
+{
+  "schema": "jevitate.evidence",
+  "version": 1,
+  "producedAt": "2026-11-09T12:38:30.053Z",
+  "producer": {
+    "jevitate": "0.29.0-source-e71fb65e",
+    "commit": "e71fb65e"
+  },
+  "subject": {
+    "kind": "mutation-proof",
+    "journey": {
+      "id": "matrix",
+      "hash": "73bded4eb9cce1f00cd59263a47de532719c158f0e1cfcda53c3107debc10ebf"
+    }
+  },
+  "run": {
+    "mode": "automation",
+    "channel": "cli",
+    "target": {
+      "origin": "http://127.0.0.1:43881",
+      "trust": "unknown"
+    },
+    "paramsDigest": "unkeyed",
+    "secretParamNames": []
+  },
+  "steps": [],
+  "writes": {
+    "sent": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "answered": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "aborted": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "openAtClose": {
+      "known": true,
+      "value": 0
+    },
+    "shapes": []
+  },
+  "mutation": {
+    "plan": {
+      "mutations": [
+        {
+          "id": "skip:4",
+          "kind": "skip",
+          "step": 4
+        },
+        {
+          "id": "block-write:4",
+          "kind": "block-write",
+          "step": 4
+        }
+      ],
+      "pairs": [
+        {
+          "site": "step:4",
+          "mutation": "skip:4",
+          "declared": true
+        },
+        {
+          "site": "end-state:0",
+          "mutation": "skip:4",
+          "declared": true
+        },
+        {
+          "site": "step:4",
+          "mutation": "block-write:4",
+          "declared": true
+        },
+        {
+          "site": "end-state:0",
+          "mutation": "block-write:4",
+          "declared": true
+        }
+      ],
+      "sites": [
+        {
+          "site": "step:1",
+          "check": "page visible"
+        },
+        {
+          "site": "step:2",
+          "check": "page visible"
+        },
+        {
+          "site": "step:3",
+          "check": "page visible"
+        },
+        {
+          "site": "step:4",
+          "check": "page textIncludes"
+        },
+        {
+          "site": "end-state:0",
+          "check": "reloadThen textIncludes",
+          "required": true
+        }
+      ]
+    },
+    "replays": [
+      {
+        "ordinal": 0,
+        "role": "base",
+        "outcome": "passed",
+        "failedSites": [],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 0
+          },
+          "shapes": []
+        }
+      },
+      {
+        "ordinal": 1,
+        "role": "independence",
+        "outcome": "passed",
+        "failedSites": [],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 0
+          },
+          "shapes": []
+        }
+      },
+      {
+        "ordinal": 2,
+        "role": "mutated",
+        "mutation": "skip:4",
+        "outcome": "failed",
+        "failedSites": [
+          {
+            "where": "step",
+            "step": 4,
+            "postcondition": true
+          }
+        ],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 0
+          },
+          "shapes": []
+        }
+      },
+      {
+        "ordinal": 3,
+        "role": "relaxed",
+        "mutation": "skip:4",
+        "outcome": "passed",
+        "failedSites": [],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 0
+          },
+          "shapes": []
+        }
+      },
+      {
+        "ordinal": 4,
+        "role": "control",
+        "mutation": "skip:4",
+        "outcome": "passed",
+        "failedSites": [],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 0
+          },
+          "shapes": []
+        }
+      },
+      {
+        "ordinal": 5,
+        "role": "mutated",
+        "mutation": "block-write:4",
+        "outcome": "failed",
+        "failedSites": [
+          {
+            "where": "step",
+            "step": 4,
+            "postcondition": true
+          }
+        ],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 0
+          },
+          "shapes": []
+        }
+      },
+      {
+        "ordinal": 6,
+        "role": "relaxed",
+        "mutation": "block-write:4",
+        "outcome": "passed",
+        "failedSites": [],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 0
+          },
+          "shapes": []
+        }
+      },
+      {
+        "ordinal": 7,
+        "role": "closing",
+        "outcome": "passed",
+        "failedSites": [],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "shapes": []
+        }
+      }
+    ],
+    "restore": "none",
+    "isolation": {
+      "known": true,
+      "value": "isolated"
+    }
+  },
+  "judgments": [],
+  "notes": []
+}

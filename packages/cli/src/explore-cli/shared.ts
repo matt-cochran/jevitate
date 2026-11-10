@@ -87,6 +87,10 @@ export type ExploreOpts = {
     success: string[];
     successWhen?: string;
     allowVacuousChecks?: boolean;
+    /** 0.30.0 (#800): `--job <id>` — the job whose done check verifies the goal run. */
+    job?: string;
+    /** 0.30.0 (#800): `--require-done-check`. */
+    requireDoneCheck?: boolean;
     actionDeltas?: boolean;
     feature?: string;
     route: string[];
@@ -144,6 +148,8 @@ export type ExploreOpts = {
 export interface ExploreRunContext<S extends string = string> {
   deps: CliDeps;
   o: ExploreOpts;
+  /** Writes a line to stderr through the program's output. */
+  warn: (line: string) => void;
   emitExplore: (envelope: JsonEnvelope<unknown>, exitCode?: number, human?: (data: unknown) => string) => void;
   strategy: S;
   target: TargetConfig | undefined;

@@ -1,0 +1,916 @@
+{
+  "startedAt": "2026-11-09T12:41:52.317Z",
+  "repeats": 5,
+  "ports": {
+    "REAL": 28190,
+    "MOCK": 28191,
+    "PROXY": 28192
+  },
+  "images": [
+    "mockserver/mockserver:5.15.0",
+    "zricethezav/gitleaks:v8.21.2"
+  ],
+  "engine": "0.29.0-source-e71fb65e (commit e71fb65e, tree 257603c4, built 2026-11-09T12:20:36.916Z)",
+  "recording": {
+    "label": "record (real, via proxy)",
+    "env": "record",
+    "exit": 0,
+    "seconds": 5.76,
+    "load1Before": 11.33,
+    "outcome": "ok",
+    "job": {
+      "attainment": "achieved",
+      "basis": "done-check"
+    },
+    "failedAt": null,
+    "reason": null,
+    "evidence": {
+      "mode": "test",
+      "trust": "test",
+      "doneBefore": {
+        "known": true,
+        "value": false
+      },
+      "doneAfter": {
+        "known": true,
+        "value": true
+      }
+    }
+  },
+  "plainBin": {
+    "label": "real via shipped bin.js",
+    "env": "staging",
+    "exit": 0,
+    "seconds": 2.63,
+    "load1Before": 10.66,
+    "outcome": "ok",
+    "job": null,
+    "failedAt": null,
+    "reason": null,
+    "evidence": {
+      "mode": "test",
+      "trust": "test",
+      "doneBefore": null,
+      "doneAfter": null
+    }
+  },
+  "scan": {
+    "rawMatches": 58,
+    "mockMatches": 0,
+    "gitleaks": [
+      {
+        "label": "mock-data/ (committed)",
+        "findings": 0,
+        "rules": [],
+        "tail": [
+          "\u001b[90m12:42PM\u001b[0m \u001b[32mINF\u001b[0m scan completed in 8.12ms",
+          "\u001b[90m12:42PM\u001b[0m \u001b[32mINF\u001b[0m no leaks found"
+        ]
+      },
+      {
+        "label": "mock-data decoded",
+        "findings": 0,
+        "rules": [],
+        "tail": [
+          "\u001b[90m12:42PM\u001b[0m \u001b[32mINF\u001b[0m scan completed in 6.47ms",
+          "\u001b[90m12:42PM\u001b[0m \u001b[32mINF\u001b[0m no leaks found"
+        ]
+      },
+      {
+        "label": "raw recording as stored (positive control)",
+        "findings": 5,
+        "rules": [
+          "generic-api-key"
+        ],
+        "tail": [
+          "  \"Fingerprint\": \"/scan/raw-recording.jsonl:generic-api-key:11\"",
+          "\u001b[90m12:42PM\u001b[0m \u001b[32mINF\u001b[0m scan completed in 20.4ms",
+          "\u001b[90m12:42PM\u001b[0m \u001b[31mWRN\u001b[0m leaks found: 5"
+        ]
+      },
+      {
+        "label": "raw recording decoded (positive control)",
+        "findings": 5,
+        "rules": [
+          "generic-api-key"
+        ],
+        "tail": [
+          "  \"Fingerprint\": \"/scan/decoded.txt:generic-api-key:682\"",
+          "\u001b[90m12:42PM\u001b[0m \u001b[32mINF\u001b[0m scan completed in 15ms",
+          "\u001b[90m12:42PM\u001b[0m \u001b[31mWRN\u001b[0m leaks found: 5"
+        ]
+      }
+    ],
+    "expectations": 7,
+    "exchanges": 11
+  },
+  "harness": [
+    {
+      "label": "harness 1",
+      "env": "harness",
+      "exit": 0,
+      "seconds": 5.66,
+      "load1Before": 11.57,
+      "outcome": "ok",
+      "job": {
+        "attainment": "unverified",
+        "basis": "harness"
+      },
+      "failedAt": null,
+      "reason": null,
+      "evidence": {
+        "mode": "test",
+        "trust": "harness",
+        "doneBefore": {
+          "known": true,
+          "value": false
+        },
+        "doneAfter": {
+          "known": true,
+          "value": true
+        }
+      }
+    },
+    {
+      "label": "harness 2",
+      "env": "harness",
+      "exit": 0,
+      "seconds": 5.68,
+      "load1Before": 9.84,
+      "outcome": "ok",
+      "job": {
+        "attainment": "unverified",
+        "basis": "harness"
+      },
+      "failedAt": null,
+      "reason": null,
+      "evidence": {
+        "mode": "test",
+        "trust": "harness",
+        "doneBefore": {
+          "known": true,
+          "value": false
+        },
+        "doneAfter": {
+          "known": true,
+          "value": true
+        }
+      }
+    },
+    {
+      "label": "harness 3",
+      "env": "harness",
+      "exit": 0,
+      "seconds": 5.91,
+      "load1Before": 9.66,
+      "outcome": "ok",
+      "job": {
+        "attainment": "unverified",
+        "basis": "harness"
+      },
+      "failedAt": null,
+      "reason": null,
+      "evidence": {
+        "mode": "test",
+        "trust": "harness",
+        "doneBefore": {
+          "known": true,
+          "value": false
+        },
+        "doneAfter": {
+          "known": true,
+          "value": true
+        }
+      }
+    },
+    {
+      "label": "harness 4",
+      "env": "harness",
+      "exit": 0,
+      "seconds": 5.7,
+      "load1Before": 8.85,
+      "outcome": "ok",
+      "job": {
+        "attainment": "unverified",
+        "basis": "harness"
+      },
+      "failedAt": null,
+      "reason": null,
+      "evidence": {
+        "mode": "test",
+        "trust": "harness",
+        "doneBefore": {
+          "known": true,
+          "value": false
+        },
+        "doneAfter": {
+          "known": true,
+          "value": true
+        }
+      }
+    },
+    {
+      "label": "harness 5",
+      "env": "harness",
+      "exit": 0,
+      "seconds": 5.64,
+      "load1Before": 7.66,
+      "outcome": "ok",
+      "job": {
+        "attainment": "unverified",
+        "basis": "harness"
+      },
+      "failedAt": null,
+      "reason": null,
+      "evidence": {
+        "mode": "test",
+        "trust": "harness",
+        "doneBefore": {
+          "known": true,
+          "value": false
+        },
+        "doneAfter": {
+          "known": true,
+          "value": true
+        }
+      }
+    }
+  ],
+  "real": [
+    {
+      "label": "real 1",
+      "env": "staging",
+      "exit": 0,
+      "seconds": 5.68,
+      "load1Before": 10.88,
+      "outcome": "ok",
+      "job": {
+        "attainment": "achieved",
+        "basis": "done-check"
+      },
+      "failedAt": null,
+      "reason": null,
+      "evidence": {
+        "mode": "test",
+        "trust": "test",
+        "doneBefore": {
+          "known": true,
+          "value": false
+        },
+        "doneAfter": {
+          "known": true,
+          "value": true
+        }
+      }
+    },
+    {
+      "label": "real 2",
+      "env": "staging",
+      "exit": 0,
+      "seconds": 5.76,
+      "load1Before": 10.33,
+      "outcome": "ok",
+      "job": {
+        "attainment": "achieved",
+        "basis": "done-check"
+      },
+      "failedAt": null,
+      "reason": null,
+      "evidence": {
+        "mode": "test",
+        "trust": "test",
+        "doneBefore": {
+          "known": true,
+          "value": false
+        },
+        "doneAfter": {
+          "known": true,
+          "value": true
+        }
+      }
+    },
+    {
+      "label": "real 3",
+      "env": "staging",
+      "exit": 0,
+      "seconds": 5.74,
+      "load1Before": 9.53,
+      "outcome": "ok",
+      "job": {
+        "attainment": "achieved",
+        "basis": "done-check"
+      },
+      "failedAt": null,
+      "reason": null,
+      "evidence": {
+        "mode": "test",
+        "trust": "test",
+        "doneBefore": {
+          "known": true,
+          "value": false
+        },
+        "doneAfter": {
+          "known": true,
+          "value": true
+        }
+      }
+    },
+    {
+      "label": "real 4",
+      "env": "staging",
+      "exit": 0,
+      "seconds": 5.61,
+      "load1Before": 8.78,
+      "outcome": "ok",
+      "job": {
+        "attainment": "achieved",
+        "basis": "done-check"
+      },
+      "failedAt": null,
+      "reason": null,
+      "evidence": {
+        "mode": "test",
+        "trust": "test",
+        "doneBefore": {
+          "known": true,
+          "value": false
+        },
+        "doneAfter": {
+          "known": true,
+          "value": true
+        }
+      }
+    },
+    {
+      "label": "real 5",
+      "env": "staging",
+      "exit": 0,
+      "seconds": 5.56,
+      "load1Before": 8.16,
+      "outcome": "ok",
+      "job": {
+        "attainment": "achieved",
+        "basis": "done-check"
+      },
+      "failedAt": null,
+      "reason": null,
+      "evidence": {
+        "mode": "test",
+        "trust": "test",
+        "doneBefore": {
+          "known": true,
+          "value": false
+        },
+        "doneAfter": {
+          "known": true,
+          "value": true
+        }
+      }
+    }
+  ],
+  "resetSeconds": {
+    "harness": [
+      0.318034717999999,
+      0.02774617500000022,
+      0.045511679999995974,
+      0.01980605099999957,
+      0.017942521999997553
+    ],
+    "real": [
+      0.0025287869999992838,
+      0.0029653650000000197,
+      0.002617285999993328,
+      0.0017173350000011852,
+      0.0017955310000106691
+    ]
+  },
+  "driftProbe": {
+    "label": "unchanged API",
+    "requests": 11,
+    "semantic": 0,
+    "rows": [
+      {
+        "request": "GET /triage/cl_checkout",
+        "differing": []
+      },
+      {
+        "request": "GET /proto.js",
+        "differing": []
+      },
+      {
+        "request": "POST /journeeze.v1.TriageService/GetCluster",
+        "differing": [
+          {
+            "field": "message.cluster.reporterEmail",
+            "kind": "redacted"
+          }
+        ]
+      },
+      {
+        "request": "GET /triage",
+        "differing": []
+      },
+      {
+        "request": "GET /proto.js",
+        "differing": []
+      },
+      {
+        "request": "POST /journeeze.v1.TriageService/ListClusters",
+        "differing": [
+          {
+            "field": "message.clusters.0.reporterEmail",
+            "kind": "redacted"
+          },
+          {
+            "field": "message.clusters.1.reporterEmail",
+            "kind": "redacted"
+          }
+        ]
+      },
+      {
+        "request": "POST /journeeze.v1.TriageService/GetCluster",
+        "differing": [
+          {
+            "field": "message.cluster.reporterEmail",
+            "kind": "redacted"
+          }
+        ]
+      },
+      {
+        "request": "POST /journeeze.v1.TriageService/FileIssue",
+        "differing": []
+      },
+      {
+        "request": "GET /triage/cl_checkout",
+        "differing": []
+      },
+      {
+        "request": "GET /proto.js",
+        "differing": []
+      },
+      {
+        "request": "POST /journeeze.v1.TriageService/GetCluster",
+        "differing": [
+          {
+            "field": "message.cluster.reporterEmail",
+            "kind": "redacted"
+          },
+          {
+            "field": "message.cluster.updatedAt",
+            "kind": "volatile"
+          }
+        ]
+      }
+    ]
+  },
+  "proofHarness": {
+    "label": "proof harness",
+    "env": "harness",
+    "exit": 0,
+    "seconds": 20.13,
+    "load1Before": 7.91,
+    "verdict": "proven",
+    "countsForGate": null,
+    "reason": null,
+    "mutations": [
+      {
+        "id": "skip:2",
+        "reason": "step 2 failed: assert: postcondition failed: kind=visible target={\"testId\":\"file-issue\"}"
+      },
+      {
+        "id": "skip:3",
+        "reason": "step 3 failed: assert: postcondition failed: kind=textIncludes target={\"testId\":\"issue-status\"} text=\"Issue #\""
+      },
+      {
+        "id": "block-write:3",
+        "reason": "step 3 failed: click: postcondition failed: kind=textIncludes target={\"testId\":\"issue-status\"} text=\"Issue #\""
+      }
+    ],
+    "assertions": [
+      {
+        "site": "step:1",
+        "verdict": "unpaired"
+      },
+      {
+        "site": "step:2",
+        "verdict": "sensitive"
+      },
+      {
+        "site": "step:3",
+        "verdict": "sensitive"
+      }
+    ]
+  },
+  "proofReal": {
+    "label": "proof real",
+    "env": "staging",
+    "exit": 0,
+    "seconds": 20.11,
+    "load1Before": 6.37,
+    "verdict": "proven",
+    "countsForGate": null,
+    "reason": null,
+    "mutations": [
+      {
+        "id": "skip:2",
+        "reason": "step 2 failed: assert: postcondition failed: kind=visible target={\"testId\":\"file-issue\"}"
+      },
+      {
+        "id": "skip:3",
+        "reason": "step 3 failed: assert: postcondition failed: kind=textIncludes target={\"testId\":\"issue-status\"} text=\"Issue #\""
+      },
+      {
+        "id": "block-write:3",
+        "reason": "step 3 failed: click: postcondition failed: kind=textIncludes target={\"testId\":\"issue-status\"} text=\"Issue #\""
+      }
+    ],
+    "assertions": [
+      {
+        "site": "step:1",
+        "verdict": "unpaired"
+      },
+      {
+        "site": "step:2",
+        "verdict": "sensitive"
+      },
+      {
+        "site": "step:3",
+        "verdict": "sensitive"
+      }
+    ]
+  },
+  "driftHarness": [
+    {
+      "label": "drift harness 1",
+      "env": "harness",
+      "exit": 0,
+      "seconds": 5.63,
+      "load1Before": 5.91,
+      "outcome": "ok",
+      "job": {
+        "attainment": "unverified",
+        "basis": "harness"
+      },
+      "failedAt": null,
+      "reason": null,
+      "evidence": {
+        "mode": "test",
+        "trust": "harness",
+        "doneBefore": {
+          "known": true,
+          "value": false
+        },
+        "doneAfter": {
+          "known": true,
+          "value": true
+        }
+      }
+    },
+    {
+      "label": "drift harness 2",
+      "env": "harness",
+      "exit": 0,
+      "seconds": 5.74,
+      "load1Before": 5.93,
+      "outcome": "ok",
+      "job": {
+        "attainment": "unverified",
+        "basis": "harness"
+      },
+      "failedAt": null,
+      "reason": null,
+      "evidence": {
+        "mode": "test",
+        "trust": "harness",
+        "doneBefore": {
+          "known": true,
+          "value": false
+        },
+        "doneAfter": {
+          "known": true,
+          "value": true
+        }
+      }
+    },
+    {
+      "label": "drift harness 3",
+      "env": "harness",
+      "exit": 0,
+      "seconds": 5.6,
+      "load1Before": 5.1,
+      "outcome": "ok",
+      "job": {
+        "attainment": "unverified",
+        "basis": "harness"
+      },
+      "failedAt": null,
+      "reason": null,
+      "evidence": {
+        "mode": "test",
+        "trust": "harness",
+        "doneBefore": {
+          "known": true,
+          "value": false
+        },
+        "doneAfter": {
+          "known": true,
+          "value": true
+        }
+      }
+    },
+    {
+      "label": "drift harness 4",
+      "env": "harness",
+      "exit": 0,
+      "seconds": 5.65,
+      "load1Before": 4.95,
+      "outcome": "ok",
+      "job": {
+        "attainment": "unverified",
+        "basis": "harness"
+      },
+      "failedAt": null,
+      "reason": null,
+      "evidence": {
+        "mode": "test",
+        "trust": "harness",
+        "doneBefore": {
+          "known": true,
+          "value": false
+        },
+        "doneAfter": {
+          "known": true,
+          "value": true
+        }
+      }
+    },
+    {
+      "label": "drift harness 5",
+      "env": "harness",
+      "exit": 0,
+      "seconds": 5.66,
+      "load1Before": 6.55,
+      "outcome": "ok",
+      "job": {
+        "attainment": "unverified",
+        "basis": "harness"
+      },
+      "failedAt": null,
+      "reason": null,
+      "evidence": {
+        "mode": "test",
+        "trust": "harness",
+        "doneBefore": {
+          "known": true,
+          "value": false
+        },
+        "doneAfter": {
+          "known": true,
+          "value": true
+        }
+      }
+    }
+  ],
+  "driftReal": [
+    {
+      "label": "drift real 1",
+      "env": "staging",
+      "exit": 1,
+      "seconds": 13.79,
+      "load1Before": 5.52,
+      "outcome": "quarantined",
+      "job": {
+        "attainment": "not-achieved",
+        "basis": "done-check"
+      },
+      "failedAt": null,
+      "reason": "step 3 failed: click: postcondition failed: kind=textIncludes target={\"testId\":\"issue-status\"} text=\"Issue #\"",
+      "evidence": {
+        "mode": "test",
+        "trust": "test",
+        "doneBefore": {
+          "known": true,
+          "value": false
+        },
+        "doneAfter": {
+          "known": true,
+          "value": false
+        }
+      }
+    },
+    {
+      "label": "drift real 2",
+      "env": "staging",
+      "exit": 1,
+      "seconds": 13.64,
+      "load1Before": 5.62,
+      "outcome": "quarantined",
+      "job": {
+        "attainment": "not-achieved",
+        "basis": "done-check"
+      },
+      "failedAt": null,
+      "reason": "step 3 failed: click: postcondition failed: kind=textIncludes target={\"testId\":\"issue-status\"} text=\"Issue #\"",
+      "evidence": {
+        "mode": "test",
+        "trust": "test",
+        "doneBefore": {
+          "known": true,
+          "value": false
+        },
+        "doneAfter": {
+          "known": true,
+          "value": false
+        }
+      }
+    },
+    {
+      "label": "drift real 3",
+      "env": "staging",
+      "exit": 1,
+      "seconds": 13.72,
+      "load1Before": 4.85,
+      "outcome": "quarantined",
+      "job": {
+        "attainment": "not-achieved",
+        "basis": "done-check"
+      },
+      "failedAt": null,
+      "reason": "step 3 failed: click: postcondition failed: kind=textIncludes target={\"testId\":\"issue-status\"} text=\"Issue #\"",
+      "evidence": {
+        "mode": "test",
+        "trust": "test",
+        "doneBefore": {
+          "known": true,
+          "value": false
+        },
+        "doneAfter": {
+          "known": true,
+          "value": false
+        }
+      }
+    },
+    {
+      "label": "drift real 4",
+      "env": "staging",
+      "exit": 1,
+      "seconds": 13.62,
+      "load1Before": 4.8,
+      "outcome": "quarantined",
+      "job": {
+        "attainment": "not-achieved",
+        "basis": "done-check"
+      },
+      "failedAt": null,
+      "reason": "step 3 failed: click: postcondition failed: kind=textIncludes target={\"testId\":\"issue-status\"} text=\"Issue #\"",
+      "evidence": {
+        "mode": "test",
+        "trust": "test",
+        "doneBefore": {
+          "known": true,
+          "value": false
+        },
+        "doneAfter": {
+          "known": true,
+          "value": false
+        }
+      }
+    },
+    {
+      "label": "drift real 5",
+      "env": "staging",
+      "exit": 1,
+      "seconds": 13.65,
+      "load1Before": 7.07,
+      "outcome": "quarantined",
+      "job": {
+        "attainment": "not-achieved",
+        "basis": "done-check"
+      },
+      "failedAt": null,
+      "reason": "step 3 failed: click: postcondition failed: kind=textIncludes target={\"testId\":\"issue-status\"} text=\"Issue #\"",
+      "evidence": {
+        "mode": "test",
+        "trust": "test",
+        "doneBefore": {
+          "known": true,
+          "value": false
+        },
+        "doneAfter": {
+          "known": true,
+          "value": false
+        }
+      }
+    }
+  ],
+  "driftProbeChanged": {
+    "label": "changed API (--drift)",
+    "requests": 11,
+    "semantic": 2,
+    "rows": [
+      {
+        "request": "GET /triage/cl_checkout",
+        "differing": []
+      },
+      {
+        "request": "GET /proto.js",
+        "differing": []
+      },
+      {
+        "request": "POST /journeeze.v1.TriageService/GetCluster",
+        "differing": [
+          {
+            "field": "message.cluster.reporterEmail",
+            "kind": "redacted"
+          }
+        ]
+      },
+      {
+        "request": "GET /triage",
+        "differing": []
+      },
+      {
+        "request": "GET /proto.js",
+        "differing": []
+      },
+      {
+        "request": "POST /journeeze.v1.TriageService/ListClusters",
+        "differing": [
+          {
+            "field": "message.clusters.0.reporterEmail",
+            "kind": "redacted"
+          },
+          {
+            "field": "message.clusters.1.reporterEmail",
+            "kind": "redacted"
+          }
+        ]
+      },
+      {
+        "request": "POST /journeeze.v1.TriageService/GetCluster",
+        "differing": [
+          {
+            "field": "message.cluster.reporterEmail",
+            "kind": "redacted"
+          }
+        ]
+      },
+      {
+        "request": "POST /journeeze.v1.TriageService/FileIssue",
+        "differing": [
+          {
+            "field": "grpcStatus",
+            "kind": "semantic"
+          },
+          {
+            "field": "grpcMessage",
+            "kind": "semantic"
+          },
+          {
+            "field": "message",
+            "kind": "semantic"
+          }
+        ]
+      },
+      {
+        "request": "GET /triage/cl_checkout",
+        "differing": []
+      },
+      {
+        "request": "GET /proto.js",
+        "differing": []
+      },
+      {
+        "request": "POST /journeeze.v1.TriageService/GetCluster",
+        "differing": [
+          {
+            "field": "message.cluster.issueNumber",
+            "kind": "semantic"
+          },
+          {
+            "field": "message.cluster.issueUrl",
+            "kind": "semantic"
+          },
+          {
+            "field": "message.cluster.reporterEmail",
+            "kind": "redacted"
+          },
+          {
+            "field": "message.cluster.updatedAt",
+            "kind": "volatile"
+          }
+        ]
+      }
+    ]
+  },
+  "summary": {
+    "falseFeasible": "0/5",
+    "driftFalseFeasible": "5/5",
+    "medianHarnessS": 5.68,
+    "medianRealS": 5.68,
+    "medianMockResetS": 0.02774617500000022,
+    "medianRealResetS": 0.0025287869999992838,
+    "ratio": 1
+  },
+  "finishedAt": "2026-11-09T12:45:21.909Z"
+}

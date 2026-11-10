@@ -4,10 +4,7 @@ import {
   JourneySchema,
   MAX_TARGETED_RELAXATIONS,
   assertionSiteKey,
-  classifyMutation,
   journeyAssertions,
-  judgeAssertions,
-  mutationProofVerdict,
   nextTargetedRelaxation,
   planJourneyMutations,
   relaxedMutationReplay,
@@ -19,7 +16,13 @@ import {
   type MutationFailedSite,
   type MutationPlan,
   type MutationRunResult,
+  mutationPlanSites,
+  endStateIsolationNotes,
 } from "./index.js";
+import { classifyMutation, judgeAssertions as judgeSites, mutationProofVerdict } from "@jevitate/adjudicator";
+/** #812: the adjudicator's judging of a Journey's own assertion sites, as `journey verify` gathers them. */
+const judgeAssertions = (j: Journey, plan: MutationPlan, results: ReadonlyMap<string, MutationRunResult>) =>
+  judgeSites(journeyAssertions(j), plan, results, new Map(mutationPlanSites(j).map((s) => [s.site, s])));
 
 // #609 — a TARGETED proof for an assertion that is a `cascade` under a paired mutation only because
 // an EARLIER intentional defense caught the same mutation first. The earlier step's postcondition is
@@ -143,6 +146,89 @@ describe("#609 nextTargetedRelaxation", () => {
     });
   });
 
+  // #817: three sibling end-state checks on one write; the reloadThen absence check holds on a view that has not loaded.
+  describe("sibling end-state checks (#817)", () => {
+    const owner = (absence = true): Journey =>
+      JourneySchema.parse({
+        metadata: {
+          id: "owner-help",
+          name: "Resolve owner help",
+          promoted: false,
+          params: [],
+          createdAtIso: "2026-11-09T00:00:00Z",
+          endState: [
+            { kind: "responseStatus", method: "POST", pathGlob: "/api/resolve", status: { class: 2 } },
+            { kind: "reloadThen", assertion: absence ? { kind: "count", target: { css: ".request" }, max: 0 } : { kind: "textIncludes", target: { css: "#open" }, text: "0 open" } },
+            { kind: "http", method: "GET", url: "http://127.0.0.1:1/api/state", textIncludes: ['"ownerHelpOpen":0'] },
+          ],
+          mutationPairs: [0, 1, 2].flatMap((i) => [
+            { check: `end-state:${i}`, mustFailWhen: "skip:3" },
+            { check: `end-state:${i}`, mustFailWhen: "block-write:3" },
+          ]),
+        },
+        recording: {
+          version: "1",
+          site: "http://127.0.0.1:1",
+          pages: [
+            {
+              url: "/help",
+              steps: [
+                { step: { kind: "navigate", url: "/help", expect: { kind: "visible", target: { role: "heading", name: "Owner help" } } } },
+                { step: { kind: "click", target: { role: "button", name: "Today" }, expect: { kind: "visible", target: { css: ".request" } } } },
+                {
+                  step: { kind: "click", target: { role: "button", name: "Done" }, expect: { kind: "count", target: { css: ".request" }, max: 0 } },
+                  expectRequests: [{ kind: "responseStatus", method: "POST", pathGlob: "/api/resolve", status: { class: 2 } }],
+                  delta: { verdict: "relevant-change", why: "resolved", changes: [], requests: ["POST /api/resolve → 200"], overheadMs: 1 },
+                },
+              ],
+            },
+          ],
+        },
+      });
+    const skip3: JourneyMutation = { kind: "skip", step: 3, id: "skip:3" };
+    const siblingsFailed = { outcome: "failed" as const, failedSites: [{ where: "end-state" as const, index: 0 }, { where: "end-state" as const, index: 2 }] };
+
+    it("a target judged and held while its siblings failed says it is not a cascade of them, and stays refused", () => {
+      const j = owner();
+      const next = nextTargetedRelaxation(j, planJourneyMutations(j), skip3, "end-state:1", siblingsFailed, ["step-request:3:0"]);
+      expect(next).toEqual({
+        refuse:
+          "end-state:1 was judged and held under skip:3 while its sibling end-state checks end-state:0, end-state:2 failed: end-state checks are judged independently, so no sibling is relaxed to isolate it (unsupported, and it would change nothing); the base passed end-state:1 as well, so it holds with and without what skip:3 removes, and as an absence check it also holds on a page or view that has not loaded; make end-state:1 read state skip:3 removes (for an absence check, first wait for content that shows the view loaded), or remove end-state:1's claim",
+      });
+    });
+
+    it("a non-absence target held while its siblings failed gets the same diagnosis without the unloaded-view note", () => {
+      const j = owner(false);
+      const next = nextTargetedRelaxation(j, planJourneyMutations(j), skip3, "end-state:1", siblingsFailed, []);
+      expect(next).toEqual({
+        refuse:
+          "end-state:1 was judged and held under skip:3 while its sibling end-state checks end-state:0, end-state:2 failed: end-state checks are judged independently, so no sibling is relaxed to isolate it (unsupported, and it would change nothing); the base passed end-state:1 as well, so it holds with and without what skip:3 removes; make end-state:1 read state skip:3 removes, or remove end-state:1's claim",
+      });
+    });
+
+    it("the classification stays cascade: the diagnosis never moves the verdict toward sensitive", () => {
+      const j = owner();
+      const site = journeyAssertions(j).find((s) => assertionSiteKey(s) === "end-state:1")!;
+      const refused = nextTargetedRelaxation(j, planJourneyMutations(j), skip3, "end-state:1", siblingsFailed, []);
+      expect(refused).toHaveProperty("refuse");
+      const result: MutationRunResult = { ...siblingsFailed, targeted: [{ site: "end-state:1", relaxedSites: [], outcome: "failed", failedSites: siblingsFailed.failedSites, refused: (refused as { refuse: string }).refuse }] };
+      expect(classifyMutation(site, skip3, result)).toBe("cascade");
+    });
+
+    it("--plan names the shape before any browser: an absence end-state check sharing its mutations with sibling end-state checks", () => {
+      const j = owner();
+      expect(endStateIsolationNotes(j, planJourneyMutations(j))).toEqual([
+        {
+          site: "end-state:1",
+          note: "end-state:1 checks an absence (it also holds on a page or view that has not loaded) and shares block-write:3, skip:3 with sibling end-state checks end-state:0, end-state:2: if it holds while they fail, no targeted proof can isolate it (sibling end-state checks are never relaxed) and it stays a cascade; first wait for content that shows the view loaded",
+        },
+      ]);
+      // A positive read of the loaded state is not that shape.
+      const positive = owner(false);
+      expect(endStateIsolationNotes(positive, planJourneyMutations(positive))).toEqual([]);
+    });
+  });
+
   it("refuses a blocking step that is not paired with the mutation", () => {
     const journey = threadJourney();
     const m = swapMutation();
@@ -152,6 +238,10 @@ describe("#609 nextTargetedRelaxation", () => {
   it("refuses a blocking action failure rather than a postcondition", () => {
     const actionFailed = { outcome: "failed" as const, failedSites: [{ where: "step" as const, step: 2, postcondition: false }] };
     expect(nextTargetedRelaxation(threadJourney(), plan(), swapMutation(), "end-state:0", actionFailed, [])).toEqual({ refuse: "step:2 action failed (not a postcondition)" });
+  });
+
+  it("still refuses a failing site that is already relaxed", () => {
+    expect(nextTargetedRelaxation(threadJourney(), plan(), swapMutation(), "end-state:0", relaxedRun, ["step:2"])).toEqual({ refuse: "step:2 is already relaxed" });
   });
 
   it("refuses once the relaxation bound is reached", () => {
@@ -182,14 +272,16 @@ describe("#609 targetedMutationReplay", () => {
     expect(journey).toEqual(before);
   });
 
-  it("weakens a relaxed earlier step's expect to a claim on its own target", () => {
+  it("replaces an authorized earlier expect with no claim while preserving the original action", () => {
     const journey = threadJourney();
     journey.recording.pages[0]!.steps[1]!.step = { ...journey.recording.pages[0]!.steps[1]!.step, waitFor: { maxMs: 30_000 } } as Step;
+    const before = structuredClone(journey);
     const how = targetedMutationReplay(journey, swapMutation(), "end-state:0", ["step:2"], { params: PARAMS });
+    expect(journey).toEqual(before);
     expect(how.journey.recording.pages[0]!.steps[1]!.step).toEqual({
       kind: "click",
       target: { role: "button", name: "Open" },
-      expect: { kind: "visible", target: { role: "button", name: "Open" } },
+      expect: { kind: "urlIncludes", text: "" },
     });
   });
 
@@ -277,7 +369,7 @@ describe("#609 targetedControlReplay", () => {
   it("weakens the mutated step's own claim as the targeted replay does", () => {
     const how = targetedControlReplay(threadJourney(), swapMutation(), ["step:2"]);
     const own = how.journey.recording.pages[0]!.steps[0]!.step;
-    expect("expect" in own ? own.expect.kind : own.kind).toBe("visible");
+    expect("expect" in own ? own.expect : own.kind).toEqual({ kind: "urlIncludes", text: "" });
   });
 
   it("leaves the input Journey deep-equal to before", () => {

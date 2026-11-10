@@ -3,6 +3,7 @@
  * the AdversarialOutcome — moved out of `runAdversarialHunt` unchanged (#232), installed on `ctx`.
  */
 
+import { redactText } from "@jevitate/ai-core";
 import type { MissionFailure, MissionOutcome } from "@jevitate/domain";
 import { deltaStatsOf } from "../../action-delta.js";
 import { buildCrashReport } from "../../crash-report.js";
@@ -51,7 +52,8 @@ export function installFinish(ctx: HuntState): void {
       ...(finalFailure === undefined ? {} : { failure: finalFailure }),
       heap: ctx.heap.samples(),
       timing: summarizeTimings(ctx.timings),
-      scope: { routeGlobs: ctx.routeGlobs, outOfScopeSteps: ctx.outOfScopeSteps, departures: ctx.departures.slice(0, MAX_LISTED_DEPARTURES), resets: ctx.sessions.resets, ...(ctx.regionDeclared ? { region: { spec: ctx.regionSpec, lostResets: ctx.regionLostResets } } : {}) },
+      // A route glob is the seed URL's path, which a Journey prefix's secret (a token in a navigate URL) can be part of.
+      scope: { routeGlobs: ctx.routeGlobs.map((g) => redactText(g, ctx.secrets)), outOfScopeSteps: ctx.outOfScopeSteps, departures: ctx.departures.slice(0, MAX_LISTED_DEPARTURES), resets: ctx.sessions.resets, ...(ctx.regionDeclared ? { region: { spec: ctx.regionSpec, lostResets: ctx.regionLostResets } } : {}) },
       ...(ctx.declared === null ? {} : { invariants: ctx.declared.report() }),
       ...(ctx.budget === null ? {} : { budget: ctx.budget.trajectory() }),
       ...(ctx.identityChanges.length === 0 ? {} : { identityChanges: [...ctx.identityChanges] }),

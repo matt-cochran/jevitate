@@ -15,6 +15,7 @@ export function initPerception(ctx: MutableRunContext, cfg: ExploreConfig): void
   ctx.waitOpMs = cfg.waitOpMs ?? WAIT_OP_MS;
   /** Every page state seen so far (for "the action sent the page back to an earlier state"). */
   ctx.seen = new Set<string>();
+  ctx.enteredBy = new Map<string, string>();
   /** The last executed page-changing action: when, from which state, and its Recording index. */
   ctx.track = { lastMutation: null, lastRecordedTarget: null };
   // #192: an option the goal names (a country, a currency) is perceived even deep in a long list.

@@ -1,0 +1,168 @@
+{
+  "schema": "jevitate.evidence",
+  "version": 1,
+  "producedAt": "2026-01-01T00:00:22.000Z",
+  "producer": {
+    "jevitate": "0.29.0-source-e71fb65e",
+    "commit": "e71fb65e"
+  },
+  "subject": {
+    "kind": "mutation-proof",
+    "journey": {
+      "id": "save",
+      "hash": "b0768b5aa4f449adeb553bd933d3582e203cd401e5c65cb25e842605e2021079"
+    }
+  },
+  "run": {
+    "mode": "automation",
+    "channel": "cli",
+    "target": {
+      "origin": "http://127.0.0.1:9",
+      "trust": "unknown"
+    },
+    "paramsDigest": "unkeyed",
+    "secretParamNames": []
+  },
+  "steps": [],
+  "writes": {
+    "sent": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "answered": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "aborted": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "openAtClose": {
+      "known": true,
+      "value": 1
+    },
+    "shapes": []
+  },
+  "mutation": {
+    "plan": {
+      "mutations": [
+        {
+          "id": "skip:1",
+          "kind": "skip",
+          "step": 1
+        },
+        {
+          "id": "block-write:1",
+          "kind": "block-write",
+          "step": 1
+        }
+      ],
+      "pairs": [
+        {
+          "site": "step:1",
+          "mutation": "block-write:1"
+        },
+        {
+          "site": "step:1",
+          "mutation": "skip:1",
+          "declared": true
+        }
+      ],
+      "sites": [
+        {
+          "site": "step:1",
+          "check": "page visible"
+        }
+      ]
+    },
+    "replays": [
+      {
+        "ordinal": 0,
+        "role": "base",
+        "outcome": "passed",
+        "failedSites": [],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 0
+          },
+          "shapes": []
+        }
+      },
+      {
+        "ordinal": 1,
+        "role": "independence",
+        "outcome": "passed",
+        "failedSites": [],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 0
+          },
+          "shapes": []
+        }
+      },
+      {
+        "ordinal": 2,
+        "role": "mutated",
+        "mutation": "skip:1",
+        "outcome": "passed",
+        "failedSites": [],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 1
+          },
+          "shapes": []
+        }
+      }
+    ],
+    "restore": "none",
+    "isolation": {
+      "known": true,
+      "value": "isolated"
+    },
+    "taint": {
+      "note": "write-open",
+      "by": "skip:1"
+    }
+  },
+  "judgments": [],
+  "notes": []
+}

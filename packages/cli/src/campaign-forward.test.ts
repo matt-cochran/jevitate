@@ -27,6 +27,8 @@ describe("campaign run forwards explore's safety, evidence and log options to ev
       "--invariants", "inv.json", "--log-source", "docker:api-1", "--log-defect", "error", "--log-scope", "acme",
       "--log-correlation-header", "x-trace", "--server-log-drain-ms", "5000", "--log-triage", "--evidence-video", "--record-video", "--screenshots", "steps",
       "--hook-timeout-ms", "120000", "--allow-shell-hooks", "--real", "--journeys-dir", "j", "--out", "o", "--json",
+      // H5: the done-check flags are the discovery replays', never a mission's.
+      "--no-done-check", "--require-done-check",
     ]);
     const argv = campaignMissionArgv(run);
     expect(argv).toEqual(expect.arrayContaining(["--allow-destructive", "--allow-writes", "--evidence-video", "--record-video", "--log-triage"]));
@@ -41,7 +43,7 @@ describe("campaign run forwards explore's safety, evidence and log options to ev
     expect(pairs("--log-correlation-header")).toEqual(["x-trace"]);
     expect(pairs("--server-log-drain-ms")).toEqual(["5000"]);
     expect(pairs("--screenshots")).toEqual(["steps"]);
-    for (const own of ["--hook-timeout-ms", "--allow-shell-hooks", "--real", "--journeys-dir", "--out", "--json"]) expect(argv).not.toContain(own);
+    for (const own of ["--hook-timeout-ms", "--allow-shell-hooks", "--real", "--journeys-dir", "--out", "--json", "--no-done-check", "--require-done-check"]) expect(argv).not.toContain(own);
   });
 
   it("forwards nothing the operator did not give (destructive controls stay refused by default)", () => {

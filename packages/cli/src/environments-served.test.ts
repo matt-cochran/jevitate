@@ -8,6 +8,7 @@ import { ProfileManager } from "@jevitate/daemon";
 import { FsJourneyStore, JourneyRegistry } from "@jevitate/journey";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
+import { advisoryCatalogDir } from "./done-check-policy.testkit.js";
 import { useSkippingTime } from "../../explore/src/testkit.js";
 
 // #304: Node and page time skip idle waits (settle windows, hang ceilings, polls); assertions unchanged.
@@ -87,6 +88,7 @@ async function run(argv: string[]): Promise<{ out: { ok: boolean; data?: { outco
   const program = buildProgram({
     profiles: new ProfileManager("/unused"),
     dbPath: join(root, "db.sqlite"),
+    catalogDir: advisoryCatalogDir(root),
     environmentsFile,
     explore: { browserPortFactory: () => new PlaywrightBrowserPort(), targetsConfigPath: join(root, "targets.json") },
   });

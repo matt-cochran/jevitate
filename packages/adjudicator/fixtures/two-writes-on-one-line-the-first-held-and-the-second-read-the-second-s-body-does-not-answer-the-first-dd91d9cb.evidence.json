@@ -1,0 +1,123 @@
+{
+  "schema": "jevitate.evidence",
+  "version": 1,
+  "producedAt": "2026-11-09T12:53:22.098Z",
+  "producer": {
+    "jevitate": "0.29.0-source-e71fb65e",
+    "commit": "e71fb65e"
+  },
+  "subject": {
+    "kind": "mutation-proof",
+    "journey": {
+      "id": "probe",
+      "hash": "c34644816d64589036030437a56934f8f3ad312ccfb66e46efb131236cabf7d9"
+    }
+  },
+  "run": {
+    "mode": "automation",
+    "channel": "cli",
+    "target": {
+      "origin": "http://127.0.0.1:44689",
+      "trust": "unknown"
+    },
+    "paramsDigest": "unkeyed",
+    "secretParamNames": []
+  },
+  "steps": [],
+  "writes": {
+    "sent": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "answered": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "aborted": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "openAtClose": {
+      "known": true,
+      "value": 1
+    },
+    "shapes": []
+  },
+  "mutation": {
+    "plan": {
+      "mutations": [
+        {
+          "id": "skip:2",
+          "kind": "skip",
+          "step": 2
+        },
+        {
+          "id": "block-write:2",
+          "kind": "block-write",
+          "step": 2
+        }
+      ],
+      "pairs": [
+        {
+          "site": "end-state:0",
+          "mutation": "skip:2"
+        },
+        {
+          "site": "end-state:0",
+          "mutation": "block-write:2"
+        }
+      ],
+      "sites": [
+        {
+          "site": "step:1",
+          "check": "page visible"
+        },
+        {
+          "site": "step:2",
+          "check": "page urlIncludes"
+        },
+        {
+          "site": "end-state:0",
+          "check": "page textIncludes"
+        }
+      ]
+    },
+    "replays": [
+      {
+        "ordinal": 0,
+        "role": "base",
+        "outcome": "passed",
+        "failedSites": [],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 1
+          },
+          "shapes": []
+        }
+      }
+    ],
+    "restore": "none",
+    "isolation": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "taint": {
+      "note": "base-write-open"
+    }
+  },
+  "judgments": [],
+  "notes": []
+}

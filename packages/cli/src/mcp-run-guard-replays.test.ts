@@ -205,7 +205,7 @@ describe("a production-flagged origin in the allowlist", () => {
   const seedSharing = (id: string): void => {
     const j = { metadata: { id, name: id, promoted: false, params: [], allowedOrigins: [otherOrigin], createdAtIso: "2026-11-05T00:00:00.000Z" }, recording: recording([NAV, SHARE], origin) } as never as Journey;
     j.metadata.promoted = true;
-    j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z" };
+    j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z", provenance: { channel: "tty", agentSignals: [] } };
     writeFileSync(join(root, `.jevitate/journeys/${id}.json`), JSON.stringify(j));
   };
 
@@ -228,7 +228,12 @@ describe("a production-flagged origin in the allowlist", () => {
   it("mcpRun.allowProduction for that origin lifts it", async () => {
     flagOther();
     seedSharing("share-lifted");
+    // 0.30.0 §5.4, changed by design: an authored allowedOrigins entry joins the write allowlist in test
+    // mode only; on this automation-mode target the write there also needs the person's allowOffAllowlistWrites.
     setTargets({ [otherOrigin]: { mcpRun: { allowProduction: true } } });
+    expect((await journeyTool("share-lifted")).body).toMatchObject({ code: "E_RUN_REFUSED_OFF_ALLOWLIST_WRITE" });
+    expect(hits.other).toBe(0);
+    setTargets({ [otherOrigin]: { mcpRun: { allowProduction: true } }, [origin]: { mcpRun: { allowOffAllowlistWrites: [otherOrigin] } } });
     expect((await journeyTool("share-lifted")).body).toMatchObject({ outcome: "ok" });
     expect(hits.other).toBe(1);
   });
@@ -248,7 +253,7 @@ describe("two calls at once", () => {
     seedRegression("wait", [NAV, { step: { kind: "click", target: { role: "button", name: "Wait" }, expect: { kind: "visible", target: { text: "Slow done" } } } }]);
     const j = { metadata: { id: "share-now", name: "s", promoted: false, params: [], createdAtIso: "2026-11-05T00:00:00.000Z" }, recording: recording([NAV, SHARE], origin) } as never as Journey;
     j.metadata.promoted = true;
-    j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z" };
+    j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z", provenance: { channel: "tty", agentSignals: [] } };
     writeFileSync(join(root, ".jevitate/journeys/share-now.json"), JSON.stringify(j));
     const tools = buildMcpTools({ journeysDir: join(root, ".jevitate/journeys"), pathRoots: [root], environmentsFile: join(root, ".jevitate/environments.json"), targetsConfigPath: targetsFile, runCli: makeInProcessCliRunner(() => buildProgram(deps())) } as never);
     const a = tools.find((t) => t.name === "regressions")!.handler({ action: "run", id: "wait", baseUrl: origin });

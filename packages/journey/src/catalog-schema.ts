@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { AcceptedFindingsSchema, ExtensionsSchema } from "./journey.js";
 import { ApprovalProvenanceSchema, ApprovalsReportSchema } from "./approval-schema.js";
+import { DoneCheckSpecSchema } from "./done-check.js";
 
 /**
  * #433 — the human-vetted catalog: personas (`.jevitate/personas.json`, the #427 file, extended) and
@@ -180,6 +181,8 @@ export const JobSchema = z
     revision: z.number().int().min(0).max(4_294_967_295).optional(),
     lastValidated: z.string().regex(/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/, "lastValidated: a calendar date, YYYY-MM-DD").optional(),
     extensions: ExtensionsSchema.optional(),
+    // #800 (0.30.0 §3): the job done check. Shape only here; `lintDoneCheck` refuses secret and path-bound references.
+    done: DoneCheckSpecSchema.optional(),
   })
   .strict()
   .refine((j) => new Set(j.personas ?? []).size === (j.personas ?? []).length, { message: "personas: duplicate id", path: ["personas"] });

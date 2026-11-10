@@ -4,10 +4,8 @@ import {
   MAX_DECLARED_RELAXATIONS,
   MAX_TARGETED_RELAXATIONS,
   assertionSiteKey,
-  classifyMutation,
   journeyAssertions,
   journeyProofHash,
-  judgeAssertions,
   planJourneyMutations,
   runDeclaredTargetedProof,
   suggestTargetedProofPlan,
@@ -19,7 +17,12 @@ import {
   type MutationPlan,
   type MutationRunResult,
   type TargetedProof,
+  mutationPlanSites,
 } from "./index.js";
+import { classifyMutation, judgeAssertions as judgeSites } from "@jevitate/adjudicator";
+/** #812: the adjudicator's judging of a Journey's own assertion sites, as `journey verify` gathers them. */
+const judgeAssertions = (j: Journey, plan: MutationPlan, results: ReadonlyMap<string, MutationRunResult>) =>
+  judgeSites(journeyAssertions(j), plan, results, new Map(mutationPlanSites(j).map((s) => [s.site, s])));
 
 // #616 — a DECLARED, human-reviewable targeted-proof plan: a layered-defense Journey can name the
 // earlier postconditions to relax so a late assertion is proven even when the automatic #609 proof

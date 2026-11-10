@@ -9,14 +9,17 @@ import { withEngine } from "../engine.js";
 import { EXIT_CODES } from "../exit-codes.js";
 import { runExploration, parseSuccessSpec, resolveExploreAllowlist } from "../explore-api.js";
 import { triagedServerLog } from "../explore-shared.js";
-import { GatewaySelectionError, buildExploreGateways } from "../cli-shared.js";
+import { GatewaySelectionError, buildExploreGateways, resolveJourneysDir } from "../cli-shared.js";
 import { resolveJourneyPrefix } from "../journey-prefix.js";
 import { GoalRunFlagError, successWhenFromFlags } from "../goal-run-flags.js";
+import { resolveCatalogDir } from "../catalog-api.js";
+import { exploreDoneCheckPolicy, jobCheckRunOptions, prepareJobDoneCheck, ProjectConfigError, type ExploreJobCheck } from "../explore-job-done-check.js";
+import type { DoneCheckPolicy } from "@jevitate/domain";
 import type { ExploreRunContext } from "./shared.js";
 
 /** The default goal strategy: `--url` + `--goal` (+ `--success`), with fixtures (moved verbatim out of registerExploreCommands). */
 export async function runGoalStrategy(ctx: ExploreRunContext): Promise<void> {
-  const { deps, o, emitExplore, target, browser, screenshotsOpt, emulation, withInvariants, serverLog, emitJourneyFailure, withEvidence, runFiling, issueFiler, conversation, secretFields, secretCommand, actors, primaryStorageState, invariants, prefixRequest, typeFixtures, uploadFixtures } = ctx;
+  const { deps, o, warn, emitExplore, target, browser, screenshotsOpt, emulation, withInvariants, serverLog, emitJourneyFailure, withEvidence, runFiling, issueFiler, conversation, secretFields, secretCommand, actors, primaryStorageState, invariants, prefixRequest, typeFixtures, uploadFixtures } = ctx;
   let { journeyPrefix } = ctx;
   // --success may be omitted for a find-out goal (#130d): the run is then verified by a grounded
   // `report` answer (#101) instead of an independent page/network check.
@@ -68,6 +71,16 @@ export async function runGoalStrategy(ctx: ExploreRunContext): Promise<void> {
     emitExplore(fail(err.code, err.message));
     return;
   }
+  // 0.30.0 (#800): the done-check policy (flag over project.json over `require`), refused before any browser.
+  const catalogDir = resolveCatalogDir(deps.catalogDir);
+  let doneCheckPolicy: DoneCheckPolicy;
+  try {
+    doneCheckPolicy = exploreDoneCheckPolicy(catalogDir, o.requireDoneCheck);
+  } catch (err) {
+    if (!(err instanceof ProjectConfigError)) throw err;
+    emitExplore(fail(err.code, err.message));
+    return;
+  }
   const bounds: Record<string, number> = {};
   if (o.maxActions !== undefined) bounds.maxActions = Number(o.maxActions);
   if (o.maxDecisions !== undefined) bounds.maxDecisions = Number(o.maxDecisions);
@@ -104,7 +117,8 @@ export async function runGoalStrategy(ctx: ExploreRunContext): Promise<void> {
       // prefix re-resolved so its secret params (and so every redaction) hold the bound value.
       if (journeyPrefix !== undefined && prefixRequest !== undefined && Object.values(o.param).some((v) => v.includes("${setup."))) {
         const params = Object.fromEntries(Object.entries(o.param).map(([k, v]) => [k, substituteSetupRefs(v, b, { where: `--param ${k}` })]));
-        journeyPrefix = await resolveJourneyPrefix({ ...prefixRequest, params });
+        // #827: a value a --secret-field bound for the prefix stays (its --param form is the one substituted).
+        journeyPrefix = await resolveJourneyPrefix({ ...prefixRequest, params: { ...prefixRequest.params, ...params } });
         o.secret = [...new Set([...o.secret, ...journeyPrefix.secrets])];
       }
     } catch (err) {
@@ -117,9 +131,34 @@ export async function runGoalStrategy(ctx: ExploreRunContext): Promise<void> {
       return;
     }
   }
+  // `--job <id>`: the job's done check, read in fresh contexts (before the run, and after each proposed done).
+  let jobCheck: ExploreJobCheck | undefined;
+  if (o.job !== undefined) {
+    try {
+      jobCheck = await prepareJobDoneCheck({
+        jobId: o.job,
+        catalogDir,
+        journeysDir: resolveJourneysDir(deps, o.journeysDir),
+        startUrl: url,
+        ...(primaryStorageState === undefined ? {} : { storageState: primaryStorageState }),
+        params: Object.fromEntries(Object.entries(o.param).filter(([, v]) => !o.secret.includes(v) && !v.includes("${"))),
+        ...(deps.explore?.browserPortFactory === undefined ? {} : { sessionPortFactory: deps.explore.browserPortFactory }),
+      });
+    } catch (err) {
+      jobCheck = { ok: false, code: "E_EXPLORE_JOB", message: `--job: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    if (!jobCheck.ok) {
+      await fx?.restore();
+      emitExplore(fail(jobCheck.code, jobCheck.message));
+      return;
+    }
+  }
   try {
     const result = await runExploration({
         ...(target === undefined ? {} : { target }),
+      ...jobCheckRunOptions(jobCheck),
+      doneCheckPolicy,
+      ...(o.requireDoneCheck === true ? { requireDoneCheck: true } : {}),
       url,
       goal,
       successChecks,
@@ -164,6 +203,10 @@ export async function runGoalStrategy(ctx: ExploreRunContext): Promise<void> {
       ...(fx === undefined ? {} : { fixtures: fx }),
       ...(journeyPrefix === undefined ? {} : { journeyPrefix }), // #399: re-resolved when a --param was bound
     });
+    // 0.30.0 (#800): a pass the model's own goal check alone accepted verified nothing about the job.
+    if (result.job?.attainment === "unverified" && result.runOutcome.status === "completed" && result.runOutcome.verifiedBy !== "success-condition") {
+      warn(`warning: this pass was judged by the model's goal check alone, so the job is unverified (add --success or --job <id> to verify it)${result.exitCode === EXIT_CODES.inconclusive ? "; exiting 2 (doneCheckPolicy require)" : ""}\n`);
+    }
     // 0 succeeded · 1 assertion not met · 2 the run broke (inconclusive/crashed).
     emitExplore(ok(await withEvidence(result)), result.exitCode);
   } catch (err) {

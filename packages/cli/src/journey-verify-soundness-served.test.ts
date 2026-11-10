@@ -6,9 +6,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGzip } from "node:zlib";
 import { clock } from "@jevitate/domain";
-import { FsJourneyStore, assertionSiteKey, classifyMutation, journeyAssertions, type Journey } from "@jevitate/journey";
+import { FsJourneyStore, assertionSiteKey, journeyAssertions, type Journey } from "@jevitate/journey";
+import { classifyMutation } from "@jevitate/adjudicator";
 import { PlaywrightBrowserPort, type BrowserPort } from "@jevitate/playwright";
 import { appendFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { runJourneyProgrammatically } from "./journey-api.js";
 import { planJourneyVerification, verifyJourneyMutations, type JourneyVerifyReport, type VerifyJourneyOptions } from "./journey-verify.js";
 import { MissionFixtures } from "./mission-fixtures.js";
@@ -45,7 +48,7 @@ type Kind = "skip" | "block-write" | "stale-value" | "swap-param" | "targeted-au
  */
 type Relation = "dependent" | "independent" | "own-dependent" | "own-earlier";
 
-const S = "sensitive, proven";
+const S = "sensitive, sensitive";
 const I = "insensitive, insensitive";
 
 /**
@@ -87,8 +90,28 @@ const PROOF_POOL = 8;
 /** With this set, every proof appends what each replay took, by kind and step, as one JSON line. */
 const COST_LOG = process.env["JEV_PROOF_COST_LOG"];
 
+/** #812: with this set to a directory, every proof writes the evidence its verdict was adjudicated from, as `<row>.evidence.json`. */
+const RECORD_EVIDENCE = process.env["JEVITATE_RECORD_EVIDENCE"];
+
+/** A row's name as a file name: readable, and unique by a digest of the whole name. */
+const evidenceFile = (name: string): string =>
+  `${name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 120)}-${createHash("sha256").update(name).digest("hex").slice(0, 8)}.evidence.json`;
+
+/** The proof's options, recording its evidence when `RECORD_EVIDENCE` is set: nothing about the proof itself changes. */
+function recorded(name: string, opts: VerifyJourneyOptions): VerifyJourneyOptions {
+  if (RECORD_EVIDENCE === undefined) return opts;
+  return {
+    ...opts,
+    onEvidence: (evidence) => {
+      mkdirSync(RECORD_EVIDENCE, { recursive: true });
+      writeFileSync(join(RECORD_EVIDENCE, evidenceFile(name)), `${JSON.stringify(evidence, null, 2)}\n`);
+    },
+  };
+}
+
 /** A proof, measured through the `run` seam and the progress lines when `COST_LOG` is set: nothing about the proof itself changes. */
-async function proveMeasured(name: string, opts: VerifyJourneyOptions): Promise<JourneyVerifyReport> {
+async function proveMeasured(name: string, given: VerifyJourneyOptions): Promise<JourneyVerifyReport> {
+  const opts = recorded(name, given);
   if (COST_LOG === undefined) return verifyJourneyMutations(opts);
   const startedAt = clock.monotonicMs();
   const replays: { label: string; atMs: number; endedMs?: number; stepEndMs: Record<number, number> }[] = [];
@@ -455,7 +478,7 @@ const FINDINGS: readonly { readonly name: string; readonly jobMs: number; readon
         { ...click("#go", text("#done", "done"), { waitFor: { maxMs: 22_000, stallMs: 1_000, reload: true } }), delta: { verdict: "relevant-change", why: "w", changes: [], requests: ["POST /api/go → 200"], overheadMs: 1 } },
       ]),
     site: "step:2",
-    expected: "sensitive, proven",
+    expected: "sensitive, sensitive",
     fixtures: true,
   },
   {
@@ -556,7 +579,7 @@ describe("[realtime] a job that outlasts the whole base replay and lands in a la
     });
     const dir = await mkdtemp(join(tmpdir(), "jev-leak-"));
     await new FsJourneyStore(dir).put(journey);
-    report = await verifyJourneyMutations({ dir, id: journey.metadata.id, params: {}, browserPortFactory: () => new PlaywrightBrowserPort() });
+    report = await verifyJourneyMutations(recorded("a job that outlasts the whole base replay and lands in a later one", { dir, id: journey.metadata.id, params: {}, browserPortFactory: () => new PlaywrightBrowserPort() }));
   }, 300_000);
   afterAll(() => close());
 
@@ -594,7 +617,7 @@ document.getElementById('ack').onclick = async () => { await fetch('/api/ack', {
     const journey = probeJourney(served.origin, [NAV, START, { ...click("#ack", text("#acked", "Acked"), { waitFor: { maxMs: 12_000 } }), expectRequests: POST("/api/ack") }], { endState: [JOB_DONE] });
     const dir = await mkdtemp(join(tmpdir(), "jev-slower-"));
     await new FsJourneyStore(dir).put(journey);
-    report = await verifyJourneyMutations({ dir, id: journey.metadata.id, params: {}, browserPortFactory: () => new PlaywrightBrowserPort() });
+    report = await verifyJourneyMutations(recorded("a job that runs slower after the base replay than in it", { dir, id: journey.metadata.id, params: {}, browserPortFactory: () => new PlaywrightBrowserPort() }));
   }, 300_000);
   afterAll(() => close());
 
@@ -792,6 +815,7 @@ const streamJourney = (assertion: ReturnType<typeof text>) => (site: string): Jo
 /**
  * A Save answered with 200 whose body stays open. The site does not depend on it: the app reads BUSY only while a mutated
  * replay runs and that body is open, so a replay that closes on the open write is all that keeps this from reading proven.
+ * The body stays open, and the server keeps working, for the whole proof: until the row's server closes.
  */
 const heldSave = (opts: { readonly headers?: Record<string, string>; readonly first?: (res: ServerResponse) => void; readonly redirect?: true; readonly click?: string }) => (ctx: RowContext) => {
   let first = true;
@@ -811,10 +835,9 @@ const heldSave = (opts: { readonly headers?: Record<string, string>; readonly fi
       first = false;
       held = true;
       opts.first?.(res);
-      return after(60_000, () => {
-        held = false;
-        res.end();
-      });
+      // Held until the row's server closes, not for a fixed time: a 60 s hold ended inside the proof on a slow runner, so the
+      // mutated replays met a server that had finished its work and read the limit rows insensitive.
+      return;
     }
     html(res, `<button id="save">Save</button><p id="said"></p><p id="health">?</p><script>const said=()=>{document.getElementById('said').textContent='Saved'};document.getElementById('save').onclick=()=>{${opts.click ?? "fetch('/api/save',{method:'POST'}).then(said)"}};setInterval(async()=>{try{document.getElementById('health').textContent=(await (await fetch('/api/health')).json()).s}catch{}},250)</script>`);
   };
@@ -898,7 +921,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
       html(res, `<button id="save">Save</button><script>document.getElementById('save').onclick=()=>{location.href='/next'}</script>`);
     },
     journey: unreadSaved,
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["step:2", "sensitive"],
   },
   heldRow("answered with no-store, then keeps working with nothing sent: the write stays open", { headers: { "cache-control": "no-store" } }),
@@ -921,7 +944,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
       html(res, `<button id="save">Save</button><script>document.getElementById('save').onclick=()=>{location.href='/next'}</script>`);
     },
     journey: unreadSaved,
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["step:2", "sensitive"],
   },
   {
@@ -931,7 +954,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
       html(res, `<button id="save">Save</button><p id="said"></p><script>document.getElementById('save').onclick=async()=>{await fetch('/api/save?k=a',{method:'POST'});await fetch('/api/save?k=b',{method:'POST'});document.getElementById('said').textContent='Saved'}</script>`);
     },
     journey: unreadSaved,
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["step:2", "sensitive"],
   },
   {
@@ -968,27 +991,27 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     reason: /no step records it as a write.*If this request is the step's write, add it.*If it is a read, there is no write here to prove/,
   },
   {
-    name: "a check naming the first of two recorded writes stays with the last write, which can't break it: a recording can place a timer's write under the wrong step",
+    name: "a check naming the first of two recorded writes pairs with the step that recorded it (#811), whose block breaks it",
     serve: () => (req, res) => {
       if (pathOfUrl(req).startsWith("/api/")) return void res.writeHead(200, { "content-type": "application/json" }).end("{}");
       html(res, `<button id="a">A</button><button id="b">B</button><script>for(const id of ['a','b'])document.getElementById(id).onclick=()=>fetch('/api/'+id,{method:'POST'})</script>`);
     },
     journey: (site) => J(site, [NAV_TO("#a"), { step: { kind: "click", target: { css: "#a" }, expect: NOCLAIM }, ...WROTE("/api/a") }, { step: { kind: "click", target: { css: "#b" }, expect: NOCLAIM }, ...WROTE("/api/b") }], { networkChecks: POST("/api/a") }),
-    verdict: "insensitive",
-    reading: ["end-state:0", "insensitive"],
+    verdict: "sensitive",
+    reading: ["end-state:0", "sensitive"],
   },
   {
     name: "a no-store 200 whose body the page never reads: the write was answered",
     serve: answeredUnread(200),
     journey: unreadJourney(200),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["step:2", "sensitive"],
   },
   {
     name: "a no-store 401 whose body the page never reads: the write was answered",
     serve: answeredUnread(401),
     journey: unreadJourney(401),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["step:2", "sensitive"],
   },
   {
@@ -1005,7 +1028,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     name: "a body that ends a moment after its headers is waited for, so the end state reads its effect",
     serve: streaming(1_000, false),
     journey: streamJourney(text("#saved", "YES")),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["end-state:0", "sensitive"],
   },
   {
@@ -1017,7 +1040,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     reason: STILL_OPEN,
   },
   {
-    name: "stated limit, today's reading: a body the page reads and the server holds open reports its first bytes, so past 2 s it reads as answered, proven",
+    name: "stated limit, today's reading: a body the page reads and the server holds open reports its first bytes, so past 2 s it reads as answered, sensitive",
     limit: true,
     serve: () => (req: IncomingMessage, res: ServerResponse): void => {
       if (pathOfUrl(req) === "/api/save") {
@@ -1029,7 +1052,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
       html(res, `<button id="save">Save</button><p id="said"></p><script>document.getElementById('save').onclick=async()=>{const r=await fetch('/api/save',{method:'POST'});document.getElementById('said').textContent='Saved';await r.text()}</script>`);
     },
     journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saved") }, ...WROTE("/api/save") }]),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["step:2", "sensitive"],
   },
   {
@@ -1039,7 +1062,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
       html(res, `<button id="save">Save</button><p id="said"></p><script>document.getElementById('save').onclick=()=>fetch('/api/save',{method:'POST'}).then(()=>{document.getElementById('said').textContent='Saved'})</script>`);
     },
     journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saved") }, ...WROTE("/api/save") }]),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["step:2", "sensitive"],
   },
   {
@@ -1085,14 +1108,14 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     name: "H4: a client's retry after the block window, with no claim on the step",
     serve: retrying(),
     journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: NOCLAIM }, ...WROTE("/api/save") }, { step: { kind: "click", target: { css: "#next" }, expect: NOCLAIM } }], { endState: [SAVED_YES] }),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["end-state:0", "sensitive"],
   },
   {
     name: "H4: a client's retry during a relaxed replay's kept wait",
     serve: retrying(),
     journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saved") }, ...WROTE("/api/save") }], { endState: [SAVED_YES] }),
-    verdict: "proven",
+    verdict: "sensitive",
     under: ["block-write:2", "end-state:0", "sensitive"],
     reading: ["end-state:0", "sensitive"],
   },
@@ -1103,21 +1126,21 @@ const ROWS_EXPERIMENT: readonly Row[] = [
       endState: [SAVED_YES],
       mutationPairs: [{ check: "step:3", mustFailWhen: "block-write:2" }],
     }),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["end-state:0", "sensitive"],
   },
   {
     name: "M1: a repeating POST the Journey never recorded, open as a longer replay closes",
     serve: saving({ saveMs: 0, keepalive: true }),
     journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saved") }, ...WROTE("/api/save") }], { endState: [{ kind: "page", assertion: text("#said", "Saved") }] }),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["end-state:0", "sensitive"],
   },
   {
     name: "M2: a claim on optimistic text with a short wait, on a step with a slow request check",
     serve: saving({ saveMs: 8_000, optimistic: true }),
     journey: (site) => J(site, [NAV_TO("#save"), { step: { kind: "click", target: { css: "#save" }, expect: text("#said", "Saving"), waitFor: { maxMs: 2_000 } }, expectRequests: POST("/api/save") }]),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["step:2", "sensitive"],
   },
   {
@@ -1143,14 +1166,14 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     reading: ["end-state:0", "insensitive"],
   },
   // KNOWN LIMIT, NOT DESIRED BEHAVIOUR: this row pins a reading so a change to it is seen, and does not endorse it.
-  // A's timer sends the write. The recording credits it to B, by time. C sends another write and is the last one, so
-  // the end state is paired with C's mutations. block-write:4 aborts every write sent during C's window, the timer's
-  // included, so the check fails and the re-run reproduces it, though C had nothing to do with that write. skip:4 passes.
+  // A's timer sends the write. The recording credits it to B, by time. Since #811 the check pairs with B, the one step
+  // whose recorded delta names it, not with C, the last write. B's block cannot reach a write sent in C's window, so the
+  // check holds under it and the proof reads insensitive: no longer a false proven, but still credited to the wrong step.
   // How the timing holds: C's button stays disabled until the timer has sent its write, so C's window stays open past it
   // however slowly C runs, with no claim to pair. The last step waits on the same thing, so skip:4 reaches the end state
   // with the write answered. What is left is a margin, not an ordering: C has to start within SLOW_WRITE_MS of A's click.
   {
-    name: "stated limit, today's reading: a timer's write, recorded under the next step, is blocked in the last write's window, so that step's block proves a check it had no part in, proven",
+    name: "stated limit, today's reading: a timer's write, recorded under the next step, pairs with that step, whose block cannot break it, insensitive",
     limit: true,
     serve: () => (req: IncomingMessage, res: ServerResponse): void => {
       if (pathOfUrl(req).startsWith("/api/")) {
@@ -1160,10 +1183,8 @@ const ROWS_EXPERIMENT: readonly Row[] = [
       html(res, `<button id="a">A</button><button id="b">B</button><button id="c" disabled>C</button><p id="said"></p><script>const $=(id)=>document.getElementById(id);$('a').onclick=()=>{setTimeout(()=>{fetch('/api/sync',{method:'POST'}).catch(()=>{}).finally(()=>{$('c').disabled=false;$('said').insertAdjacentHTML('beforeend','<i id="synced">synced</i>')})},${SLOW_WRITE_MS})};$('b').onclick=()=>{$('said').append('B')};$('c').onclick=()=>fetch('/api/last',{method:'POST'})</script>`);
     },
     journey: (site) => J(site, [NAV_TO("#a"), { step: { kind: "click", target: { css: "#a" }, expect: NOCLAIM } }, { step: { kind: "click", target: { css: "#b" }, expect: NOCLAIM }, ...WROTE("/api/sync") }, { step: { kind: "click", target: { css: "#c" }, expect: NOCLAIM }, ...WROTE("/api/last") }, { step: { kind: "waitFor", target: { css: "#synced" }, state: "visible" } }], { networkChecks: POST("/api/sync") }),
-    verdict: "proven",
-    reading: ["end-state:0", "sensitive"],
-    under: ["block-write:4", "end-state:0", "sensitive"],
-    passedUnder: "skip:4",
+    verdict: "insensitive",
+    reading: ["end-state:0", "insensitive"],
   },
   // KNOWN LIMIT, NOT DESIRED BEHAVIOUR: this row pins a reading so a change to it is seen, and does not endorse it.
   // An unread clone makes Chromium report a no-store body's bytes as they arrive, which looks the same as a complete body. The write reads as answered after 2 s while the server works on.
@@ -1172,7 +1193,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     limit: true,
     serve: heldSave({ headers: { "cache-control": "no-store" }, first: (res) => void res.write('{"a"'), click: "fetch('/api/save',{method:'POST'}).then((r)=>{window.kept=r.clone();said()})" }),
     journey: heldJourney,
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["end-state:0", "sensitive"],
   },
   // KNOWN LIMIT, NOT DESIRED BEHAVIOUR: this row pins a reading so a change to it is seen, and does not endorse it.
@@ -1182,7 +1203,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     limit: true,
     serve: heldSave({ headers: { "cache-control": "no-store" }, first: (res) => void res.write('{"a"'), click: "navigator.sendBeacon('/api/save','x');said()" }),
     journey: heldJourney,
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["end-state:0", "sensitive"],
   },
   {
@@ -1190,7 +1211,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
     limit: true,
     serve: oneSlow("skip:3"),
     journey: (site) => J(site, oneSlowSteps({}), { mutationPairs: [{ check: "step:3", mustFailWhen: "skip:3" }] }),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["step:3", "sensitive"],
   },
   {
@@ -1201,7 +1222,7 @@ const ROWS_EXPERIMENT: readonly Row[] = [
       html(res, `<button id="save">Save</button><p id="row">row: ${ctx.label === "skip:2" ? "gone" : "present"}</p><script>document.getElementById('save').onclick=()=>{}</script>`);
     },
     journey: (site) => crossingJourney(site, { mutationPairs: [{ check: "end-state:0", mustFailWhen: "skip:2" }] }, {}),
-    verdict: "proven",
+    verdict: "sensitive",
     reading: ["end-state:0", "sensitive"],
   },
   {

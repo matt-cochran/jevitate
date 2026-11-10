@@ -15,6 +15,7 @@ import { buildCatalogStatus, renderAnalysisGroups } from "./catalog-review.js";
 import { catalogRefIssues, journeyRefIssues, refIssueFindings } from "./catalog-refs.js";
 import { buildJourneyReview } from "./journey-review.js";
 import { currentJourneyProofHash } from "./journey-proof-context.js";
+import { readProofVerdict } from "./journey-verify-report.js";
 import { advisoryReadRequests } from "./target-config.js";
 import { readVerifyRecord } from "./journey-review-store.js";
 import { JEV_SKIPPED_PASS_REAL, jevLayerOf, type JevSetup } from "./jev-advisor.js";
@@ -398,7 +399,9 @@ async function updateAdvice(catalog: Catalog, subjectRef: ItemRef | undefined): 
     const related = [`journey:${j.id}`, ...(links.job === undefined ? [] : [`job:${links.job.id}`]), ...(links.persona === undefined ? [] : [`persona:${links.persona.id}`])];
     if (subjectRef !== undefined && !related.includes(subjectRef)) continue;
     const rec = await readVerifyRecord(catalog.journeysDir, j.id);
-    if (rec === null || rec.verdict === "proven") continue;
+    // A 0.29.0 receipt's legacy word reads as `sensitive` (d-vocab-migration).
+    const verdict = rec === null ? null : readProofVerdict(rec.verdict);
+    if (rec === null || verdict === "sensitive") continue;
     // #523: a proof is on the current version unless the EXECUTABLE content changed (its proofHash);
     // a record from before 0.14.0 has none and falls back to the whole-Journey review hash.
     const current = rec.proofHash !== undefined ? rec.proofHash === currentJourneyProofHash(j.journey, rec.proofContext, advisoryReadRequests(j.journey)) : rec.contentHash === j.contentHash;
@@ -406,13 +409,26 @@ async function updateAdvice(catalog: Catalog, subjectRef: ItemRef | undefined): 
       f(
         `update.proof:${j.id}`,
         "warn",
-        `consider updating journey '${j.id}'${links.job === undefined ? "" : ` (job '${links.job.id}')`} because its last mutation proof is ${rec.verdict} (${rec.at}${current ? "" : ", on an older version"})${rec.reason === undefined ? "" : `: ${rec.reason}`}`,
-        rec.verdict === "insensitive" ? "able to be validated" : "feasible",
+        `consider updating journey '${j.id}'${links.job === undefined ? "" : ` (job '${links.job.id}')`} because its last mutation proof is ${verdict} (${rec.at}${current ? "" : ", on an older version"})${rec.reason === undefined ? "" : `: ${rec.reason}`}${jobAttainmentNote(catalog, links.job?.id)}`,
+        verdict === "insensitive" ? "able to be validated" : "feasible",
         { fix: `jevitate journey verify ${j.id} --mutate, then fix the Journey or its job`, items: related },
       ),
     );
   }
   return out;
+}
+
+/**
+ * Owner decision "Proof role": the job's done check is the strict gate and the proof is checks strength,
+ * so a proof finding says what the job's attainment rests on.
+ */
+function jobAttainmentNote(catalog: Catalog, jobId: string | undefined): string {
+  if (jobId === undefined) return "; it links no job, so no done check says whether the job happened";
+  const job = findJob(catalog, jobId);
+  if (job === undefined) return "";
+  return job.job.done === undefined
+    ? `; job '${jobId}' declares no done check, so its attainment is unverified`
+    : `; job '${jobId}' has a done check, which gates its runs (the proof is checks strength)`;
 }
 
 async function suggestMissingJobs(catalog: Catalog, subjectRef: ItemRef | undefined, setup: JevSetup | undefined): Promise<Finding[]> {

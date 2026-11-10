@@ -11,6 +11,7 @@ import {
   type SuiteExploreOptionName,
   type SuiteExploreOptions,
 } from "./suite-explore-options.js";
+import { secretParamAtRestMessage, secretParamsCarriedBy } from "./secret-params.js";
 import { SessionFileInProjectError, assertSessionFileOutsideProject } from "./project-dir.js";
 
 /**
@@ -481,6 +482,9 @@ function journeyOf(r: Reader, v: unknown, path: string): SuiteJourney {
     if (!p.unique.includes("{run}")) r.fail(at, 'the unique template must contain "{run}"');
     resolvedParams[key] = { unique: p.unique };
   }
+  // #827: a credential-named parameter's value never sits in the suite file (one the Journey declares secret is refused at preflight).
+  const atRest = secretParamsCarriedBy(null, Object.fromEntries(Object.entries(resolvedParams).map(([k, p]) => [k, typeof p === "string" ? p : p.unique])));
+  if (atRest.length > 0) r.fail(`${path}.params`, secretParamAtRestMessage(atRest, "the suite file"));
   const routes = r.strings(v, "routes", path);
   const emulation = r.emulation(v, path);
   const env = r.string(v, "env", path, true);
@@ -561,6 +565,9 @@ function missionOf(r: Reader, v: unknown, path: string): SuiteMission {
   if (rawStep !== undefined && atStep === undefined) r.fail(`${path}.atStep`, "must be a positive step number or an anchor name");
   const params = v.params;
   if (params !== undefined && (!isRecord(params) || !Object.values(params).every((p) => typeof p === "string"))) r.fail(`${path}.params`, "must be an object of string values");
+  // #827: a credential-named parameter's value never sits in the suite file.
+  const atRest = params === undefined ? [] : secretParamsCarriedBy(null, params);
+  if (atRest.length > 0) r.fail(`${path}.params`, secretParamAtRestMessage(atRest, "the suite file"));
   const env = r.string(v, "env", path, true);
   const baseUrl = r.url(v, "baseUrl", path, true);
   const anchored = fromJourney !== undefined || rawStep !== undefined || params !== undefined || env !== undefined || baseUrl !== undefined;

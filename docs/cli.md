@@ -275,11 +275,14 @@ run a campaign spec (JSON): replay each job's promoted Journey (discovery), then
 | `--log-scope <regex|substring>` | attribute only backend log lines matching this (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--log-source <spec>` | backend log source: file:<path> \| docker:<container> \| cmd:<command> (needs --allow-log-cmd) (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--log-triage` | record each mission's signal timeline and attach only the related lines to each defect (#313) (forwarded to every mission, as explore's) |  |  |  |  |
+| `--no-done-check` | H5 (0.30.0): skip each discovery replay's job done check; the job reads unverified (basis no-check), which makes the campaign exit 2 unless project.json doneCheckPolicy is advisory |  |  |  |  |
 | `--out <dir>` | the campaign's directory: every mission's results, campaign.json and campaign.md (default .jevitate/logs/<date>/campaign-<stamp>) |  |  |  |  |
 | `--paid <pattern>` | an app control that costs money or credits (repeatable) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--real` | use live Jev + OpenRouter gateways for the missions (requires keys) | `false` |  |  |  |
 | `--record-video [dir]` | record a video of each mission's browser context (forwarded to every mission, as explore's) |  |  |  |  |
+| `--require-done-check` | H5 (0.30.0): a discovery replay whose job is unverified makes the campaign exit 2 even when project.json doneCheckPolicy is advisory |  |  |  |  |
 | `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
+| `--secret-field <binding>` | a secret parameter from the environment, off the command line (repeatable): '<label\|testId\|id\|name>=<value>=env:<VAR>' matched on the recorded step that types it, e.g. 'label=Password=env:APP_PASSWORD', or 'param=<name>=env:<VAR>' for any secret parameter by name, a token in a navigate URL included. With --env/--base-url the environment's secretFields in ~/.jevitate/targets.json apply the same way; --param wins. Each job's replay and missions get the bindings for its Journey; a secret value in the spec's params is refused (it sits at rest) | `[]` |  |  |  |
 | `--server-log-drain-ms <ms>` | how long to keep tailing --log-source after a mission's last action (default 3000) (forwarded to every mission, as explore's) |  |  |  |  |
 | `--skip-preflight` | do not check the campaign's preconditions first (start URLs reachable, sessions signed in, no allow-list origin mismatch in discovery) — by default a failed check refuses the campaign (exit 64) before any mission | `false` |  |  |  |
 | `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
@@ -423,9 +426,12 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 | `--max-brittle-steps <n>` | #470: opt-in locator gate — a Journey item with more than n brittle steps (targets that miss the project's testIdAttributes convention) is a gating finding. Without it locator health is advisory only |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
+| `--no-done-check` | H5 (0.30.0): skip each Journey item's job done check; every job reads unverified (basis no-check), which holds the check at exit 2 unless project.json doneCheckPolicy is advisory |  |  |  |  |
 | `--out <dir>` | output dir: results/, junit.xml, jevitate.sarif, report.md, check.json | `jevitate-check` |  |  |  |
 | `--real` | use live Jev + OpenRouter gateways for goals and model-driven missions (requires keys) | `false` |  |  |  |
 | `--require-approvals` | #437: also fail (an `approval` finding, exit 1, in JUnit + SARIF) when a promoted Journey or an approved persona/job has a missing or stale approval, or one made over a channel not allowed |  |  |  |  |
+| `--require-done-check` | H5 (0.30.0): a Journey item that passes with an unverified job holds the check at exit 2 even when project.json doneCheckPolicy is advisory |  |  |  |  |
+| `--require-trust` | #799: fail (exit 1, naming the environment) when an environment's `trust` in .jevitate/environments.json differs from the last commit; a change of trust is committed (PR-reviewed) first |  |  |  |  |
 | `--sarif <path>` | SARIF path (default <out>/jevitate.sarif) |  |  |  |  |
 | `--self-heal <mode>` | #453: fail-closed \| hybrid \| full — re-run a Journey that quarantined ONCE with a change-aware self-heal (needs --changes and/or --change-note, and --real/--fake-ai); a proposed revision is pending review (exit 5), never a pass | `fail-closed` |  |  |  |
 | `--suite <file>` | the suite JSON (targets, promoted Journeys, invariant files, goals, missions, budget) |  |  | yes |  |
@@ -663,6 +669,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--issue-repo <owner/name>` | the system-under-test repo findings for THIS target are filed to |  |  |  |  |
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--jevitate-repo <owner/name>` | where jevitate engine findings are filed (default matt-cochran/jevitate) |  |  |  |  |
+| `--job <id>` | (--strategy goal) #800: verify the goal against this job's done check from the project's jobs.json (jobs[].done), read in a fresh browser context after the model's done (and once before the run). The result carries job: {attainment, basis}; a check that reads false is not-achieved |  |  |  |  |
 | `--job-wait-ms <ms>` | goal and usability: while the page shows an in-progress status ("Simulating…", aria-busy, a job "is running"), waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000); it also bounds a busy indicator the app visibly keeps working behind (live progress, a job poll) or declares (aria-busy, when this flag is set) before it is a hang, and a wait the page documents ("usually takes a minute") can raise it |  |  |  |  |
 | `--journeys-dir <path>` | with --from-journey: the journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit the JSON envelope (default: a human summary) |  |  |  |  |
@@ -703,6 +710,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--reply-max-chars <n>` | conversational pages: cap on each generated chat message (goal and usability; default 300) |  |  |  |  |
 | `--reply-quiet-ms <ms>` | conversational pages: how long a reply must hold still (no new text, no busy sign) before it is read as complete (goal and usability; default 1000). Raise it for an assistant that answers in several parts (a sentence, then a card a moment later) |  |  |  |  |
 | `--reply-wait-ms <ms>` | conversational pages: how long to keep waiting for a reply while the page shows no sign of working on one (goal and usability; default 60000). While a request the message started is in flight, a busy indicator shows, or the reply is still growing, the wait continues up to --reply-ceiling-ms |  |  |  |  |
+| `--require-done-check` | (--strategy goal) #800: a pass no done check verified (no --job, or an unreadable or already-true check) exits 2 even when project.json doneCheckPolicy is advisory; a pass verified only by --success counts as unverified too |  |  |  |  |
 | `--route <glob>` | in-scope route glob (repeatable), e.g. /thread/** — for --feature it replaces the default scope (the start URL's route and everything under it); it widens --strategy adversarial/coverage/exploratory beyond the start URL's route | `[]` |  |  |  |
 | `--save-storage-state <file>` | write the context's storageState (cookies + origin storage) here when the run ends; mode 0600, contents never logged. Useful with a rotating refresh token: --storage-state's file goes stale after one authenticated run refreshes it, so point --save-storage-state at the SAME file (or a new one) to keep it usable for the next run. Written on every exit path -- a crash or a SIGTERM/SIGINT kill included (#159), not only a clean end -- but never over a good file with a session that already looks lost/logged-out; the last known-good state is used instead, or nothing is written if none was ever captured. |  |  |  |  |
 | `--scope <mode>` | --strategy coverage/exploratory: 'app' widens containment to the whole app (same as --route '/**'); default: the start URL's route plus --route globs |  |  |  |  |
@@ -888,7 +896,7 @@ the HITL inbox from the CLI — the same tools `jevitate mcp` serves (approve/ca
 jevitate inbox approve [options] <id>
 ```
 
-always refused (MCP approve_action): only a human can approve an inbox item, in `jevitate ui`
+a person at a terminal approves a held run (#793): shows what is held and asks for its id typed back; anything else is refused as MCP approve_action refuses — other inbox items are answered in `jevitate ui`
 
 **Arguments**
 
@@ -900,8 +908,10 @@ always refused (MCP approve_action): only a human can approve an inbox item, in 
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--holds-dir <path>` | the holds directory (default: .jevitate/logs/holds) |  |  |  |  |
 | `--inbox-dir <path>` | inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
+| `--reject` | answer the held run with a rejection instead (it then never resumes) |  |  |  |  |
 
 ### inbox cancel
 
@@ -1022,6 +1032,41 @@ ask a human to provide something back to the agent — a 'handback' item; only q
 | `--run <id>` | the run this item belongs to (required) |  |  |  |  |
 | `--step <step>` | the step it stopped at (required) |  |  |  |  |
 | `--target-url <url>` | the page it concerns |  |  |  |  |
+
+### inbox resume
+
+```
+jevitate inbox resume [options] <id>
+```
+
+continue a held run a person approved (#793), from the step it was held at — the steps before it are not run again; refused unless the Journey, the parameters, the target and the pending action all match the hold (E_HOLD_BINDING)
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
+| `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
+| `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
+| `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
+| `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
+| `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
+| `--headed` | show the browser |  |  |  |  |
+| `--holds-dir <path>` | the holds directory (default: .jevitate/logs/holds) |  |  |  |  |
+| `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
+| `--inbox-dir <path>` | inbox store directory (default: ~/.jevitate/inbox — the dir `jevitate mcp` and `jevitate ui` use) |  |  |  |  |
+| `--journeys-dir <path>` | where the Journey is (default: the project's journeys) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
+| `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
+| `--param <name=value>` | a parameter the run was held with (repeatable): the same set, or the hold refuses | `{}` |  |  |  |
+| `--storage-state <file>` | seed the resumed session from this Playwright storageState file |  |  |  |  |
 
 ### inbox show
 
@@ -1341,7 +1386,9 @@ draft each step's objective/expected result (and the goal/success criteria when 
 | `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
 | `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--real` | draft with the live OpenRouter generation gateway (requires keys) | `false` |  |  |  |
+| `--reviewed-hash <hash>` | apply only the exact annotation transaction returned by --status |  |  |  |  |
 | `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
+| `--status` | read-only native annotation transaction status; no replay or approval |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start the replay authenticated; must exist |  |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
 
@@ -1400,6 +1447,7 @@ jevitate journey chain [options]
 | `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
 | `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--requests <file>` | JSON Lines file of approved requests ({commentId, account, replyText}) |  |  | yes |  |
+| `--secret-field <binding>` | a secret parameter from the environment, off the command line (repeatable): '<label\|testId\|id\|name>=<value>=env:<VAR>' matched on the recorded step that types it, e.g. 'label=Password=env:APP_PASSWORD', or 'param=<name>=env:<VAR>' for any secret parameter by name, a token in a navigate URL included. With --env/--base-url the environment's secretFields in ~/.jevitate/targets.json apply the same way; --param wins. Binds the discover (--from) Journey's secret parameters | `[]` |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start each run authenticated; must exist |  |  |  |  |
 | `--to <id>` | the prepare-only reply Journey, run once per matched request |  |  | yes |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
@@ -1449,6 +1497,7 @@ replay a Journey as a narrated demo (goal, step objectives as captions, target h
 | `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
 | `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
+| `--secret-field <binding>` | a secret parameter from the environment, off the command line (repeatable): '<label\|testId\|id\|name>=<value>=env:<VAR>' matched on the recorded step that types it, e.g. 'label=Password=env:APP_PASSWORD', or 'param=<name>=env:<VAR>' for any secret parameter by name, a token in a navigate URL included. With --env/--base-url the environment's secretFields in ~/.jevitate/targets.json apply the same way; --param wins | `[]` |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start the replay authenticated; must exist |  |  |  |  |
 | `--video <file>` | write the demo video here (.webm) and its subtitles beside it (.vtt) |  |  |  |  |
@@ -1571,6 +1620,7 @@ one-time repo rewrite, CLI only. #467: --step-ids mints a stable step id on ever
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
 | `--param <kv>` | #497: with --labels, a replay param as key=value (repeatable; each Journey gets only the ones it declares) | `{}` |  |  |  |
 | `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
+| `--secret-field <binding>` | with --labels: a secret parameter from the environment, off the command line (repeatable): '<label\|testId\|id\|name>=<value>=env:<VAR>' matched on the recorded step that types it, e.g. 'label=Password=env:APP_PASSWORD', or 'param=<name>=env:<VAR>' for any secret parameter by name, a token in a navigate URL included. With --env/--base-url the environment's secretFields in ~/.jevitate/targets.json apply the same way; --param wins | `[]` |  |  |  |
 | `--step-ids` | mint missing step ids |  |  |  |  |
 | `--storage-state <file>` | #497: with --labels, Playwright storageState JSON to start the replays authenticated; must exist |  |  |  |  |
 
@@ -1633,6 +1683,32 @@ jevitate journey publish [options] <id>
 | `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--to <source>` | registered source name to publish into |  |  | yes |  |
 
+### journey queue
+
+```
+jevitate journey queue [options] <id>
+```
+
+queue a call of a PROMOTED Journey for `jevitate mission run` to run (MCP queue_journey) — id, its content hash, non-secret params, env; never a secret value
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
+| `--dir <path>` | mission queue directory (default: ~/.jevitate/missions/queue — the queue `jevitate mcp` and `mission run` use) |  |  |  |  |
+| `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--no-done-check` | #800: the queued run skips the linked job's done check (as journey run --no-done-check); stored on the call |  |  |  |  |
+| `--param <kv>` | a non-secret param as key=value (repeatable); a secret-named one is refused (E_SECRET_PARAM_IN_QUEUE): the run meets a secret with its secret mode | `{}` |  |  |  |
+| `--require-done-check` | #800: the queued run exits 2 on an unverified job even under the advisory policy (as journey run --require-done-check); stored on the call |  |  |  |  |
+
 ### journey readiness
 
 ```
@@ -1672,6 +1748,7 @@ report a Journey's (or a linked pair's) technical readiness: static checks, and 
 | `--param <kv>` | param as key=value (repeatable; required ones are refused by name before any browser) | `{}` |  |  |  |
 | `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--requests <file>` | JSON Lines file of approved requests (required for a pair's replay/prove, as journey chain) |  |  |  |  |
+| `--secret-field <binding>` | a secret parameter from the environment, off the command line (repeatable): '<label\|testId\|id\|name>=<value>=env:<VAR>' matched on the recorded step that types it, e.g. 'label=Password=env:APP_PASSWORD', or 'param=<name>=env:<VAR>' for any secret parameter by name, a token in a navigate URL included. With --env/--base-url the environment's secretFields in ~/.jevitate/targets.json apply the same way; --param wins | `[]` |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start each replay authenticated (as journey run) |  |  |  |  |
 | `--with <toId>` | a linked pair: <id> produces, <toId> consumes (#582 handoff is checked) |  |  |  |  |
 
@@ -1693,13 +1770,16 @@ a human-readable review sheet for promotion sign-off: summary, steps, side effec
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--base-url <url>` | M5: judge the mutation proof's freshness for this origin, as `journey verify --base-url` ran it; default: the Journey's recorded site |  |  |  |  |
 | `--dir <path>` | deprecated: use --journeys-dir <path> (same meaning); default: the repo's .jevitate/journeys, outside a repo ~/.jevitate/journeys |  |  |  |  |
+| `--env <name>` | M5: judge the mutation proof's freshness for this environment's target (environments.json), as `journey verify --env` ran it; default: the Journey's recorded site |  |  |  |  |
 | `--full` | #496: show every detail section: catalog analysis, the full lint list, locator health, provenance, the full change diff |  |  |  |  |
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
 | `--json` | emit a JSON envelope (the schema-checked sheet) |  |  |  |  |
 | `--markdown` | render the sheet as Markdown |  |  |  |  |
 | `--out <file>` | write the sheet (JSON with --json, Markdown with --markdown, else text) to this file |  |  |  |  |
+| `--pre-approval` | read-only native candidate and pending owner actions; requires --json; never grants approval |  |  |  |  |
 | `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--readiness` | #434: add the Readiness section — deterministic checks with INCOSE GtWR rule findings, and (with --real and a judgment key) advisory Jev questions with probabilities |  |  |  |  |
 | `--real` | #434/#435: ask Jev (advisory; never blocks on its own) — readiness questions and catalog pair classifications, cached by content hash. Without a judgment key the Jev layer is skipped, the deterministic layer still runs |  |  |  |  |
@@ -1754,17 +1834,69 @@ jevitate journey run [options] <id>
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
+| `--no-done-check` | #800: skip the linked job's done check (two fresh-session readings, before step 1 and after the end state); the job reads unverified (basis no-check), which exits 2 unless project.json doneCheckPolicy is advisory |  |  |  |  |
 | `--param <kv>` | param as key=value (repeatable); a secret one is on the command line: use --secret-field | `{}` |  |  |  |
 | `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--real` | use live Jev + OpenRouter gateways for self-heal (requires keys) | `false` |  |  |  |
 | `--record-video [dir]` | record a video of each browser context (works headless too); default: next to the run's result; listed as videoPaths |  |  |  |  |
+| `--require-done-check` | #800: an unverified job (no done check, or one already true) exits 2 even when project.json doneCheckPolicy is advisory |  |  |  |  |
+| `--retry` | #795: this run retries an earlier attempt: the job's done check is read first, in a fresh session, and a job that already reads true is not run again (E_RECONCILE_ALREADY_DONE, exit 2; an unreadable check is E_RECONCILE_UNREADABLE, exit 2) |  |  |  |  |
 | `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
-| `--secret-field <binding>` | a secret parameter from the environment, off the command line: '<label\|testId\|id\|name>=<value>=env:<VAR>' (repeatable), matched on the recorded step that types it, e.g. 'label=Password=env:APP_PASSWORD'. The environment's secretFields in ~/.jevitate/targets.json apply the same way; --param wins | `[]` |  |  |  |
+| `--secret-field <binding>` | a secret parameter from the environment, off the command line (repeatable): '<label\|testId\|id\|name>=<value>=env:<VAR>' matched on the recorded step that types it, e.g. 'label=Password=env:APP_PASSWORD', or 'param=<name>=env:<VAR>' for any secret parameter by name, a token in a navigate URL included. With --env/--base-url the environment's secretFields in ~/.jevitate/targets.json apply the same way; --param wins | `[]` |  |  |  |
+| `--secret-mode <mode>` | 0.30.0: how a handback step (or a secret nobody supplied) is met on an automation-mode target: auto (the target's targets.json secretFields type it on its own origin, else the run holds for a person: jevitate inbox resume <holdId> opens it headed) \| vault-autofill (the binding, or refuse E_SECRET_MODE_UNAVAILABLE) \| visible-handback (always hold for a person) \| fail-closed (never wait: quarantine at the step). A test-mode target never waits: E_HUMAN_STEP_IN_TEST_MODE | `auto` | `auto`, `fail-closed`, `vault-autofill`, `visible-handback` |  |  |
 | `--self-heal <mode>` | self-heal policy mode: fail-closed \| hybrid \| full (#453: hybrid/full need --changes and/or --change-note; a heal is proposed for review, exit 5 — never a pass) | `fail-closed` |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--step-response-timeout <ms>` | #486: how long a step's responseStatus check waits for a matching request that was sent but has no response yet, e.g. a cold start after a deploy (default 15000). A late 2xx is an advisory slow-step finding (slowSteps), not a quarantine; a non-2xx, or no response within the bound, fails. A step's own responseTimeoutMs overrides it; at most 300000 |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start the session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist |  |  |  |  |
 | `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
+| `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
+
+### journey shorten
+
+```
+jevitate journey shorten [options] <id>
+```
+
+authoring time: search for a shorter path to the same job by removing steps (no model); every candidate is a full replay with the fixtures reset around it, decided only by the job's done check in a fresh context; never drops a confirm/agree/accept click. Writes an UNPROMOTED draft and reports the shortest found within budget
+
+**Arguments**
+
+| Argument | Description | Required | Default | Choices |
+| --- | --- | --- | --- | --- |
+| `id` |  | yes |  |  |
+
+**Options**
+
+| Flags | Description | Default | Choices | Required | Env |
+| --- | --- | --- | --- | --- | --- |
+| `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
+| `--allow <origin>` | an extra origin the replay may reach, e.g. the API of a split-origin app (repeatable; added to the recorded site, the environment's origins and the Journey's metadata.allowedOrigins) | `[]` |  |  |  |
+| `--allow-shell-hooks` | opt in to running --before/--after (operator commands; never model-chosen) | `false` |  |  |  |
+| `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
+| `--before <cmd>` | operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret} |  |  |  |  |
+| `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
+| `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
+| `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
+| `--budget <n>` | replays the search may spend, the recorded path's included (default 30) |  |  |  |  |
+| `--device <name>` | emulate a Playwright registered device by name, e.g. --device "iPhone 13" (viewport + scale + mobile/touch + UA; mutually exclusive with --viewport) |  |  |  |  |
+| `--env <name>` | run against a named environment from the repo's .jevitate/environments.json (default: the Journey's recorded site) |  |  |  |  |
+| `--extension <dir>` | load this unpacked browser extension (repeatable; a directory with manifest.json). Its chrome-extension://<id> pages are allowed and navigable, e.g. --url chrome-extension://<id>/sidepanel.html; headless uses Chromium's new headless | `[]` |  |  |  |
+| `--fixture-identity <name=storageState>` | #243: a named identity fixture steps can authenticate as (`auth.identity`), separate from the mission's own session — e.g. mint an invite as the owner, run the mission cold (repeatable) | `[]` |  |  |  |
+| `--fixtures <file>` | mission fixtures JSON {setup:[...], restore:[...]} (#140/#144): HTTP steps to an --allow origin, authenticated from --storage-state/--secret-field, run before the mission and restored after it — and around every replay. Outputs bind as ${setup.<name>} |  |  |  |  |
+| `--geolocation <lat,lng>` | place the browser at this position, e.g. --geolocation 41.6376,-70.9036 (optional third value: accuracy in metres); the geolocation permission is granted to the run's allowed origins only |  |  |  |  |
+| `--hook-timeout-ms <ms>` | timeout for each --before/--after hook (default 60000; the process group is killed) |  |  |  |  |
+| `--ignore-host-load` | start even when the host is starved (load >= 4/core or < 512 MiB free) instead of refusing with E_HOST_STARVED; the run is throttled and its result records it |  |  |  |  |
+| `--job <jobId>` | the catalog job (.jevitate/jobs.json) whose done check decides every candidate |  |  | yes |  |
+| `--journeys-dir <path>` | the Journey store only; wins over --project for journeys, while the catalog still comes from --project |  |  |  |  |
+| `--json` | emit a JSON envelope |  |  |  |  |
+| `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
+| `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
+| `--out-id <id>` | the draft Journey's id (default <id>-shortest; refused when it exists) |  |  |  |  |
+| `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
+| `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
+| `--secret-field <binding>` | a secret parameter from the environment, off the command line (repeatable): '<label\|testId\|id\|name>=<value>=env:<VAR>' matched on the recorded step that types it, e.g. 'label=Password=env:APP_PASSWORD', or 'param=<name>=env:<VAR>' for any secret parameter by name, a token in a navigate URL included. With --env/--base-url the environment's secretFields in ~/.jevitate/targets.json apply the same way; --param wins | `[]` |  |  |  |
+| `--step-response-timeout <ms>` | #486: how long a step's responseStatus check waits for a matching request that was sent but has no response yet (default 15000; a step's own responseTimeoutMs overrides it; at most 300000), as journey run |  |  |  |  |
+| `--storage-state <file>` | Playwright storageState JSON to start each replay (and each done-check reading) authenticated (default: the environment's session) |  |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
 
 ### journey verify
@@ -1788,6 +1920,7 @@ preview or prove that each Journey assertion fails when its outcome is absent
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow <origin>` | an extra origin the replay may reach, e.g. the API of a split-origin app (repeatable; added to the recorded site, the environment's origins and the Journey's metadata.allowedOrigins) | `[]` |  |  |  |
 | `--allow-shell-hooks` | opt in to running --before/--after (operator commands; never model-chosen) | `false` |  |  |  |
+| `--app-version <label>` | the app's release label the proof runs against, bound into its receipt (1-64 of [A-Za-z0-9._+-]); also JEVITATE_APP_VERSION. A reader that sets another reads the proof stale |  |  |  |  |
 | `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
 | `--before <cmd>` | operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret} |  |  |  |  |
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
@@ -1811,6 +1944,7 @@ preview or prove that each Journey assertion fails when its outcome is absent
 | `--plan` | print the static mutation/assertion plan without opening a browser |  |  |  |  |
 | `--project <path>` | the project: a .jevitate directory or the directory containing it; sets the catalog dir and the default journeys dir |  |  |  |  |
 | `--resume` | with --mutate: continue an interrupted proof of the same Journey and configuration, or one that ended inconclusive on errored replays, reusing finished pairs after the base replay passes again and running errored pairs again; any mismatch, a damaged or over-24h checkpoint, or a live verifier is refused and never starts over |  |  |  |  |
+| `--secret-field <binding>` | a secret parameter from the environment, off the command line (repeatable): '<label\|testId\|id\|name>=<value>=env:<VAR>' matched on the recorded step that types it, e.g. 'label=Password=env:APP_PASSWORD', or 'param=<name>=env:<VAR>' for any secret parameter by name, a token in a navigate URL included. With --env/--base-url the environment's secretFields in ~/.jevitate/targets.json apply the same way; --param wins | `[]` |  |  |  |
 | `--status` | read a proof's durable progress and whether its verifier is live, exited or stale; no browser, no hook, nothing of the app's |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start each replay authenticated (as journey run) |  |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
@@ -1957,6 +2091,7 @@ jevitate load run [options] <journeyId>
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
 | `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
+| `--secret-field <binding>` | a secret parameter from the environment, off the command line (repeatable): '<label\|testId\|id\|name>=<value>=env:<VAR>' matched on the recorded step that types it, e.g. 'label=Password=env:APP_PASSWORD', or 'param=<name>=env:<VAR>' for any secret parameter by name, a token in a navigate URL included. With --env/--base-url the environment's secretFields in ~/.jevitate/targets.json apply the same way; --param wins | `[]` |  |  |  |
 | `--seed <n>` | master RNG seed | `1` |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start every actor's session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist |  |  |  |  |
 | `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
@@ -2107,6 +2242,7 @@ enqueue an exploration mission against a PROMOTED target — only queues; `missi
 | `--feature <name>` | feature: the capability to test (goal-based: the objective) |  |  |  |  |
 | `--goal <text>` | goal-based: the objective (exactly one of --goal/--feature/--route) |  |  |  |  |
 | `--invariants <file>` | app-declared invariants JSON file (the `explore --invariants` format; probes GET/HEAD on the target's origins; no authFrom.secret) |  |  |  |  |
+| `--job <id>` | goal-based with --goal (#800): the catalog job (.jevitate/jobs.json) whose done check verifies the run, read in fresh contexts before the run and after each proposed done (`explore --job`) |  |  |  |  |
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-actions <n>` | budget: max actions (bounded by the queue's ceiling) |  |  |  |  |
 | `--max-candidates <n>` | budget: max candidates |  |  |  |  |
@@ -2115,6 +2251,7 @@ enqueue an exploration mission against a PROMOTED target — only queues; `missi
 | `--min-distinct-states <n>` | goal-based (#424): the minimum distinct page states before the model may conclude (`explore --min-distinct-states`) |  |  |  |  |
 | `--persona <name>` | run as this persona: its session in ~/.jevitate/targets.json (personas) for the target's origin — a name, never a path |  |  |  |  |
 | `--record-video` | record a video of the run (headless too), written next to its result; listed as videoPaths |  |  |  |  |
+| `--require-done-check` | goal-based with --goal (#800): an unverified job (no done check, or one already true) exits 2 even when project.json doneCheckPolicy is advisory |  |  |  |  |
 | `--route <glob>` | coverage/exploratory/adversarial/feature: an in-scope route glob, e.g. /thread/** (goal-based: the objective) |  |  |  |  |
 | `--screenshots [mode]` | masked screenshots + index.md next to the result: screens (default, one per distinct screen) \| steps (one per step) |  |  |  |  |
 | `--strategy <strategy>` | goal-based \| coverage \| exploratory \| adversarial \| feature (required) |  | `goal-based`, `coverage`, `exploratory`, `adversarial`, `feature` |  |  |
@@ -2128,7 +2265,7 @@ enqueue an exploration mission against a PROMOTED target — only queues; `missi
 jevitate mission result [options] <id>
 ```
 
-a mission's status and typed result, by result id or queued missionId (MCP get_mission_result); exits with its contract code
+a mission's status and typed result, by result id or queued missionId, or a queued Journey call's record by callId (MCP get_mission_result); exits with its contract code
 
 **Arguments**
 
@@ -2150,7 +2287,7 @@ a mission's status and typed result, by result id or queued missionId (MCP get_m
 jevitate mission run [options]
 ```
 
-run queued missions (queue_exploration) through their strategy's runner; get_mission_result {id: missionId} then reads the result
+run queued missions (queue_exploration) through their strategy's runner, then queued Journey calls (queue_journey / journey queue) as run_journey runs them; get_mission_result {id: missionId} then reads a mission's result
 
 **Options**
 
@@ -2579,8 +2716,9 @@ jevitate regression capture [options]
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
-| `--param <kv>` | #293: a Journey param as key=value (repeatable) for a failure found from a Journey branch point — every replay goes through the same prefix; a secret param (never persisted) must be given again | `{}` |  |  |  |
+| `--param <kv>` | #293: a Journey param as key=value (repeatable) for a failure found from a Journey branch point — every replay goes through the same prefix; a secret param (never persisted) must be given again: --secret-field keeps it off the command line | `{}` |  |  |  |
 | `--result <file>` | mission result JSON (as written alongside --from by `jevitate explore`) — supplies a failure oracle when the Recording alone never fails on replay |  |  |  |  |
+| `--secret-field <binding>` | a secret parameter from the environment, off the command line (repeatable): '<label\|testId\|id\|name>=<value>=env:<VAR>' matched on the recorded step that types it, e.g. 'label=Password=env:APP_PASSWORD', or 'param=<name>=env:<VAR>' for any secret parameter by name, a token in a navigate URL included. With --env/--base-url the environment's secretFields in ~/.jevitate/targets.json apply the same way; --param wins | `[]` |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to open the reproduce/minimize browser sessions authenticated (#129); must exist |  |  |  |  |
 | `--summary <text>` | optional human-readable bug summary recorded in the meta sidecar |  |  |  |  |
@@ -2617,7 +2755,8 @@ jevitate regression run [options] <id>
 | `--json` | emit a JSON envelope |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
-| `--param <kv>` | #293: a Journey param as key=value (repeatable) for a failure found from a Journey branch point — every replay goes through the same prefix; a secret param (never persisted) must be given again | `{}` |  |  |  |
+| `--param <kv>` | #293: a Journey param as key=value (repeatable) for a failure found from a Journey branch point — every replay goes through the same prefix; a secret param (never persisted) must be given again: --secret-field keeps it off the command line | `{}` |  |  |  |
+| `--secret-field <binding>` | a secret parameter from the environment, off the command line (repeatable): '<label\|testId\|id\|name>=<value>=env:<VAR>' matched on the recorded step that types it, e.g. 'label=Password=env:APP_PASSWORD', or 'param=<name>=env:<VAR>' for any secret parameter by name, a token in a navigate URL included. With --env/--base-url the environment's secretFields in ~/.jevitate/targets.json apply the same way; --param wins | `[]` |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to open the replay session authenticated (#129); must exist |  |  |  |  |
 | `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
@@ -2848,6 +2987,7 @@ run a Journey from a trusted remote source through the run-gate
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
 | `--param <kv>` | param as key=value (repeatable) | `{}` |  |  |  |
+| `--secret-field <binding>` | a secret parameter from the environment, off the command line (repeatable): '<label\|testId\|id\|name>=<value>=env:<VAR>' matched on the recorded step that types it, e.g. 'label=Password=env:APP_PASSWORD', or 'param=<name>=env:<VAR>' for any secret parameter by name, a token in a navigate URL included. --param wins | `[]` |  |  |  |
 | `--storage-state <file>` | Playwright storageState JSON to start the session authenticated (#118: required when the journey declares metadata.requiresAuth); must exist |  |  |  |  |
 | `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |
 | `--viewport <WxH>` | emulate a viewport of this size, e.g. --viewport 375x812 (mutually exclusive with --device) |  |  |  |  |
@@ -3037,13 +3177,14 @@ replay a defect's repro from a mission result (or the ledger); passes only if th
 | `--json` | emit the JSON envelope (default: a human summary) |  |  |  |  |
 | `--max-browser-memory <MiB>` | memory ceiling of this run's browsers (browser + renderers); over it the run ends inconclusive with failure kind resource-limit (default: JEVITATE_MAX_BROWSER_MEMORY_MB, else 4096 or half the RAM) |  |  |  |  |
 | `--max-browsers <n>` | machine-wide cap on jevitate runs with a browser open at once, shared by every jevitate on this machine (default: JEVITATE_MAX_BROWSERS, else cores/4 within 2..6; halved while the host is loaded) |  |  |  |  |
-| `--param <kv>` | #293: a Journey param as key=value (repeatable) for a finding found from a Journey branch point — its replays go through the same prefix; a secret param (never persisted with the result) must be given again; redacted like --secret | `{}` |  |  |  |
+| `--param <kv>` | #293: a Journey param as key=value (repeatable) for a finding found from a Journey branch point — its replays go through the same prefix; a secret param (never persisted with the result) must be given again (--secret-field keeps it off the command line); redacted like --secret | `{}` |  |  |  |
 | `--record-video [dir]` | record a video of each browser context (works headless too); default: next to the run's result; listed as videoPaths |  |  |  |  |
 | `--regressions-dir <path>` | regressions directory whose ledger/ is searched when --result is omitted (default: .jevitate/regressions) |  |  |  |  |
 | `--replays <n>` | fresh-context replays that confirm a fix (default 3) |  |  |  |  |
 | `--result <path>` | the mission's <stem>.result.json (written next to its Recording); default: the fingerprint's ledger entry (#195) |  |  |  |  |
 | `--screenshots [mode|dir]` | masked screenshots + index.md: one per distinct screen (default), `steps` one per step; `screens:<dir>`/`steps:<dir>`/`<dir>` set the folder (default: next to the run's result); listed as screenshotPaths |  |  |  |  |
 | `--secret <value|env:VAR>` | REDACTION ONLY: a value kept out of the fixture log (repeatable), e.g. one a --before hook prints; env:VAR reads it from the environment | `[]` |  |  |  |
+| `--secret-field <binding>` | a secret parameter from the environment, off the command line (repeatable): '<label\|testId\|id\|name>=<value>=env:<VAR>' matched on the recorded step that types it, e.g. 'label=Password=env:APP_PASSWORD', or 'param=<name>=env:<VAR>' for any secret parameter by name, a token in a navigate URL included. With --env/--base-url the environment's secretFields in ~/.jevitate/targets.json apply the same way; --param wins | `[]` |  |  |  |
 | `--slow-mo <ms>` | slow every browser operation by this many ms (default 250 with --headed, else 0) |  |  |  |  |
 | `--storage-state <file>` | override the storageState the mission ran with |  |  |  |  |
 | `--tag <key=value>` | run metadata tag stored in the result, its envelope and the run index (repeatable; key [A-Za-z0-9_.-]; never a secret) | `[]` |  |  |  |

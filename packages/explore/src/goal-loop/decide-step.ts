@@ -9,6 +9,8 @@ import type { RunContext } from "./context.js";
 import { takeRecoveryTurn } from "./handle-blocked.js";
 import { TOO_MANY_CHOICES, TOO_MANY_CHOICES_RETRY, firstLine, pageStatusOf } from "./helpers.js";
 import type { PageView } from "./page-view.js";
+import { notePage, returnToStart } from "./return-to-start.js";
+import { noteRoutePage } from "./no-route.js";
 import type { Perceived } from "./step.js";
 
 export async function decideStep(ctx: RunContext, step: Perceived, view: PageView): Promise<Decision | "stop"> {
@@ -26,6 +28,9 @@ export async function decideStep(ctx: RunContext, step: Perceived, view: PageVie
   // #338: once the goal's area is reached, navigation to sections the goal never names is off-goal
   // (listed last and marked — never removed: a goal may cross the sections it names).
   ctx.goalFocus.noteUrl(snap.url);
+  notePage(ctx, snap);
+  // 0.30.0 (#807): what the no-route-found coverage floor reads at the end of the run.
+  await noteRoutePage(ctx, snap, visibleText);
   const offGoal = ctx.goalFocus.offGoal(modelControls, ctx.chrome);
   try {
     // #192: the choice cap is bounded in decide(); should the API still refuse the count (a
@@ -80,6 +85,13 @@ export async function decideStep(ctx: RunContext, step: Perceived, view: PageVie
     return "stop";
   }
   ctx.tracker.countDecision();
+  // #807 — a dead end (the model's `blocked`, or an idle last-chance turn after a stall) returns to the
+  // most recent page with untried controls: a recorded navigation, then one `wait` turn to re-perceive.
+  const idle = decision.op === "scroll_down" || decision.op === "scroll_up" || decision.op === "wait";
+  if (decision.op === "blocked" || (ctx.lastChanceTurn && idle)) {
+    const back = await returnToStart(ctx, snap.url);
+    if (back !== null) return { ...decision, op: "wait", control: null, targetMissing: false };
+  }
   if (
     ctx.lastChanceTurn &&
     cfg.readOnly === true &&

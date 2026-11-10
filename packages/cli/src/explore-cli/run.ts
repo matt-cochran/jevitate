@@ -16,7 +16,7 @@ import { parseScreenshotsArg, type ScreenshotsSpec } from "../run-screenshots.js
 import { GitHubIssueFiler } from "../github-issue-filer.js";
 import { TargetConfigError, loadTargetsFile, resolveTargetConfig, type TargetConfig } from "../target-config.js";
 import { setupRefFreeUrl } from "../fixture-cli.js";
-import { warnSecretParamsOnArgv } from "../secret-params.js";
+import { secretFieldErrorOf, warnSecretParamsOnArgv, withCommandSecretParams } from "../secret-params.js";
 import type { FilingConfig, IssueFilerPort } from "@jevitate/domain";
 import { LITERAL_SECRET_WARNING, SecretArgError, resolveSecretArgs } from "../secret-args.js";
 import { withEngine } from "../engine.js";
@@ -33,7 +33,7 @@ import { authExpiredResult, ensurePersonaSession, LoginArgsError, parseAuthCheck
 import { MultiRunAbortedError, runExploreMultiRun } from "../multi-run-cli.js";
 import { checkActorsAgainstSpec, resolveMissionActors, type MissionActors } from "../mission-actors.js";
 import { PlaywrightBrowserPort, type EmulationSpec } from "@jevitate/playwright";
-import { type CliDeps, browserRunFromFlags, emulationFromFlags, emitCommandResult, environmentSeams, resolveDbPath, resolveJourneysDir, resolveMissionTargetsDir, EXPLORE_STRATEGIES } from "../cli-shared.js";
+import { type CliDeps, browserRunFromFlags, commandSecretSeams, emulationFromFlags, emitCommandResult, environmentSeams, resolveDbPath, resolveJourneysDir, resolveMissionTargetsDir, EXPLORE_STRATEGIES } from "../cli-shared.js";
 import { allowWithExtensions, assertExtensionTargetLoaded, multiWindowWarning } from "../browser-run-options.js";
 import { ParamValidationError } from "@jevitate/journey";
 import { SiteGateRefusedError } from "@jevitate/runtime";
@@ -55,6 +55,11 @@ import { runAdversarialStrategy } from "./adversarial-strategy.js";
 import { runUsabilityStrategy } from "./usability-strategy.js";
 import { runFeatureStrategy } from "./feature-strategy.js";
 import { runGoalStrategy } from "./goal-strategy.js";
+import { prepareMcpRunGuard, RunGuardRefusedError } from "../mcp-run-guard.js";
+import { RunModeRefusedError } from "../journey-run-mode-gate.js";
+import { inMcpInvocation } from "../approval-provenance.js";
+import { withRunMetadata } from "../run-metadata.js";
+import { exploreDestructiveRefusal, guardedPortFactory, guardRequestWithMode, resolveSurfaceRunMode, runModeRecord, type SurfaceRunMode } from "../run-surface-mode.js";
 import { AUTH_PREFLIGHT_TIMEOUT_MS, SWEEP_OWNED, fixtureBoundUrlRoot, serverLogOptionsFromFlags, type ExploreOpts, type ExploreRunContext } from "./shared.js";
 
 /**
@@ -121,6 +126,8 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
       let journeyPrefix: JourneyPrefix | undefined;
       /** #399: how the prefix was resolved — re-resolved once `${setup.x}` in a --param is bound (goal + --fixtures). */
       let prefixRequest: Parameters<typeof resolveJourneyPrefix>[0] | undefined;
+      /** #827: the --secret-field specs the Journey prefix took: a goal loop keeps a field one, never a param= one. */
+      let prefixSecretSpecs = new Set<string>();
       const anchoredFlags = [o.fromJourney, o.atStep, o.journeysDir, o.env, o.baseUrl].some((v) => v !== undefined);
       if (anchoredFlags || Object.keys(o.param).length > 0) {
         const refuse = (message: string): void => emitExplore(fail("E_EXPLORE_ARGS", message));
@@ -128,7 +135,7 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
           refuse("--from-journey and --at-step go together (and --param, --env, --base-url and --journeys-dir need them)");
           return;
         }
-        await warnSecretParamsOnArgv(program.configureOutput().writeErr, resolveJourneysDir(deps, o.journeysDir), [o.fromJourney], o.param);
+        await warnSecretParamsOnArgv(program.configureOutput().writeErr, resolveJourneysDir(deps, o.journeysDir), [o.fromJourney], o.param, "explore --from-journey");
         if (o.url !== undefined) {
           refuse("--url cannot be combined with --from-journey: the mission starts where the Journey's prefix leaves the page");
           return;
@@ -188,6 +195,10 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
           try {
             const plan = await validateCampaignSpec(spec, resolvePath("explore-sweep.json"), {
               journeysDir,
+              // #827: the sweep's params are this command line's (warned above), and its --secret-field bindings go to every stop.
+              paramsFromArgv: true,
+              secretFields: o.secretField,
+              env: deps.explore?.env ?? process.env,
               allowShellHooks: o.allowShellHooks === true,
               ...(o.hookTimeoutMs === undefined ? {} : { hookTimeoutMs: Number(o.hookTimeoutMs) }),
               environmentSeams: environmentSeams(deps),
@@ -215,11 +226,16 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
           );
           // The environment's own session applies when --storage-state names none (as `journey run`).
           if (o.storageState === undefined && environment?.storageState !== undefined) o.storageState = environment.storageState;
+          // #827: the prefix's secret parameters from the environment: a --secret-field that binds one (a recorded
+          // field, or param=<name>), and with --env/--base-url the environment's targets.json secretFields.
+          const prefixSecrets = await withCommandSecretParams({ dir: resolveJourneysDir(deps, o.journeysDir), ids: [o.fromJourney], params: o.param, flags: o.secretField, environment, env: deps.explore?.env ?? process.env, seams: commandSecretSeams(deps, resolveJourneysDir(deps, o.journeysDir)), strict: false });
+          prefixSecretSpecs = new Set(prefixSecrets.used);
           prefixRequest = {
             dir: resolveJourneysDir(deps, o.journeysDir),
             id: o.fromJourney,
             atStep: o.atStep,
-            params: o.param,
+            params: prefixSecrets.params,
+            ...(prefixSecrets.bound === undefined ? {} : { boundSecretParams: prefixSecrets.bound }),
             ...(environment === undefined ? {} : { environment }),
             ...(o.storageState === undefined ? {} : { storageState: o.storageState }),
             dbPath: resolveDbPath(deps),
@@ -227,7 +243,9 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
           };
           journeyPrefix = await resolveJourneyPrefix(prefixRequest);
         } catch (err) {
-          if (isEnvironmentError(err) || err instanceof JourneyPrefixArgsError) emitExplore(fail(err.code, err.message));
+          const secretError = secretFieldErrorOf(err, "E_EXPLORE_ARGS");
+          if (secretError !== undefined) emitExplore(fail(secretError.code, secretError.message));
+          else if (isEnvironmentError(err) || err instanceof JourneyPrefixArgsError) emitExplore(fail(err.code, err.message));
           else if (err instanceof UnknownJourneyError) emitExplore(fail("E_UNKNOWN_JOURNEY", err.message));
           else if (err instanceof ParamValidationError) emitExplore(fail("E_INVALID_PARAMS", err.message));
           else if (err instanceof JourneyRequiresAuthError) emitExplore(fail("E_JOURNEY_REQUIRES_AUTH", err.message));
@@ -481,6 +499,11 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
         );
         return;
       }
+      // 0.30.0 (#800): a job's done check verifies a goal run only — refused elsewhere, never dropped.
+      if ((o.job !== undefined || o.requireDoneCheck === true) && (o.feature !== undefined || strategy !== "goal")) {
+        emitExplore(fail("E_EXPLORE_ARGS", `--job and --require-done-check are supported only with --strategy goal (not ${o.feature !== undefined ? "--feature" : `--strategy ${strategy}`})`));
+        return;
+      }
       // #303: action deltas are recorded by the goal loop (goal and usability runs) only — refused
       // elsewhere, never silently ignored.
       if (o.actionDeltas === true && o.feature !== undefined) {
@@ -579,6 +602,8 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
       const withServerLog = serverLog === undefined ? {} : { serverLog };
       // Secret field bindings (#72): resolved from the environment here, typed by code in the goal loop.
       let secretFields: SecretField[] = [];
+      // #827: a binding the prefix took is not the goal loop's to refuse; a param= one never binds a live field.
+      o.secretField = o.secretField.filter((spec) => !(prefixSecretSpecs.has(spec) && (spec.startsWith("param=") || (strategy !== "goal" && strategy !== "usability"))) && !(o.fromJourney !== undefined && spec.startsWith("param=")));
       if (o.secretField.length > 0 || o.totp.length > 0) {
         if (o.feature !== undefined || (strategy !== "goal" && strategy !== "usability")) {
           emitExplore(fail("E_EXPLORE_ARGS", "--secret-field and --totp are supported only with --strategy goal or usability"));
@@ -633,6 +658,46 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
         return;
       }
 
+      // 0.30.0 §5: the run mode, from the person-written target files only (never an argument), decided
+      // before any browser. Over MCP the exploration's own writes go through the #789 guard every Journey
+      // run has (each session armed: a production target refused before anything opens, an off-allowlist
+      // write refused at the context), given the mode: test mode's relaxation inside the declared
+      // environment, automation mode's refusals otherwise. The mode is stamped on the result as `run`.
+      let runDeps: CliDeps = deps;
+      let decidedMode: SurfaceRunMode | undefined;
+      const runModeNotes: string[] = [];
+      const startOrigin = ((): string | undefined => {
+        try {
+          return o.url === undefined ? undefined : new URL(setupRefFreeUrl(o.url)).origin;
+        } catch {
+          return undefined; // an unparseable --url is refused by the authorized-target guard
+        }
+      })();
+      if (startOrigin !== undefined) {
+        try {
+          const environment = prefixRequest?.environment;
+          decidedMode = resolveSurfaceRunMode({ surface: "explore", origin: startOrigin, environment, ...environmentSeams(deps) });
+          const destructive = exploreDestructiveRefusal(decidedMode, o.allowDestructive === true, runModeNotes);
+          if (destructive !== undefined) {
+            emitExplore(fail(destructive.code, destructive.message));
+            return;
+          }
+          if (inMcpInvocation()) {
+            const allowedOrigins = resolveExploreAllowlist(setupRefFreeUrl(o.url!), o.allow);
+            const mode = decidedMode;
+            const guardFor = () => prepareMcpRunGuard(guardRequestWithMode({ site: startOrigin, allowedOrigins, environment, ...environmentSeams(deps) }, mode, runModeNotes));
+            guardFor();
+            runDeps = { ...deps, explore: { ...deps.explore, browserPortFactory: guardedPortFactory(deps.explore?.browserPortFactory ?? (() => new PlaywrightBrowserPort()), guardFor) } };
+          }
+        } catch (err) {
+          if (err instanceof RunGuardRefusedError) emitExplore(fail(err.code, err.message));
+          else if (err instanceof RunModeRefusedError) emitExplore(fail(err.refusalCode, err.message));
+          else emitExplore(fail("E_EXPLORE_ARGS", err instanceof Error ? err.message : String(err)));
+          return;
+        }
+      }
+      const modeMeta = decidedMode === undefined ? {} : { runMode: () => runModeRecord(decidedMode!, runModeNotes) };
+
       // #427 pre-flight auth check: a run that starts from a session first proves the session is alive
       // (re-minting it once from a persona's login parameters) — else it ends now, `auth-expired`.
       if (primaryStorageState !== undefined) {
@@ -652,25 +717,27 @@ export function registerExploreRun(program: Command, deps: CliDeps, buildProgram
       }
 
       const ctx: ExploreRunContext = {
-        deps, o, emitExplore, strategy, target, browser, screenshotsOpt, emulation, overflow, withInvariants, serverLog, withServerLog, withPrefix, withScopeRegion, emitJourneyFailure, withEvidence, runFiling, issueFiler, conversation, secretFields, secretCommand, actors, primaryStorageState, invariants, journeyPrefix, prefixRequest, typeFixtures, uploadFixtures,
+        deps: runDeps, o, warn: (line) => void program.configureOutput().writeErr?.(line), emitExplore, strategy, target, browser, screenshotsOpt, emulation, overflow, withInvariants, serverLog, withServerLog, withPrefix, withScopeRegion, emitJourneyFailure, withEvidence, runFiling, issueFiler, conversation, secretFields, secretCommand, actors, primaryStorageState, invariants, journeyPrefix, prefixRequest, typeFixtures, uploadFixtures,
       };
 
-      if (strategy === "coverage" || strategy === "exploratory") {
-        await runCoverageStrategy({ ...ctx, strategy });
-        return;
-      }
-      if (strategy === "adversarial") {
-        await runAdversarialStrategy(ctx);
-        return;
-      }
-      if (strategy === "usability") {
-        await runUsabilityStrategy(ctx);
-        return;
-      }
-      if (o.feature) {
-        await runFeatureStrategy(ctx);
-        return;
-      }
-      await runGoalStrategy(ctx);
+      await withRunMetadata(modeMeta, async () => {
+        if (strategy === "coverage" || strategy === "exploratory") {
+          await runCoverageStrategy({ ...ctx, strategy });
+          return;
+        }
+        if (strategy === "adversarial") {
+          await runAdversarialStrategy(ctx);
+          return;
+        }
+        if (strategy === "usability") {
+          await runUsabilityStrategy(ctx);
+          return;
+        }
+        if (o.feature) {
+          await runFeatureStrategy(ctx);
+          return;
+        }
+        await runGoalStrategy(ctx);
+      });
     }));
 }

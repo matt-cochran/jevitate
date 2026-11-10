@@ -10,6 +10,8 @@ import type { Flow, Perceived } from "./step.js";
 import { busyOverlay } from "../status.js";
 import { JOB_WAIT_SLICE_MS, waitOutJob } from "./helpers.js";
 import { clock } from "@jevitate/domain";
+import { detectRunBoundary, endAtBoundary } from "./boundary.js";
+import { returnToStart } from "./return-to-start.js";
 import { blockedDepartureReason, drainBlockedDeparture } from "../blocked-navigation.js";
 
 export async function checkSettled(ctx: RunContext, step: Perceived): Promise<Flow> {
@@ -36,6 +38,14 @@ export async function checkSettled(ctx: RunContext, step: Perceived): Promise<Fl
   // #1 — mid-run origin guard (fail-closed): never act off an authorized origin.
   if (!isAuthorizedExploreTarget(snap.url, cfg.allowlist)) {
     ctx.stop = "blocked";
+    return "stop";
+  }
+
+  // 0.30.0 (#807): a wall (401/403, a paid control) or a lost session ends the run at a boundary.
+  const boundary = detectRunBoundary(ctx, snap);
+  if (boundary !== null) {
+    ctx.transcript.record({ op: null, control: null, confidence: null, chosenBy: "strategy", strategy: "boundary", actOk: false, reason: boundary.reason, snapshot: snap, timing: perception.timing });
+    endAtBoundary(ctx, boundary);
     return "stop";
   }
 
@@ -134,6 +144,11 @@ export async function checkSettled(ctx: RunContext, step: Perceived): Promise<Fl
       ctx.stop = "no-progress";
       return "stop";
     }
+    // #807: a dead-end page with no control at all is a dead end like any other: return to a remembered
+    // page with untried controls, when there is one, before failing closed — unless the success checks
+    // hold on this page: a control-less page can be the goal's end state, and the verdict judges it.
+    const holds = await (cfg.successChecksHoldNow?.() ?? Promise.resolve(false)).catch(() => false);
+    if (!holds && (await returnToStart(ctx, snap.url)) !== null) return "continue";
     ctx.transcript.record({
       op: "wait",
       control: null,

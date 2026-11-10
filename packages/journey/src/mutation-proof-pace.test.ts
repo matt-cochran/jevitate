@@ -3,7 +3,6 @@ import {
   JourneySchema,
   controlCanChangeVerdict,
   heldSites,
-  mutationProofVerdict,
   paceEndStateFloorMs,
   paceFloorMs,
   paceTailMs,
@@ -19,6 +18,7 @@ import {
   type MutationRunResult,
   type ReplayPace,
 } from "./index.js";
+import { mutationProofVerdict } from "@jevitate/adjudicator";
 
 const CLAIM = { kind: "textIncludes", target: { css: "#job" }, text: "done" } as const;
 const PROGRESS = { kind: "visible", target: { css: "#panel" } } as const;
