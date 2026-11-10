@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord } from "@jevitate/domain";
 import type { RunTags } from "@jevitate/domain";
+import type { RunModeRecord } from "./run-surface-mode.js";
 
 /**
  * #426 run metadata: the `--tag key=value` tags a run was given, and (for a run a sweep or a persona
@@ -18,6 +19,12 @@ export interface RunMetadata {
   readonly persona?: string;
   /** #451: the id of the target the run was meant to cover (a sweep target's id, or `explore --target`). */
   readonly targetId?: string;
+  /**
+   * 0.30.0 §5: the run mode a surface decided (run-surface-mode.ts), stamped on the result as `run`
+   * (`run.mode`, `run.target.trust`). A function: read when the result is written, so test mode's
+   * relaxation notes made during the run are in it.
+   */
+  readonly runMode?: () => RunModeRecord;
 }
 
 const scope = new AsyncLocalStorage<RunMetadata>();
@@ -32,10 +39,12 @@ export function withRunMetadata<T>(meta: Partial<RunMetadata>, fn: () => T): T {
   const outer = scope.getStore();
   const persona = meta.persona ?? outer?.persona;
   const targetId = meta.targetId ?? outer?.targetId;
+  const runMode = meta.runMode ?? outer?.runMode;
   const merged: RunMetadata = {
     tags: { ...(outer?.tags ?? {}), ...(meta.tags ?? {}) },
     ...(persona === undefined ? {} : { persona }),
     ...(targetId === undefined ? {} : { targetId }),
+    ...(runMode === undefined ? {} : { runMode }),
   };
   return scope.run(merged, fn);
 }
@@ -52,6 +61,8 @@ export function stampRunMetadata<T>(result: T, meta: RunMetadata | undefined = c
   const out: Record<string, unknown> = { ...result };
   const tags = { ...(meta?.tags ?? {}), ...(isRecord(result.tags) ? (result.tags as Record<string, string>) : {}) };
   if (Object.keys(tags).length > 0) out.tags = tags;
+  // 0.30.0 §5: the mode the run decided; a result that already records its own `run` keeps it.
+  if (meta?.runMode !== undefined && !isRecord(result.run)) out.run = meta.runMode();
   if (isRecord(result.target)) {
     const t = result.target;
     const strategy = typeof result.strategy === "string" ? result.strategy : typeof result.mode === "string" ? result.mode : undefined;

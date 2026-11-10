@@ -24,6 +24,10 @@ pass or fail:
   findings were already advisory-only (never gating) regardless of `ai`. A CI smoke run of
   `ai: "fake"` against a healthy app therefore exits `0` when it has no goals/missions that need a
   judgment, or `2` ("no gating finding, but an item errored") when it does — never `1`.
+- **Each Journey item's job is read (0.30.0, breaking for CI):** every Journey item reads its
+  job's done check, exactly as `journey run` does (two fresh-session readings, before step 1 and
+  after the end state), and folds the verdict with the project's `doneCheckPolicy`. See
+  [Job verdicts in CI](#job-verdicts-in-ci-done-checks) below.
 - **Fail closed:** an item that crashed, was inconclusive or was refused is an error, never a
   pass. So is going over the budget. An item is skipped once the budget is spent, and the skipped
   item counts as an error.
@@ -204,6 +208,39 @@ revoked or lacks the upload scope) · `2` the upload could not finish — `E_JOU
 differs from `--product-name`). The key never appears in a result, an error or a file.
 Publishing never approves anything.
 
+### Job verdicts in CI (done checks)
+
+Since 0.30.0 every Journey item of a check runs inside the same done-check scope as `journey run`
+(owner decision 2026-11-09), and its item carries `job: {attainment, basis}`:
+
+- **`not-achieved`** (the steps passed, but the job's done check read false before the run and
+  still false after it): the item fails on a hard `done-check-failed` finding (category
+  `journey-assertion`, signal `done-check-failed`), so the check exits `1`. JUnit carries
+  `<failure type="done-check-failed">`, SARIF an error result, `report.md` the finding.
+- **`unverified`** (no done check, `--no-done-check`, or one already true before the run): the item
+  stays `passed`, but under `doneCheckPolicy: "require"` (the default) the check exits `2`
+  (`summary.unverified` counts these items; the human summary says `INCONCLUSIVE: … job is
+  unverified`). A pass on a `trust: "harness"` environment exits `0` and still reads
+  `unverified`/`harness`. Under `"advisory"` it exits `0`, as before 0.30.0.
+- **`achieved`**: no change.
+
+Every output carries the verdict: `check.json` `items[].job` and `doneCheckPolicy`; each item's
+`result.json` its `job` (and the `done-check-failed` failure); JUnit the case properties
+`jevitate.job.attainment` and `jevitate.job.basis`; SARIF the run properties `doneCheckPolicy` and
+`jobs: [{target, name, attainment, basis}]`; `report.md` a "Job verdicts" table.
+
+`--require-done-check` folds an unverified job to exit `2` even when `project.json` says
+`advisory`; `--no-done-check` reads nothing (every job is `unverified`, `no-check`). The two together
+are refused (exit 64). MCP `run_check` takes `doneCheck: false` and `requireDoneCheck: true`.
+`jevitate campaign run` (MCP `run_campaign`) folds each discovery replay's job the same way
+(`discovery[].jobVerdict`): not achieved exits `1`; unverified turns a clean campaign into exit `2`
+under `require`; it never hides a defect a mission found.
+
+**Migrating a CI gate.** A suite whose Journeys link no done check exits `2` after the upgrade.
+Either add done checks to their jobs (`.jevitate/jobs.json` `jobs[].done`, see
+[outcomes](./outcomes.md)), or keep the old exits with `{"doneCheckPolicy": "advisory"}` in
+`.jevitate/project.json`.
+
 ### Self-heal in CI (`--self-heal`)
 
 `jevitate check --suite … --self-heal hybrid|full --changes origin/main...HEAD [--change-note <text>] --fake-ai|--real`
@@ -230,8 +267,9 @@ Each healed item writes both `…-<seq>.result.json` (the fail-closed run) and
 `…-<seq>.heal.result.json` (the re-run; its `healOf` names the first). The item's outcome is the
 re-run's, and only the re-run feeds the findings.
 
-Exit codes: `0` pass · `1` at least one gating finding · `2` no gating finding, but an item errored
-or the budget was exceeded · `5` nothing failed, but a self-heal proposed a Journey revision that
+Exit codes: `0` pass · `1` at least one gating finding (a job not achieved is one) · `2` no gating
+finding, but an item errored, the budget was exceeded, or a Journey item passed with an unverified
+job under `doneCheckPolicy: "require"` · `5` nothing failed, but a self-heal proposed a Journey revision that
 awaits review (below) · `64` the suite, its preflight, the targets file or the AI setup was
 refused, so nothing ran (see [exit codes](./outcomes.md#exit-codes)). Precedence `1 > 2 > 5 > 0`.
 Gate CI on `1`, and treat `2` and `64` as a broken check, not a pass; `5` is never a pass either.

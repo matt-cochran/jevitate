@@ -43,7 +43,7 @@ import { preflightRunKeys } from "./run-key-preflight.js";
 import { CastActor, BrowseTheWeb, type Actor } from "@jevitate/screenplay";
 import { UnsafeNameError, assertSafeName } from "@jevitate/domain";
 import { fail, type JsonEnvelope } from "./envelope.js";
-import { projectDataDir } from "./project-dir.js";
+import { findProjectDir, projectDataDir } from "./project-dir.js";
 import { resolveLayout } from "./project-layout.js";
 import { type QueuedMissionExecutor } from "./mission-queue-runner.js";
 import { resolveUsagePricing } from "./usage-config.js";
@@ -182,6 +182,15 @@ export function environmentSeams(deps: CliDeps): { environmentsFile?: string; ta
     ...(deps.environmentsFile === undefined ? {} : { environmentsFile: deps.environmentsFile }),
     ...(deps.explore?.targetsConfigPath === undefined ? {} : { targetsFile: deps.explore.targetsConfigPath }),
   };
+}
+
+/**
+ * H7: `withCommandSecretParams`' seams for a command replaying Journeys from `journeysDir`: the target's
+ * files, and where a Journey's approval is read (its journeys dir, and the catalog dir its linked
+ * persona/job approvals live in: `--catalog-dir`-style flag, else the host's seam, else the project's).
+ */
+export function commandSecretSeams(deps: CliDeps, journeysDir: string, catalogFlag?: string): { environmentsFile?: string; targetsFile?: string; journeysDir: string; catalogDir: string | null } {
+  return { ...environmentSeams(deps), journeysDir, catalogDir: catalogFlag ?? deps.catalogDir ?? findProjectDir() };
 }
 
 /**

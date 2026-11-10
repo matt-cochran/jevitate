@@ -79,6 +79,8 @@ export interface ActResult {
    * (#109). Absent for every other op.
    */
   readonly moved?: boolean;
+  /** Native select's actual DOM value returned by the executor; may differ from its option label. */
+  readonly selectedValue?: string;
 }
 
 /** Bound (ms) on a reload reaching its new document. The page's settling is perception's job. */
@@ -536,10 +538,12 @@ export async function act(actor: Actor, args: ActArgs): Promise<ActResult> {
       if (bad !== null) return { ok: false, mutated: false, reason: bad };
       const option = args.value;
       const descriptor = args.control.descriptor;
-      return dispatch(async () => {
+      let selectedValues: string[] = [];
+      const result = await dispatch(async () => {
         // Bounded: an option that is not there fails in seconds, not Playwright's 30s default.
-        await descriptorToLocator(page, descriptor).selectOption(option, { timeout: SELECT_TIMEOUT_MS });
+        selectedValues = await descriptorToLocator(page, descriptor).selectOption(option, { timeout: SELECT_TIMEOUT_MS });
       });
+      return result.ok && selectedValues.length === 1 ? { ...result, selectedValue: selectedValues[0]! } : result;
     }
     case "edit_text": {
       if (args.control === null) return { ok: false, mutated: false, reason: "edit_text needs a target" };

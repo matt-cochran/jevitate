@@ -154,11 +154,30 @@ describe("sign-in done recognition (#188)", () => {
   it(
     "signed in, but the goal asks for more than signing in: `blocked` stands unless the goal judgment itself clears",
     async () => {
+      // The extra ask names no control on the home page, so no #693/#826 forward control refuses the `blocked`.
       const judge = judgeWith([...TO_TWO_FACTOR, { op: "click", target: "2" }, { op: "blocked" }], 0.1);
-      const r = await run(judge, `${SIGN_IN_GOAL} Then create a project named Q3 launch.`);
+      const r = await run(judge, `${SIGN_IN_GOAL} Then export last month's invoice as a PDF.`);
 
       expect(r.stop).toBe("blocked");
       expect(r.outcome.status).toBe("incomplete");
+      expect(r.transcript.some((e) => /goal already met/.test(e.reason ?? ""))).toBe(false);
+    },
+    90_000,
+  );
+
+  it(
+    "signed in, and the goal's extra ask names an untried control (#826): `blocked` is refused, never done — inconclusive",
+    async () => {
+      // 'create a project' names the home page's "Projects" link in part (#826): the model's `blocked` is
+      // refused beside it, and a model that insists ends inconclusive (insufficient coverage), not done.
+      const judge = judgeWith([...TO_TWO_FACTOR, { op: "click", target: "2" }, { op: "blocked" }], 0.1);
+      const r = await run(judge, `${SIGN_IN_GOAL} Then create a project named Q3 launch.`);
+
+      expect(r.stop).toBe("inconclusive");
+      expect(r.outcome.status).toBe("incomplete");
+      expect(r.failure?.kind).toBe("insufficient-coverage");
+      expect(r.transcript.some((e) => /blocked refused: "Projects" is an obvious forward control/.test(e.reason ?? ""))).toBe(true);
+      expect(r.transcript.some((e) => /goal already met/.test(e.reason ?? ""))).toBe(false);
     },
     90_000,
   );

@@ -35,6 +35,9 @@ import { anchorBaseline, type BaselineRunStep } from "./anchor-baselines.js";
 import { journeyLocatorHealth, testIdAttributesOrDefault } from "./locator-health-api.js";
 import type { LocatorHealthDetail } from "./locator-health.js";
 import type { CheckBaseline, LocatorHealth } from "./check-types.js";
+import type { JobVerdict } from "@jevitate/adjudicator";
+import type { DoneCheckPolicy } from "@jevitate/domain";
+import { DoneCheckRun } from "./journey-done-check-hook.js";
 
 // ── execution ────────────────────────────────────────────────────────────────
 
@@ -62,6 +65,8 @@ export interface Executed {
   readonly locatorDetail?: LocatorHealthDetail;
   /** #486: a Journey item's advisory slow-step findings (a late 2xx); present on every replay, empty when fast. */
   readonly slowSteps?: ReadonlyArray<{ readonly step: number; readonly check: string; readonly latencyMs: number }>;
+  /** H5: a Journey item's job verdict, decided in the done-check scope its (last) run ran in. */
+  readonly job?: JobVerdict;
 }
 
 const BROKEN = new Set(["crashed", "inconclusive"]);
@@ -79,6 +84,11 @@ export interface ExecContext {
   readonly healer?: () => Promise<SelfHealer>;
   /** #470: the project's test-id convention (resolved once at preflight); default: the project's, else the defaults. */
   readonly testIdAttributes?: readonly string[];
+  /**
+   * H5 (0.30.0): every Journey item runs inside a done-check scope (`DoneCheckRun`), as `journey run` does:
+   * the project data dir holding jobs.json, `--no-done-check`, and the policy the verdict folds with.
+   */
+  readonly doneCheck?: { readonly catalogDir: string | null; readonly skip: boolean; readonly policy: DoneCheckPolicy };
 }
 
 /** #563: the run id of a check run (stable across its items, fresh per `runCheck`). */
@@ -250,10 +260,13 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
     const resolvedParams = resolveJourneyParams(sj.params, uniqueRunToken(runId(ctx), item.t.target.name, entryIndex < 0 ? 0 : entryIndex));
     const recordedParams = redactSecretValues(resolvedParams, secretParamValues(j, resolvedParams));
     const journeySession = session ?? (sj.storageState === null ? undefined : environment?.storageState);
+    // #827: what a binding supplied at preflight (never a value from the suite file, never written to the record).
+    const supplied = item.t.journeySecrets?.get(sj);
     const runOptions = {
       dir: t.journeysDir ?? opts.journeysDir,
       id: sj.id,
-      params: { ...resolvedParams },
+      params: { ...supplied?.params, ...resolvedParams },
+      ...(supplied?.bound === undefined ? {} : { boundSecretParams: supplied.bound }),
       ...emulationFor(sj.emulation),
       ...(opts.browserPortFactory === undefined ? {} : { browserPortFactory: opts.browserPortFactory }),
       ...(opts.browser === undefined ? {} : { browser: opts.browser }),
@@ -270,10 +283,29 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
     // Only what a self-heal re-run adds (named, so the surface-wiring check sees what is passed).
     // #469: each replay is timed per step (an observer), so a completed run yields the anchor baseline.
     let timer = stepTimer();
-    const runOnce = (extra: Partial<Pick<RunJourneyProgrammaticallyOptions, "policy" | "selfHealer" | "heal">>): Promise<JourneyRunResult> => {
+    // H5: the job verdict of the last run (each run reads the done check in its own scope).
+    let job: JobVerdict | undefined;
+    const runOnce = async (extra: Partial<Pick<RunJourneyProgrammaticallyOptions, "policy" | "selfHealer" | "heal">>): Promise<JourneyRunResult> => {
       timer = stepTimer();
       const observer = timer.observer;
-      return withSiteGate(opts.sitePolicyDbPath, (siteGate) => runners.journey({ ...(siteGate === undefined ? {} : { siteGate }), ...runOptions, observer, ...extra }));
+      const run = (): Promise<JourneyRunResult> => withSiteGate(opts.sitePolicyDbPath, (siteGate) => runners.journey({ ...(siteGate === undefined ? {} : { siteGate }), ...runOptions, observer, ...extra }));
+      const dc = ctx.doneCheck;
+      job = undefined;
+      if (dc === undefined) return run();
+      // H5: the item reads its job's done check (two fresh-session readings, before step 1 and after the end
+      // state) with the run's own target and session, exactly as `journey run` does.
+      const scope = new DoneCheckRun({
+        catalogDir: dc.catalogDir,
+        journeysDir: runOptions.dir,
+        ...(environment?.baseUrl === undefined ? {} : { origin: environment.baseUrl }),
+        ...(journeySession === undefined ? {} : { storageState: journeySession }),
+        skip: dc.skip,
+        ...(opts.browserPortFactory === undefined ? {} : { sessionPortFactory: opts.browserPortFactory }),
+        policy: dc.policy,
+      });
+      const r = await scope.run(run);
+      job = scope.job;
+      return r;
     };
     // #469: the revision replayed, as the review/approval hashes it (the stored Journey, before any environment).
     const journeyHash = journeyReviewHash(stored);
@@ -312,6 +344,9 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         ...(opts.targetBuild === undefined ? {} : { targetBuild: opts.targetBuild }),
         ...(proposal === undefined ? {} : { proposal }),
         testIdAttributes,
+        // H5: the record keeps the run's job and folds it into its own exit, as `journey run`'s does.
+        ...(job === undefined ? {} : { job }),
+        ...(ctx.doneCheck === undefined ? {} : { doneCheckPolicy: ctx.doneCheck.policy }),
       });
       // #426: the check's --tag metadata and structured target ride on every item result.
       const stamped = { ...record, result: stampRunMetadata({ ...record.result, ...extra }) };
@@ -326,7 +361,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
     const firstRecord = await writeRecord(first, "", { params: recordedParams });
     const heal = ctx.heal;
     if (heal === undefined || ctx.healer === undefined || first.outcome !== "quarantined") {
-      return { status: "ran", resultPath: firstRecord.path, outcome: first.outcome, actions: firstRecord.actions, ...measured(first, firstRecord.locatorHealth) };
+      return { status: "ran", resultPath: firstRecord.path, outcome: first.outcome, actions: firstRecord.actions, ...measured(first, firstRecord.locatorHealth), ...(job === undefined ? {} : { job }) };
     }
     // #453: quarantined + a change context → ONE re-run with the shared scope and per-run budget; its
     // usage lands on the check's gateways (and so its budget); the item's outcome is the re-run's.
@@ -349,6 +384,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
       supersedes: firstRecord.path,
       healAttempts,
       ...measured(r, rerun.locatorHealth),
+      ...(job === undefined ? {} : { job }),
       ...(r.outcome === "heal-exhausted" ? { reason: r.reason } : {}),
       ...(r.outcome === "healed-pending-review" ? { proposal: { ...(proposalId === undefined ? {} : { proposalId }), ...(proposalPath === undefined ? {} : { path: proposalPath }) } } : {}),
     };
@@ -381,6 +417,7 @@ async function executeItem(item: Planned, ctx: ExecContext, remaining: number | 
         goal,
         successChecks,
         ...(g.successWhen === undefined ? {} : { successWhen: g.successWhen }),
+        ...(x.renderWaitMs === undefined ? {} : { renderWaitMs: x.renderWaitMs }),
         ...(x.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
         ...(x.actionDeltas === true ? { actionDeltas: true } : {}),
         ...(x.blockOffAllowlistNavigation === true ? { blockOffAllowlistNavigation: true } : {}),

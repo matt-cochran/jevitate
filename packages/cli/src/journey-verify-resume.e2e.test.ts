@@ -152,7 +152,7 @@ describe("[realtime] a mutation proof that loses its observer or its verifier", 
   beforeAll(async () => {
     dir = mkdtempSync(join(tmpdir(), "jevitate-verify-resume-"));
     mkdirSync(join(dir, ".jevitate", "journeys"), { recursive: true });
-    mkdirSync(join(dir, "home"), { recursive: true });
+    mkdirSync(join(dir, "home", ".jevitate"), { recursive: true });
     // Its own process: `cli` and `status` block this one in spawnSync, and a page served from here would time out behind them.
     const serve = `const s=require("node:http").createServer((q,r)=>{if(q.method==="GET")return void r.writeHead(200,{"content-type":"text/html; charset=utf-8"}).end(${JSON.stringify(PAGE)});r.writeHead(200,{"content-type":"application/json"}).end("{}")});s.listen(0,"127.0.0.1",()=>console.log(s.address().port))`;
     server = spawn(process.execPath, ["-e", serve], { stdio: ["ignore", "pipe", "ignore"] });
@@ -160,6 +160,8 @@ describe("[realtime] a mutation proof that loses its observer or its verifier", 
     server.stdout!.on("data", (chunk: Buffer) => void (port += chunk.toString("utf8")));
     await until(() => port.includes("\n"), 20_000, "the page server to listen");
     site = `http://127.0.0.1:${port.trim()}`;
+    // 0.30.0 §5: a draft is proved over MCP only on a test-mode target, which a person declares (here, the operator's file).
+    writeFileSync(join(dir, "home", ".jevitate", "targets.json"), JSON.stringify({ [site]: { trust: "test" } }));
     await new FsJourneyStore(join(dir, ".jevitate", "journeys")).put(journeyOn(site));
     await new FsJourneyStore(join(dir, ".jevitate", "journeys")).put(journeyOn(site, MCP_ID, MCP_PARAM));
     env = { ...process.env, HOME: join(dir, "home"), PLAYWRIGHT_BROWSERS_PATH: process.env["PLAYWRIGHT_BROWSERS_PATH"] ?? join(homedir(), ".cache", "ms-playwright") };
@@ -239,7 +241,7 @@ describe("[realtime] a mutation proof that loses its observer or its verifier", 
     await run.closed;
     whole = reportOf(run.stdout());
     expect(whole.reusedPairs).toBe(0);
-    expect(whole.verdict).toBe("proven");
+    expect(whole.verdict).toBe("sensitive");
   }, 240_000);
 
   it("a verifier killed with SIGKILL is reported as gone, and a resume reuses its finished pairs and reaches the same verdict", async () => {

@@ -9,11 +9,11 @@
  * environment as `journey run`. Mutations never send, fabricate or answer a request: they leave a
  * step's action out, ABORT the app's own writes in one step's window, or type `""`.
  */
+import { basename, join, relative } from "node:path";
 import {
   FsJourneyStore,
   JourneyRegistry,
   assertionSiteKey,
-  classifyMutation,
   classifyReplay,
   controlCanChangeVerdict,
   declaredTargetedProofFor,
@@ -24,11 +24,10 @@ import {
   journeyEndState,
   journeyParamSchema,
   journeyWriteSteps,
-  judgeAssertions,
-  mutationErrored,
-  mutationProofVerdict,
   mutationReplay,
+  mutationWriteMatches,
   needsRelaxedReplay,
+  needsFinalNetworkObservation,
   paceBeforeMutationMs,
   paceEndStateFloorMs,
   paceFloorMs,
@@ -37,6 +36,7 @@ import {
   paceTailMs,
   pacedReplay,
   planJourneyMutations,
+  endStateIsolationNotes,
   relaxedMutationReplay,
   runDeclaredTargetedProof,
   runTargetedProof,
@@ -46,19 +46,23 @@ import {
   suggestTargetedProofPlan,
   targetedMutationReplay,
   thinSites,
+  secretParamNames,
+  secretParamValues,
   validateParams,
   type AssertionVerdict,
+  type AssertionProof,
   type Journey,
   type JourneyMutation,
   type JourneyTargetedProofPlan,
   type MutationFailedSite,
-  type MutationProofVerdict,
   type MutationReplay,
   type MutationRunResult,
   type ReplayPace,
   type SiteArrivals,
   type TargetedProof,
 } from "@jevitate/journey";
+import { proofVerdictFields, type LegacyMutationProofVerdict, type MutationProofVerdict } from "./journey-verify-report.js";
+import { adjudicate, classifyMutation, isolationNoteReason, mutationErrored, type Known, type RunEvidence } from "@jevitate/adjudicator";
 import { DEFAULT_STEP_RESPONSE_TIMEOUT_MS, describeCheck, evaluateNetworkCheckAwaiting, monitorFor, type BlockedWrite, type RequestCapture } from "@jevitate/explore";
 import { clock } from "@jevitate/domain";
 import { checkAssertion, waitForOutcome, type StepObserver } from "@jevitate/interpreter";
@@ -76,19 +80,26 @@ import {
   type ResourceGovernor,
 } from "@jevitate/playwright";
 import { journeyContentHash } from "./journey-annotate-api.js";
-import { journeyReviewHash } from "./journey-review.js";
+import { evidenceParamsDigest } from "./journey-run-evidence.js";
+import { proofEvidenceOf, type LedgerReplay, type ProofGathering } from "./journey-verify-evidence.js";
+import { journeyReviewHash, type JourneyVerifyRecord } from "./journey-review.js";
+import { carriesSecretValue, writeVerifyNativeReport } from "./journey-verify-evidence-file.js";
+import { currentBuildTree, currentEngineInfo } from "./engine.js";
+import { artifactStamp } from "./mission-journal.js";
 import { preflightVerifyRecord, writePreflightedVerifyRecord } from "./journey-review-store.js";
-import { UnknownJourneyError, effectiveAllowedOrigins, redactSecretParams, runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
+import { UnknownJourneyError, effectiveAllowedOrigins, redactSecretValues, runJourneyProgrammatically, type RunJourneyProgrammaticallyOptions } from "./journey-api.js";
 import type { OutcomeCheckFailure } from "./journey-network-checks.js";
-import { journeyProofContext, journeyProofHashForContext } from "./journey-proof-context.js";
+import { journeyProofContext, journeyExecutionIdentity, type JourneyExecutionIdentity } from "./journey-proof-context.js";
 import {
   JourneyVerifyResumeRefusedError,
   RETRY_REASON_NOT_KEPT,
   type IsolationNote,
+  checkpointKeyPath,
   checkpointPairOf,
   checkpointReplayOf,
   isRepairableIsolation,
   openProofCheckpoint,
+  readCheckpointKey,
   resumeRefusalAgainstBase,
   reusedProofFields,
   type CheckpointPair,
@@ -98,6 +109,9 @@ import {
   type ResumeState,
 } from "./journey-verify-checkpoint.js";
 import { composeObservers } from "./run-screenshots.js";
+import { asProof, ProofHoldRefusedError } from "./journey-run-hooks.js";
+import { noteMcpRefusal } from "./approval-provenance.js";
+import { envAppVersion } from "./app-version.js";
 
 /** `journey run`'s options a proof passes through to every replay (params, environment, auth, fixtures, browser, gate). */
 export type VerifyJourneyOptions = Omit<
@@ -106,12 +120,19 @@ export type VerifyJourneyOptions = Omit<
 > & {
   /** Read patterns for the write classifier (as `journey lint`). */
   readonly readRequests?: readonly string[];
+  /** M5: the app's release label the proof runs against (`--app-version`); default `JEVITATE_APP_VERSION` when valid. Bound into the receipt. */
+  readonly appVersion?: string;
   /** Called as each replay starts, in order, targeted proofs' replays included. */
   readonly onProgress?: (progress: JourneyVerifyProgress) => void;
   /** The governor whose machine slot the proof keeps between replays (default: the process-wide one its replays open sessions through). */
   readonly slotGovernor?: ResourceGovernor;
   /** #787: keep durable progress for this proof, and with `resume` reuse the pairs an earlier run finished. */
   readonly checkpoint?: ProofCheckpointRequest;
+  /**
+   * #812: handed the proof's evidence record (`RunEvidence`, subject `mutation-proof`) the verdict was
+   * adjudicated from, once the proof has its verdict. Value-free; its parameters are a keyed digest.
+   */
+  readonly onEvidence?: (evidence: RunEvidence) => void;
 };
 
 /** The replay a proof is starting. Names only: never a parameter value. */
@@ -391,6 +412,14 @@ async function readStorageCounts(page: BrowserSession["page"]): Promise<StorageC
     return null;
   } finally {
     clock.clearTimeout(timer);
+  }
+}
+
+function pathOf(p: string): string {
+  try {
+    return /^https?:\/\//i.test(p) ? new URL(p).pathname : p.split("?")[0]!;
+  } catch {
+    return p;
   }
 }
 
@@ -876,15 +905,22 @@ export interface JourneyVerifyAssertion {
   readonly targetedRefusal?: string;
   /** #616: the proving targeted proof came from a declared `metadata.targetedProofs` plan. */
   readonly declaredProof?: true;
+  readonly obligations?: readonly (NonNullable<AssertionProof["obligations"]>[number] & { readonly declaredProof?: true })[];
 }
 
 export interface JourneyVerifyReport {
   readonly journeyId: string;
   /** `journeyContentHash` of the stored Journey: the proof is bound to exactly this content. */
   readonly journeyHash: string;
+  readonly executionIdentity: JourneyExecutionIdentity;
   readonly base: { readonly outcome: string; readonly reason?: string };
+  /** 0.30.0 §6.1: `sensitive` (0.29.0's `proven`), `insensitive` or `inconclusive`. */
   readonly verdict: MutationProofVerdict;
+  /** The 0.29.0 word for `verdict` (`proven` for `sensitive`, otherwise equal), carried through 0.31.0 and removed in 0.32.0. */
+  readonly verdictLegacy: LegacyMutationProofVerdict;
   readonly reason?: string;
+  /** GAPS 21 (design 5.1, rules-v1 `countsForGate`): whether this proof's target trust lets it count for a strict gate. */
+  readonly countsForGate: boolean;
   readonly mutations: readonly JourneyVerifyMutation[];
   readonly assertions: readonly JourneyVerifyAssertion[];
   readonly summary: Readonly<Record<"sensitive" | "insensitive" | "cascade" | "notApplied" | "error" | "unpaired" | "targeted", number>>;
@@ -892,16 +928,26 @@ export interface JourneyVerifyReport {
   readonly suggestedTargetedProofs?: readonly JourneyTargetedProofPlan[];
   /** #787: how many of `mutations` were reused from a checkpoint rather than run by this process. 0 on a run that did not resume. */
   readonly reusedPairs: number;
+  /**
+   * #818: where this report (all of it but this field and `nativeReportError`) was persisted before it
+   * was returned, and the SHA-256 of that file's exact bytes. The canonical receipt names the same file.
+   */
+  readonly nativeReport?: { readonly path: string; readonly sha256: string };
+  /** #818: why the report could not be persisted; then no file is claimed, here or in the receipt. */
+  readonly nativeReportError?: string;
 }
 
 export interface JourneyVerifyPlanReport {
   readonly journeyId: string;
   /** `journeyContentHash` of the stored Journey: the preview is bound to exactly this content. */
   readonly journeyHash: string;
+  readonly executionIdentity: JourneyExecutionIdentity;
   readonly mutations: readonly Pick<JourneyMutation, "kind" | "step" | "id" | "param" | "source">[];
   readonly pairs: readonly { readonly site: string; readonly check: string; readonly mutation: string; readonly declared?: true }[];
   readonly assertions: readonly { readonly site: string; readonly check: string; readonly mutations: readonly string[] }[];
   readonly summary: Readonly<Record<"mutations" | "pairs" | "assertions" | "unpaired" | "minimumReplays" | "writeReplays", number>>;
+  /** #817: end-state shapes a targeted proof cannot isolate, named before any browser opens. Absent when there are none. */
+  readonly isolationNotes?: readonly { readonly site: string; readonly note: string }[];
 }
 
 /**
@@ -931,11 +977,11 @@ export function verifyNoResetLine(summary: JourneyVerifyPlanReport["summary"]): 
 }
 
 /**
- * Static preview of `journey verify --mutate`: no browser, fixtures, hooks, target, session or
+ * Static preview of `journey verify --mutate`: CLI resolves local target policy; no browser, fixtures, hooks, target network, session or
  * credential is opened. Values of params are used only to derive the plan and are never returned.
  */
 export async function planJourneyVerification(
-  opts: Pick<VerifyJourneyOptions, "dir" | "id" | "params" | "readRequests">,
+  opts: Pick<VerifyJourneyOptions, "dir" | "id" | "params" | "readRequests" | "browser" | "emulation">,
 ): Promise<JourneyVerifyPlanReport> {
   const journey = await new JourneyRegistry(new FsJourneyStore(opts.dir)).get(opts.id);
   if (!journey) throw new UnknownJourneyError(`unknown journey '${opts.id}'`);
@@ -950,9 +996,11 @@ export async function planJourneyVerification(
     const key = assertionSiteKey(site);
     return { site: key, check: describeCheck(site.check), mutations: pairs.filter((pair) => pair.site === key).map((pair) => pair.mutation) };
   });
+  const isolationNotes = endStateIsolationNotes(journey, plan);
   return {
     journeyId: journey.metadata.id,
     journeyHash: journeyContentHash(journey),
+    executionIdentity: journeyExecutionIdentity(journey, journeyProofContext(opts.browser, opts.emulation, opts.readRequests)),
     mutations: plan.mutations,
     pairs,
     assertions,
@@ -964,43 +1012,67 @@ export async function planJourneyVerification(
       minimumReplays: minimumReplaysOf(plan),
       writeReplays: writeReplaysOf(plan, journeyWriteSteps(journey, opts.readRequests === undefined ? {} : { readRequests: opts.readRequests })),
     },
+    ...(isolationNotes.length === 0 ? {} : { isolationNotes }),
   };
 }
 
-/** The exit code for a proof's verdict (docs/ci.md): 0 proven · 1 insensitive · 2 inconclusive. */
-export function verifyExitCode(verdict: MutationProofVerdict): number {
-  return verdict === "proven" ? 0 : verdict === "insensitive" ? 1 : 2;
-}
+export { verifyExitCode } from "./journey-verify-report.js";
 
 type Run = typeof runJourneyProgrammatically;
 
 const REQUEST_LINE = /^(\S+)\s+(\S+)/;
 
-function pathOf(p: string): string {
-  try {
-    return /^https?:\/\//i.test(p) ? new URL(p).pathname : p.split("?")[0]!;
-  } catch {
-    return p;
-  }
-}
-
-/** Was the step's own recorded write among the blocked? With no recorded request, any blocked write counts. */
-function blockedOwnWrite(recorded: readonly string[], blocked: readonly BlockedWrite[]): boolean {
-  if (recorded.length === 0) return blocked.length > 0;
-  return recorded.some((line) => {
+/**
+ * Only a positively matching recorded or declared write establishes applicability. A step with no write
+ * evidence at all gets a block-write only from a declared `mutationPairs` entry: any write its window blocked counts.
+ */
+function blockedOwnWrite(recorded: readonly string[], declared: NonNullable<MutationReplay["blockMatchers"]>, blocked: readonly BlockedWrite[]): boolean {
+  const observed = recorded.flatMap((line) => {
     const m = REQUEST_LINE.exec(line.trim());
-    if (m === null) return false;
-    return blocked.some((b) => b.method.toUpperCase() === m[1]!.toUpperCase() && pathOf(b.path) === pathOf(m[2]!));
+    return m === null ? [] : [{ method: m[1]!, pathGlob: m[2]!, literal: true as const }];
   });
+  const matchers = [...observed, ...declared];
+  if (matchers.length === 0) return blocked.length > 0;
+  return matchers.some((matcher) => blocked.some((request) => mutationWriteMatches(matcher, request)));
 }
 
-function failedSitesOf(result: { outcome: string; reason?: string; at?: number }, failures: readonly OutcomeCheckFailure[]): MutationFailedSite[] {
+function failedSitesOf(result: { outcome: string; reason?: string; at?: number; failurePhase?: "action" | "postcondition" }, failures: readonly OutcomeCheckFailure[]): MutationFailedSite[] {
   if (result.outcome !== "quarantined") return [];
   const structured = failures.map((f): MutationFailedSite =>
-    f.where === "step-request" ? { where: "step-request", step: f.step, checkIndex: f.checkIndex } : f.where === "end-state" ? { where: "end-state", index: f.index } : { where: "unevaluable" },
+    f.where === "step-request" ? { where: "step-request", step: f.step, checkIndex: f.checkIndex, ...(f.evaluated === true ? { evaluated: true } : {}) } : f.where === "end-state" ? { where: "end-state", index: f.index } : { where: "unevaluable" },
   );
-  return result.at === undefined ? structured : [...structured, { where: "step", step: result.at + 1, postcondition: /postcondition failed/.test(result.reason ?? "") }];
+  return result.at === undefined ? structured : [...structured, { where: "step", step: result.at + 1, postcondition: result.failurePhase === "postcondition" }];
 }
+
+/** Corresponding top-level boundaries only; admission and cleanup never enter this record. */
+function finalObservation(stepCount: number): {
+  anchors: number[]; valid: boolean; finalDone: boolean; closes: number; close?: number;
+  observer: StepObserver; captureClose: () => Promise<void>;
+} {
+  const record = {
+    anchors: [] as number[], valid: true, finalDone: false, closes: 0,
+    close: undefined as number | undefined,
+    observer: {} as StepObserver,
+    captureClose: async (): Promise<void> => {
+      const now = clock.monotonicMs();
+      record.closes++;
+      if (record.closes !== 1 || !Number.isFinite(now) || now < 0 || now < (record.anchors.at(-1) ?? now)) record.valid = false;
+      record.close = now;
+    },
+  };
+  record.observer = {
+    beforeStep: async ({ index }) => {
+      const now = clock.monotonicMs();
+      if (index !== record.anchors.length || index >= stepCount || !Number.isFinite(now) || now < 0 || now < (record.anchors.at(-1) ?? now)) { record.valid = false; return; }
+      record.anchors.push(now);
+    },
+    afterStep: async ({ index, outcome }) => {
+      if (index === stepCount - 1) record.finalDone = outcome === "done";
+    },
+  };
+  return record;
+}
+type FinalObservation = ReturnType<typeof finalObservation>;
 
 /**
  * Runs the proof for one Journey by id. Usage errors (unknown id, bad params, an environment that
@@ -1012,8 +1084,11 @@ export async function verifyJourneyMutations(opts: VerifyJourneyOptions, run: Ru
   const endHold = (opts.slotGovernor ?? sharedResourceGovernor()).holdSlotBetweenSessions();
   const owned: { session?: ProofCheckpointSession } = {};
   try {
-    return await proveJourneyMutations(opts, run, owned);
+    // 0.30.0 §5.4: a proof never holds; a replay that reaches a human step ends it `E_HUMAN_STEP_IN_PROOF`.
+    return await asProof(() => proveJourneyMutations(opts, run, owned));
   } catch (err) {
+    // The tool call's answer, whatever the command made of it (mcp-cli-tools.ts).
+    if (err instanceof ProofHoldRefusedError) noteMcpRefusal(err);
     // In an MCP server the process outlives the proof, so its pid no longer says the proof is running.
     owned.session?.interrupted();
     throw err;
@@ -1032,19 +1107,15 @@ function paramsAccepted(journey: Journey, params: Record<string, string>): boole
   }
 }
 
-const CROSSED = "so state from one replay may cross into the next (a job it started, by any route, still running); isolate the replays or let the job end, and run the proof again";
+const UNANSWERED = "closed with a write still unanswered";
 
-/** Why a replay may have decided another, from names alone, so an interrupted proof can give the same reason. */
+/**
+ * Why a replay may have decided another, from names alone, so an interrupted proof can give the same reason.
+ * The adjudicator's wording for each class (`isolationNoteReason`), with the lines left open named when they are known.
+ */
 export function isolationReason(note: IsolationNote, by: string | null, openLines: readonly string[] = []): string {
-  const open = `closed with a write still unanswered${openLines.length === 0 ? "" : ` (${openLines.join(", ")})`}, which may land inside a later replay; the proof cannot say which replay it decided`;
-  if (note === "write-open") return `a replay of ${by ?? "a mutation"} ${open}`;
-  if (note === "independence-write-open") return `the independence replay (the Journey as recorded, straight after the base) ${open}`;
-  if (note === "control-write-open") return `the control for ${by ?? "a mutation"} (the Journey as recorded, no mutation applied) ${open}`;
-  if (note === "base-write-open") return `the base replay ${open}`;
-  if (note === "state-crossed") return `the Journey as recorded failed straight after the base replay and passed after a quiet gap, ${CROSSED}`;
-  if (note === "state-stuck") return `the Journey as recorded no longer passes after the base replay, ${CROSSED}`;
-  if (note === "independence-errored") return "the replay as recorded after the base errored, so the proof cannot say the replays are independent; retry it (--resume keeps what finished and runs this replay again)";
-  return "sibling mutations disagree on a site, and a control and a re-run could not settle it; run the proof again";
+  const reason = isolationNoteReason(note, by ?? undefined);
+  return openLines.length === 0 ? reason : reason.replace(UNANSWERED, `${UNANSWERED} (${openLines.join(", ")})`);
 }
 
 /** A pair's result from its checkpoint, in the report's shape. */
@@ -1077,6 +1148,17 @@ type Replayed = NonNullable<JourneyVerifyMutation["relaxed"]> & {
  * with its relaxations), on the same floors. `at-base-time` is the mutation again, with no margin on its floors.
  */
 type ReplayKind = "first" | "relaxed" | "targeted" | "control" | "targeted-control" | "independence" | "rerun" | "at-base-time";
+/** #812: the evidence's role for each kind of replay (`ReplayEvidence.role`). */
+const LEDGER_ROLE: Readonly<Record<ReplayKind, LedgerReplay["role"]>> = {
+  first: "mutated",
+  relaxed: "relaxed",
+  targeted: "targeted",
+  control: "control",
+  "targeted-control": "control",
+  independence: "independence",
+  rerun: "rerun",
+  "at-base-time": "at-base-time",
+};
 const isUnmutated = (kind: ReplayKind): boolean => kind === "control" || kind === "targeted-control" || kind === "independence";
 const labelOf = (m: JourneyMutation, kind: ReplayKind): string => {
   if (kind === "control" || kind === "targeted-control") return `control for step ${m.step}`;
@@ -1108,7 +1190,13 @@ interface ReplayContext {
   readonly boundedRun: BoundedRun;
   readonly taint: Taint;
   readonly noteWritesInFlight: (n: number) => void;
+  /** #812: the writes a replay left open that the proof counts (in scope, not excused as the base's long-lived lines). */
+  readonly noteCountedOpen: (n: number) => void;
   readonly noteIndependenceOpen: (lines: readonly string[]) => void;
+  /** The base's step anchors and final-network capture close, when the Journey has a final network check. */
+  readonly baseline: FinalObservation | undefined;
+  /** Is `m` a skip paired with a final network check, so its replay must observe as long as the base did? */
+  readonly judgesRequest: (m: JourneyMutation) => boolean;
 }
 
 /** What a pair's replays, and the re-runs that settle a disagreement, need from the proof. */
@@ -1151,7 +1239,11 @@ interface ConcludeContext {
   readonly resuming: ResumeState | undefined;
   /** A closing replay's restore can still fail, so this is read when it is needed. */
   readonly restoreFailed: () => boolean;
+  /** Independent check M6: every secret the proof's replays knew (params, bindings, fixture and extracted secrets), read when it is needed. */
+  readonly runSecrets: () => readonly string[];
   readonly notIsolated: string | undefined;
+  /** #812: what the evidence records beyond the pairs: the replays as they ran, the independence reading, the first taint. */
+  readonly gathered: Pick<ProofGathering, "ledger" | "isolation" | "baseOpenAtClose" | "taint">;
 }
 
 const resultOfEntry = (m: JourneyVerifyMutation): MutationRunResult => ({
@@ -1190,6 +1282,7 @@ async function attemptReplay(c: ReplayContext, m: JourneyMutation, describe: (j:
     c.noteWritesInFlight(p.writesInFlightAtClose);
     if (kind === "independence") c.noteIndependenceOpen(p.openLinesAtClose);
     const excused = kind === "independence" && p.openLinesAtClose.every((line) => baseOpenLines.includes(line));
+    c.noteCountedOpen(p.writesInFlightAtClose > 0 && !excused ? p.writesInFlightAtClose : 0);
     if (p.writesInFlightAtClose > 0 && !excused) {
       const [note, by] = openWriteOwner(m, kind);
       taint(note, by, isolationReason(note, by, p.openLinesAtClose));
@@ -1211,6 +1304,56 @@ async function attemptReplay(c: ReplayContext, m: JourneyMutation, describe: (j:
       await probe.settleOpenWrites(settleBoundMs);
     }, writeScope);
     opened = probe;
+    // A mutated replay judged by a final network check observes each step prefix at least as long, up to
+    // the final capture's close, as the base did. Browser admission and cleanup never count: the clock
+    // starts at each step's own boundary, and an incomplete or inconsistent observation is no evidence.
+    const baseline = c.baseline;
+    const holdRequired = kind !== "independence" && c.judgesRequest(m);
+    const observed = holdRequired ? finalObservation(stepsTotal) : undefined;
+    let horizonComplete = !holdRequired;
+    let horizonSleeps = 0;
+    let horizonElapsed = 0;
+    let horizonRequired = 0;
+    let horizonCause: "missing-observer" | "sleep-failed" | "clock-no-progress" | "clock-invalid" | "wake-limit" | "incomplete" = "missing-observer";
+    const captureClose = async (): Promise<void> => {
+      if (observed === undefined || baseline === undefined) return;
+      await observed.captureClose();
+      if (!baseline.valid || !observed.valid) { horizonCause = "clock-invalid"; return; }
+      if (baseline.close !== undefined) horizonRequired = Math.max(0, ...baseline.anchors.slice(0, m.step).map((before) => baseline.close! - before));
+      if (baseline.close === undefined || baseline.closes !== 1 || !baseline.finalDone || baseline.anchors.length !== stepsTotal || !observed.finalDone || observed.anchors.length !== stepsTotal) return;
+      horizonCause = "incomplete";
+      try {
+        let now = clock.monotonicMs();
+        if (observed.close === undefined || !Number.isFinite(observed.close) || !Number.isFinite(now) || now < observed.close) {
+          horizonCause = "clock-invalid";
+          return;
+        }
+        for (;;) {
+          let remaining = 0;
+          horizonElapsed = Number.POSITIVE_INFINITY;
+          for (let index = 0; index < m.step; index++) {
+            const before = baseline.anchors[index];
+            const replayBefore = observed.anchors[index];
+            if (before === undefined || replayBefore === undefined) { horizonCause = "missing-observer"; return; }
+            const required = baseline.close - before;
+            const elapsed = now - replayBefore;
+            if (![now, required, elapsed].every(Number.isFinite) || required < 0 || elapsed < 0) { horizonCause = "clock-invalid"; return; }
+            horizonRequired = Math.max(horizonRequired, required);
+            horizonElapsed = Math.min(horizonElapsed, elapsed);
+            remaining = Math.max(remaining, required - elapsed);
+          }
+          if (remaining <= 0) { horizonComplete = true; return; }
+          if (horizonSleeps >= 8) { horizonCause = "wake-limit"; return; }
+          const previous = now;
+          horizonSleeps++;
+          try { await clock.sleep(Math.ceil(remaining)); }
+          catch { horizonCause = "sleep-failed"; return; }
+          now = clock.monotonicMs();
+          if (!Number.isFinite(now) || now < previous) { horizonElapsed = now; horizonCause = "clock-invalid"; return; }
+          if (now === previous) { horizonCause = "clock-no-progress"; return; }
+        }
+      } catch { horizonCause = "clock-invalid"; }
+    };
     // Described on the Journey the run moved onto the environment, as the mutated copy is.
     let waits: readonly RelaxedSiteWait[] = how.relaxedSiteWaits ?? [];
     const params = how.params ?? opts.params;
@@ -1218,6 +1361,7 @@ async function attemptReplay(c: ReplayContext, m: JourneyMutation, describe: (j:
       waits.length === 0 ? undefined : relaxedWaitObserver(() => waits, params, opts.stepResponseTimeoutMs ?? DEFAULT_STEP_RESPONSE_TIMEOUT_MS, (ended) => probe.recordWait(ended)),
       isUnmutated(kind) ? probe.observer() : undefined,
       pacer.observer(),
+      observed?.observer,
     );
     // The step's own lines stay blocked for the rest of the replay. A later step that records the same line sends its own.
     const blockLines = how.blockRequests ?? [];
@@ -1230,6 +1374,9 @@ async function attemptReplay(c: ReplayContext, m: JourneyMutation, describe: (j:
       { ...runOpts, ...(how.params === undefined ? {} : { params: { ...how.params } }), observer },
       {
         structuredFailures: true,
+        // The write blocker classifies with the same recorded-origin read policy as the planner.
+        ...(opts.readRequests === undefined ? {} : { readRequests: opts.readRequests }),
+        ...(observed === undefined ? {} : { beforeFinalNetworkCaptureClose: captureClose }),
         beforeEndState: async () => {
           await pacer.hold(atLeast(paceEndStateFloorMs(pace, m, withMargin), matchTo?.endStateReachedMs));
           // A claim is judged with what the app was already doing finished, as far as the Journey allows.
@@ -1263,13 +1410,22 @@ async function attemptReplay(c: ReplayContext, m: JourneyMutation, describe: (j:
       probe,
     );
     checkWritesLeftOpen(probe);
+    if (holdRequired && r.outcome === "heal-exhausted") {
+      return { outcome: "failed", failedSites: [{ where: "step", step: r.at + 1, postcondition: false }], reason: r.reason };
+    }
+    // A replay that stopped at a step retains its original failure/cascade. A result at
+    // the final-check boundary needs the completed hold, even when the observer was skipped.
+    if (holdRequired && (!horizonComplete || observed?.valid !== true || observed.closes !== 1 || !observed.finalDone) && !(r.outcome === "quarantined" && r.at !== undefined)) {
+      if (observed?.valid === false) horizonCause = "clock-invalid";
+      return { outcome: "error", failedSites: [], reason: `final-network observation horizon failed (cause=${horizonCause}, eligible=${observed?.finalDone === true}, closeObserved=${observed?.closes === 1}, baselineAnchors=${baseline?.anchors.length ?? 0}, replayAnchors=${observed?.anchors.length ?? 0}, sleeps=${horizonSleeps}, requiredMs=${Number.isFinite(horizonRequired) ? horizonRequired : "invalid"}, elapsedMs=${Number.isFinite(horizonElapsed) ? horizonElapsed : "invalid"})` };
+    }
     const blocked = r.blockedWrites ?? [];
     const blockedFields = how.blockIndex === undefined ? {} : { blockedWrites: blocked.map((b) => `${b.method} ${b.path}`) };
     // #579: a select mutation found no other enabled live option — not applied, never proof.
     if (r.outcome === "quarantined" && /no-alternative/.test(r.reason)) {
       return { outcome: "not-applied", failedSites: [], ...blockedFields, reason: r.reason };
     }
-    if (how.blockIndex !== undefined && !blockedOwnWrite(how.blockRequests ?? [], blocked)) {
+    if (how.blockIndex !== undefined && !blockedOwnWrite(how.blockRequests ?? [], how.blockMatchers ?? [], blocked)) {
       return {
         outcome: "not-applied",
         failedSites: [],
@@ -1310,6 +1466,8 @@ async function attemptReplay(c: ReplayContext, m: JourneyMutation, describe: (j:
           }),
     };
   } catch (err) {
+    // A proof that reached a human step ends, as the base would have: never one mutation's error.
+    if (err instanceof ProofHoldRefusedError) throw err;
     // A stall ends the proof: it never reads as one mutation's error, which could still end `proven`.
     if (err instanceof JourneyVerifyStalledError) {
       // A stall leaves a resumable checkpoint, so what the replay left open has to be on it. A replay whose close
@@ -1487,15 +1645,55 @@ function withWhatToAdd(reason: string, journey: Journey): string {
   ].join("; ");
 }
 
+/** The parameters as the evidence keeps them: a keyed digest when the verify-checkpoint key can be read (never created here), else a marker. */
+function proofParamsDigest(opts: VerifyJourneyOptions, journey: Journey): string {
+  const read = readCheckpointKey(opts.checkpoint?.keyFile ?? checkpointKeyPath());
+  return "key" in read ? evidenceParamsDigest(read.key, opts.params, secretParamNames(journey, opts.params)) : "unkeyed";
+}
+
 /** The last replay as recorded, the verdict, the report and its receipt. */
 async function concludeProof(c: ConcludeContext): Promise<JourneyVerifyReport> {
-  const { opts, runOpts, journey, journeyHash, plan, sites, checkOf, base, baseFields, pace, mutations, suggested, receiptDestination, boundedRun, checkpoint, resuming, restoreFailed } = c;
+  const { opts, runOpts, journey, journeyHash, plan, checkOf, base, baseFields, pace, mutations, suggested, receiptDestination, boundedRun, checkpoint, resuming, restoreFailed, gathered } = c;
   let notIsolated = c.notIsolated;
   const tainted = (): boolean => restoreFailed() || notIsolated !== undefined;
   const results = new Map<string, MutationRunResult>(mutations.map((m) => [m.id, resultOfEntry(m)]));
+  // The gatherer's record: the verdict is the adjudicator's, read from it alone.
+  let closing: ProofGathering["closing"];
+  const evidenceNow = (paramsDigest = "unkeyed"): RunEvidence =>
+    proofEvidenceOf(
+      {
+        journey,
+        plan,
+        basePassed: base.outcome === "ok",
+        ...gathered,
+        pairs: mutations,
+        restore: restoreFailed() ? "failed" : opts.fixtures === undefined ? "none" : "ok",
+        ...(closing === undefined ? {} : { closing }),
+      },
+      journeyHash,
+      { origin: opts.environment?.baseUrl ?? journey.recording.site, environment: opts.environment?.name, channel: "cli", paramsDigest, secretParamNames: secretParamNames(journey, opts.params) },
+    );
+  const checksOf = (evidence: RunEvidence): NonNullable<ReturnType<typeof adjudicate>["checks"]> => adjudicate(evidence).checks!;
+  // A last replay as recorded, where its result can still change the verdict: a replay's slow job has no
+  // request to watch, so a late landing that stuck is only seen here. It cannot see one a restore then cleared.
+  // #787: a resume always runs it: nothing from before the interruption can vouch for how the proof ended.
+  if (!tainted() && (resuming !== undefined || (pace.stepEndMs.length > 0 && checksOf(evidenceNow()).verdict !== "inconclusive"))) {
+    checkpoint?.phase("closing");
+    try {
+      const ran = await boundedRun({ ...runOpts }, { structuredFailures: true }, { id: "closing replay, as recorded" });
+      closing = ran.outcome === "ok" ? "passed" : "failed";
+      if (ran.outcome !== "ok") notIsolated = "the Journey as recorded no longer passes after the mutated replays, so state one left behind may have decided another; isolate the replays (a fixture restore, or a longer job's end) and run the proof again";
+    } catch (err) {
+      if (err instanceof JourneyVerifyStalledError || err instanceof ProofHoldRefusedError) throw err;
+      closing = "error";
+      notIsolated = "the closing replay as recorded errored, so the proof cannot say the replays stayed isolated; retry it";
+    }
+  }
+  const evidence = evidenceNow(opts.onEvidence === undefined ? "unkeyed" : proofParamsDigest(opts, journey));
+  const checks = checksOf(evidence);
   // Base failed: nothing ran, so every paired assertion is an `error` (no proof either way).
-  const judged = judgeAssertions(journey, plan, results);
-  const assertions: JourneyVerifyAssertion[] = judged.map((a) => ({
+  const declaredFor = (by: string | undefined, site: string): boolean => by !== undefined && results.get(by)?.targeted?.some((t) => t.site === site && t.declared === true) === true;
+  const assertions: JourneyVerifyAssertion[] = checks.assertions.map((a) => ({
     site: a.site,
     check: checkOf.get(a.site) ?? a.site,
     verdict: a.verdict,
@@ -1503,33 +1701,27 @@ async function concludeProof(c: ConcludeContext): Promise<JourneyVerifyReport> {
     ...(a.relaxedSites === undefined ? {} : { relaxedSites: a.relaxedSites }),
     ...(a.targetedRefusal === undefined ? {} : { targetedRefusal: a.targetedRefusal }),
     // #616: the proving proof was a declared plan, not the automatic relaxation search.
-    ...(a.provedBy !== undefined && results.get(a.provedBy)?.targeted?.some((t) => t.site === a.site && t.declared === true) === true ? { declaredProof: true as const } : {}),
+    ...(declaredFor(a.provedBy, a.site) ? { declaredProof: true as const } : {}),
+    ...(a.obligations === undefined ? {} : { obligations: a.obligations.map((o) => ({ ...o, ...(declaredFor(o.provedBy, a.site) ? { declaredProof: true as const } : {}) })) }),
   }));
   const order = new Map(journeyAssertions(journey).map((s, i) => [assertionSiteKey(s), i]));
   const siteOrder = (key: string): number => order.get(key) ?? Number.MAX_SAFE_INTEGER;
-  const verdictInput = { basePassed: base.outcome === "ok", mutations, assertions: judged };
-  // A last replay as recorded, where its result can still change the verdict: a replay's slow job has no
-  // request to watch, so a late landing that stuck is only seen here. It cannot see one a restore then cleared.
-  // #787: a resume always runs it: nothing from before the interruption can vouch for how the proof ended.
-  if (!tainted() && (resuming !== undefined || (pace.stepEndMs.length > 0 && mutationProofVerdict({ ...verdictInput, restoreFailed: restoreFailed(), ...(notIsolated === undefined ? {} : { notIsolated }) }).verdict !== "inconclusive"))) {
-    checkpoint?.phase("closing");
-    try {
-      const closing = await boundedRun({ ...runOpts }, { structuredFailures: true }, { id: "closing replay, as recorded" });
-      if (closing.outcome !== "ok") notIsolated = "the Journey as recorded no longer passes after the mutated replays, so state one left behind may have decided another; isolate the replays (a fixture restore, or a longer job's end) and run the proof again";
-    } catch (err) {
-      if (err instanceof JourneyVerifyStalledError) throw err;
-      notIsolated = "the closing replay as recorded errored, so the proof cannot say the replays stayed isolated; retry it";
-    }
-  }
-  const { verdict, reason: judgedReason } = mutationProofVerdict({ ...verdictInput, restoreFailed: restoreFailed(), ...(notIsolated === undefined ? {} : { notIsolated }) });
+  // d-vocab-migration (§6.1): the adjudicator's word is the report's, with the 0.29.0 word beside it.
+  const verdicts = proofVerdictFields(checks.verdict);
+  // The evidence names a finding by class; the proof's own words for it also name the lines left open.
+  const judgedReason = gathered.taint !== undefined && notIsolated !== undefined && checks.reason === isolationNoteReason(gathered.taint.note, gathered.taint.by) ? notIsolated : checks.reason;
   const reason = plan.pairs.length === 0 && judgedReason?.startsWith("no assertion is paired") === true ? withWhatToAdd(judgedReason, journey) : judgedReason;
   const count = (v: AssertionVerdict): number => assertions.filter((a) => a.verdict === v).length;
+  const proofContext = journeyProofContext(opts.browser, opts.emulation, opts.readRequests);
+  const executionIdentity = journeyExecutionIdentity(journey, proofContext);
   const report: JourneyVerifyReport = {
     journeyId: journey.metadata.id,
     journeyHash,
+    executionIdentity,
     base: baseFields,
-    verdict,
+    ...verdicts,
     ...(reason === undefined ? {} : { reason }),
+    countsForGate: checks.countsForGate,
     mutations,
     assertions,
     summary: {
@@ -1547,31 +1739,98 @@ async function concludeProof(c: ConcludeContext): Promise<JourneyVerifyReport> {
     reusedPairs: resuming?.pairs.size ?? 0,
   };
   // Reasons and check texts can quote what the page showed: a secret parameter never comes back.
-  const redacted = redactSecretParams(report, journey, opts.params);
-  const proofContext = journeyProofContext(opts.browser, opts.emulation, opts.readRequests);
-  // #432: the verdict is kept beside the Journey (bound to its review hash) for `journey review`.
-  await writePreflightedVerifyRecord(receiptDestination, {
+  // Native digest/id contain no parameter values. Do not corrupt their typed identity if a
+  // secret value happens to be a substring of a digest or protocol discriminant.
+  const { executionIdentity: identity, ...redactable } = report;
+  // Independent check M6: every secret the replays knew, not only the secret parameters, in every URL form (`redactText`).
+  const secrets = [...new Set([...secretParamValues(journey, opts.params), ...c.runSecrets()])];
+  const redacted: JourneyVerifyReport = { ...redactSecretValues(redactable, secrets), executionIdentity: identity };
+  // #818: the whole redacted report is on disk before anything is returned or printed, and the receipt binds it.
+  const native = persistNativeReport(receiptDestination, journey, secrets, redacted, proofContext);
+  const nativeBinding = "error" in native ? { nativeReportError: native.error } : { nativeReport: native };
+  const receipt: JourneyVerifyRecord & { readonly nativeReport?: { readonly path: string; readonly sha256: string }; readonly nativeReportError?: string } = {
     journeyId: journey.metadata.id,
     contentHash: journeyReviewHash(journey),
-    proofHash: journeyProofHashForContext(journey, proofContext),
+    proofHash: executionIdentity.proofHash,
     ...(proofContext === undefined ? {} : { proofContext }),
     verdict: redacted.verdict,
     ...(redacted.reason === undefined ? {} : { reason: redacted.reason }),
+    // §5.1: readiness and require-sensitive read whether this proof's target trust lets it count.
+    countsForGate: redacted.countsForGate,
     summary: { ...redacted.summary },
     ...(redacted.suggestedTargetedProofs === undefined ? {} : { suggestedTargetedProofs: redacted.suggestedTargetedProofs }),
     ...(redacted.reusedPairs === 0 ? {} : { reusedPairs: redacted.reusedPairs }),
+    ...("error" in native ? { nativeReportError: native.error } : { nativeReport: { path: relative(receiptDestination.parent, native.path), sha256: native.sha256 } }),
+    // #816: the engine that computed this proof's identity, so a reader can say a mismatch is the engine's, not the Journey's.
+    engine: receiptEngine(),
+    // M5: the target and app version the proof ran on; a reader judging another target or app version reads it stale.
+    ...receiptTarget(journey, opts),
     at: clock.nowIso(),
-  });
+  };
+  // #432: the verdict is kept beside the Journey (bound to its review hash) for `journey review`.
+  await writePreflightedVerifyRecord(receiptDestination, receipt);
   const errorGap = checkpoint !== undefined && isRepairableIsolation(checkpoint.body.taint) ? true : !tainted() && mutations.some(mutationErrored);
   checkpoint?.finish(redacted.verdict, errorGap);
-  return redacted;
+  opts.onEvidence?.(evidence);
+  return { ...redacted, ...nativeBinding };
+}
+
+/** M5: the receipt's target origin (`--env`/`--base-url`, else the Journey's site) and app version, when known. */
+function receiptTarget(journey: Journey, opts: VerifyJourneyOptions): { target?: { origin: string }; appVersion?: string } {
+  let origin: string | undefined;
+  try {
+    const o = new URL(opts.environment?.baseUrl ?? journey.recording.site).origin;
+    origin = o === "null" ? undefined : o;
+  } catch {
+    origin = undefined;
+  }
+  const appVersion = opts.appVersion ?? envAppVersion(process.env);
+  return { ...(origin === undefined ? {} : { target: { origin } }), ...(appVersion === undefined ? {} : { appVersion }) };
+}
+
+/**
+ * #818: the redacted report, with the engine and the immutable bindings that identify the run, under
+ * `.verify/reports/<id>/`. A secret the run knew, found anywhere in it in any form, withholds the file entirely.
+ */
+function persistNativeReport(
+  destination: Awaited<ReturnType<typeof preflightVerifyRecord>>,
+  journey: Journey,
+  secrets: readonly string[],
+  report: JourneyVerifyReport,
+  proofContext: ReturnType<typeof journeyProofContext>,
+): { readonly path: string; readonly sha256: string } | { readonly error: string } {
+  const at = clock.nowIso();
+  const envelope = {
+    schemaVersion: 1,
+    kind: "journey-verify-native-report",
+    engine: { ...currentEngineInfo(), tree: currentBuildTree() },
+    journeyId: journey.metadata.id,
+    journeyHash: report.journeyHash,
+    contentHash: journeyReviewHash(journey),
+    proofHash: report.executionIdentity.proofHash,
+    ...(proofContext === undefined ? {} : { proofContext }),
+    at,
+    report,
+  };
+  if (carriesSecretValue(JSON.stringify(envelope), secrets)) {
+    return { error: "the native report could not be written (withheld: it still carried a secret value); the proof's verdict stands, but its full report exists only in this output" };
+  }
+  const dir = join(destination.parent, "reports", basename(destination.path, ".json"));
+  // `.verify` was checked by the preflight: nothing under it is written through a symbolic link.
+  return writeVerifyNativeReport(dir, artifactStamp(at), envelope, destination.parent);
+}
+
+/** #816: the version and commit a receipt names as its producer (no build time: it is not identity). */
+function receiptEngine(): { readonly version: string; readonly commit: string } {
+  const { version, commit } = currentEngineInfo();
+  return { version, commit };
 }
 
 async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned: { session?: ProofCheckpointSession }): Promise<JourneyVerifyReport> {
   const journey = await loadJourneyToVerify(opts.dir, opts.id);
   // #711: receipt authority is proven before the first baseline/mutation replay spends a browser.
   const receiptDestination = await preflightVerifyRecord(opts.dir, journey.metadata.id);
-  const { readRequests, onProgress, slotGovernor: _slotGovernor, checkpoint: checkpointRequest, ...runOpts } = opts;
+  const { readRequests, onProgress, slotGovernor: _slotGovernor, checkpoint: checkpointRequest, onEvidence: _onEvidence, ...runOpts } = opts;
   const inactivityMs = proofInactivityMs(journey, opts);
   const portFactory = opts.browserPortFactory ?? ((): BrowserPort => new PlaywrightBrowserPort());
   let replays = 0;
@@ -1591,12 +1850,16 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
   const resuming = opened.resume;
   // A taint belongs to the whole proof: an earlier run's stands, or a resume could read `proven` where the uninterrupted proof could not.
   if (resuming?.restoreFailed === true) restoreFailed = true;
+  // Independent check M6: the secrets each replay knew, for the report's redaction.
+  const knownSecrets = new Set<string>();
   const boundedRun = (options: Parameters<Run>[0], mutation: NonNullable<Parameters<Run>[1]>, m?: Pick<JourneyMutation, "id">, retry = false, probe?: ReplayProbe): ReturnType<Run> => {
     replays += 1;
     checkpoint?.replayStarted(replays);
     const where: JourneyVerifyProgress = { replay: replays, ...(m === undefined ? {} : { mutation: m.id }), ...(retry ? { retry: true as const } : {}) };
     onProgress?.(retry && m !== undefined ? { ...where, mutation: `${m.id} (retry after error)` } : where);
-    return replayWithinBound((browserPortFactory) => run({ ...options, browserPortFactory }, { ...mutation, onFixtureRestoreFailed: () => {
+    return replayWithinBound((browserPortFactory) => run({ ...options, browserPortFactory }, { ...mutation, onRunSecrets: (secrets) => {
+          for (const v of secrets) if (v !== "") knownSecrets.add(v);
+        }, onFixtureRestoreFailed: () => {
           restoreFailed = true;
           checkpoint?.taint({ restoreFailed: true });
         } }), probe === undefined ? portFactory : probe.wrap(portFactory), where, inactivityMs, () => void (sessionsOpened += 1));
@@ -1609,7 +1872,20 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
   const basePacer = new ReplayPacer(0, () => undefined);
   // The base stays open until its writes have settled: what it started must not land in the next replay.
   const baseProbe: ReplayProbe = new ReplayProbe(stepsTotal, () => baseProbe.settleOpenWrites(Math.max(longestResponseMs, basePacer.elapsedMs())), writeScope);
-  const base = await boundedRun({ ...runOpts, observer: composeObservers(baseProbe.observer(), basePacer.observer()) }, { structuredFailures: true, earliestObserver: basePacer.claimObserver(), afterEndState: () => basePacer.noteEndState() }, undefined, false, baseProbe);
+  // The base's own step boundaries and final capture close: what a final-network replay must observe as long as.
+  const baseline = needsFinalNetworkObservation(journey) ? finalObservation(stepsTotal) : undefined;
+  const base = await boundedRun(
+    { ...runOpts, observer: composeObservers(baseProbe.observer(), basePacer.observer(), baseline?.observer) },
+    {
+      structuredFailures: true,
+      earliestObserver: basePacer.claimObserver(),
+      afterEndState: () => basePacer.noteEndState(),
+      ...(baseline === undefined ? {} : { beforeFinalNetworkCaptureClose: baseline.captureClose }),
+    },
+    undefined,
+    false,
+    baseProbe,
+  );
   // Every other replay waits as this one did, so this one is their control (`pacedReplay`).
   const pace: ReplayPace = { stepEndMs: basePacer.reachedMs.filter((ms): ms is number => ms !== undefined), ...(basePacer.endStateReachedMs === undefined ? {} : { endStateMs: basePacer.endStateReachedMs }), claimHeldMs: [...basePacer.claimHeldMs] };
   const baseMs = basePacer.elapsedMs();
@@ -1618,12 +1894,20 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
   // Why a replay may have decided another (a write still open at a close, state crossing replays).
   const resumedNote = resuming === undefined ? null : (resuming.isolation ?? (resuming.notIsolatedBy === null ? null : "write-open"));
   let notIsolated: string | undefined = resumedNote === null ? undefined : isolationReason(resumedNote, resuming?.notIsolatedBy ?? null);
+  // #812: the same finding as the evidence records it, for the adjudicator.
+  let taintNote: ProofGathering["taint"] =
+    resumedNote === null ? undefined : { note: resumedNote, ...(resuming?.notIsolatedBy == null ? {} : { by: resuming.notIsolatedBy }), carried: true };
   // Once set it stays, and an interrupted proof keeps it: a resume could otherwise read `proven` where the uninterrupted proof could not.
   const taint = (note: IsolationNote, by: string | null = null, detail?: string): void => {
     if (notIsolated !== undefined) return;
     notIsolated = detail ?? isolationReason(note, by);
+    taintNote = { note, ...(by === null ? {} : { by }) };
     checkpoint?.taint({ isolation: note, notIsolatedBy: by });
   };
+  // #812: what the evidence records of the replays as they run.
+  const ledger: LedgerReplay[] = [];
+  let isolation: Known<"isolated" | "state-crossed"> = { known: false, reason: "not-gathered" };
+  let baseOpenAtClose = 0;
   // Once a replay may have decided another, the proof is `inconclusive` whatever is left: nothing else is run.
   const tainted = (): boolean => restoreFailed || notIsolated !== undefined;
   const baseFields = { outcome: base.outcome, ...(base.outcome === "quarantined" ? { reason: base.reason } : {}) };
@@ -1631,7 +1915,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
   if (resuming !== undefined) {
     // Nothing is reused against an app whose as-recorded flow no longer passes, or a base it was not paced for.
     if (base.outcome !== "ok") {
-      const why = base.outcome === "quarantined" ? redactSecretParams({ reason: base.reason }, journey, opts.params).reason : base.outcome;
+      const why = base.outcome === "quarantined" ? redactSecretValues({ reason: base.reason }, [...secretParamValues(journey, opts.params), ...knownSecrets]).reason : base.outcome;
       throw new JourneyVerifyResumeRefusedError("base-failed", `the Journey as recorded did not pass the re-run of the base replay (${why})`);
     }
     const refused = resumeRefusalAgainstBase(resuming, plan, sites, pace, baseProbe.writesInFlightAtClose);
@@ -1645,6 +1929,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
   // #787: this pair's replays as records, by kind, for a later base to be held against.
   const pairReplays: CheckpointReplay[] = [];
   let replayWritesInFlight = 0;
+  let countedOpen = 0;
   if (base.outcome === "ok") {
     // #565: a param mutation's replay runs with altered params (never a secret's), so it needs them.
     const replayOpts = { ...lintOpts, params: opts.params };
@@ -1653,7 +1938,13 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
     const replayContext: ReplayContext = {
       opts, runOpts, journey, pace, stepsTotal, settleBoundMs, writeScope, writeSteps, baseProbe, boundedRun, taint,
       noteWritesInFlight: (n) => void (replayWritesInFlight = Math.max(replayWritesInFlight, n)),
+      noteCountedOpen: (n) => void (countedOpen += n),
       noteIndependenceOpen: (lines) => void (independenceOpen = lines),
+      baseline,
+      judgesRequest: (m) => m.kind === "skip" && plan.pairs.some((p) => {
+        const site = p.mutation === m.id ? sites.find((s) => assertionSiteKey(s) === p.site) : undefined;
+        return site?.where === "end-state" && (site.check.kind === "requestMade" || site.check.kind === "responseStatus");
+      }),
     };
     const retriesOf = new Map<string, { readonly reason: string }[]>();
     // #778: one infrastructure error must not cost the proof, so a replay that errored before opening a
@@ -1672,8 +1963,10 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
     // #787: the one place a replay of a pair runs, so each is kept as a record of its kind. A new kind is a new name here and in `REPLAY_RECORD_KINDS`.
     const runReplay = async (m: JourneyMutation, describe: (j: Journey) => MutationReplay, kind: ReplayKind, matchTo?: SiteArrivals): Promise<Replayed> => {
       replayWritesInFlight = 0;
+      countedOpen = 0;
       const ran = await attemptWithRetry(m, describe, kind, matchTo);
       pairReplays.push(checkpointReplayOf(kind, ran, replayWritesInFlight));
+      ledger.push({ role: LEDGER_ROLE[kind], ...(kind === "independence" ? {} : { mutation: m.id }), outcome: ran.outcome, openAtClose: { known: true, value: countedOpen } });
       return ran;
     };
     // #402: a named mutation lowers to its `MutationReplay`; #609's targeted proof passes one directly.
@@ -1722,15 +2015,18 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
       const floored = await runReplay(first, asRecorded, "independence");
       // A write still open at the bound in the base and the next replay is a long-lived connection. Open only in the base, it was a real one.
       if (baseOpenLines.some((line) => !independenceOpen.includes(line))) {
+        baseOpenAtClose = baseOpenLines.length;
         taint("base-write-open", null, isolationReason("base-write-open", null, baseOpenLines));
         return;
       }
       writeScope.addBackground(baseOpenLines);
       if (floored.outcome === "error") {
+        isolation = { known: false, reason: "replay-errored" };
         taint("independence-errored");
         return;
       }
       if (floored.outcome === "passed") {
+        isolation = { known: true, value: "isolated" };
         stepControls.set(first.step, [floored]);
         checkpoint?.independence("passed");
         return;
@@ -1739,24 +2035,39 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
       await clock.sleep(Math.max(QUIET_GAP_MIN_MS, 2 * baseMs));
       const again = await runReplay(first, asRecorded, "independence");
       if (again.outcome === "passed") {
+        isolation = { known: true, value: "state-crossed" };
         taint("state-crossed");
         return;
       }
       if (again.outcome === "error") {
+        isolation = { known: false, reason: "replay-errored" };
         taint("independence-errored");
         return;
       }
       if (tainted()) return;
       const unheldProbe: ReplayProbe = new ReplayProbe(stepsTotal, () => unheldProbe.settleOpenWrites(settleBoundMs), writeScope);
+      // #812: what the unheld replay leaves open lands in the first mutated replay, as any other replay's would.
+      const unheldOpen = (): number => {
+        const open = unheldProbe.writesInFlightAtClose > 0 && !unheldProbe.openLinesAtClose.every((line) => baseOpenLines.includes(line)) ? unheldProbe.writesInFlightAtClose : 0;
+        if (open > 0) taint("independence-write-open", null, isolationReason("independence-write-open", null, unheldProbe.openLinesAtClose));
+        return open;
+      };
       try {
         const unheld = await boundedRun({ ...runOpts, observer: unheldProbe.observer() }, { structuredFailures: true }, { id: "independence replay, unheld" }, false, unheldProbe);
-        if (unheld.outcome !== "ok") taint("state-stuck");
+        ledger.push({ role: "independence", outcome: unheld.outcome === "ok" ? "passed" : "failed", openAtClose: { known: true, value: unheldOpen() } });
+        if (unheld.outcome !== "ok") {
+          isolation = { known: true, value: "state-crossed" };
+          taint("state-stuck");
+        }
       } catch (err) {
-        if (err instanceof JourneyVerifyStalledError) throw err;
+        if (err instanceof JourneyVerifyStalledError || err instanceof ProofHoldRefusedError) throw err;
+        ledger.push({ role: "independence", outcome: "error", openAtClose: { known: true, value: unheldOpen() } });
+        isolation = { known: false, reason: "replay-errored" };
         taint("independence-errored");
         return;
       }
       if (tainted()) return;
+      isolation = { known: true, value: "isolated" };
       stepControls.set(first.step, [again]);
       checkpoint?.independence("hold-breaks-claim");
     };
@@ -1767,6 +2078,7 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
     if (firstMutation !== undefined && pace.stepEndMs.length > 0 && !tainted()) {
       checkpoint?.phase("independence");
       if (baseOpenLines.some((line) => writeScope.isRecorded(line))) {
+        baseOpenAtClose = baseOpenLines.length;
         taint("base-write-open", null, isolationReason("base-write-open", null, baseOpenLines));
       } else {
         await proveIndependence(firstMutation);
@@ -1787,7 +2099,11 @@ async function proveJourneyMutations(opts: VerifyJourneyOptions, run: Run, owned
     await settleDisagreements(pairContext);
   }
 
-  return concludeProof({ opts, runOpts, journey, journeyHash, plan, sites, checkOf, base, baseFields, pace, mutations, suggested, receiptDestination, boundedRun, checkpoint, resuming, restoreFailed: () => restoreFailed, notIsolated });
+  return concludeProof({
+    opts, runOpts, journey, journeyHash, plan, sites, checkOf, base, baseFields, pace, mutations, suggested, receiptDestination, boundedRun, checkpoint, resuming,
+    restoreFailed: () => restoreFailed, runSecrets: () => [...knownSecrets], notIsolated,
+    gathered: { ledger, isolation, baseOpenAtClose, ...(taintNote === undefined ? {} : { taint: taintNote }) },
+  });
 }
 
 /** One human line per assertion — verdict, site, check, and the mutation that proved it. */
@@ -1798,5 +2114,11 @@ export function verifyAssertionLine(a: JourneyVerifyAssertion): string {
     a.relaxedSites === undefined || a.relaxedSites.length === 0 ? "" : a.declaredProof === true ? `, declared plan relaxed ${a.relaxedSites.join(", ")}` : `, relaxed ${a.relaxedSites.join(", ")}`;
   const proved = a.provedBy === undefined ? "" : `  (proved by ${a.provedBy}${relaxed})`;
   const refused = a.targetedRefusal === undefined ? "" : `  (targeted proof refused: ${a.targetedRefusal})`;
-  return `${a.verdict.padEnd(11)}  ${a.site.padEnd(18)}  ${a.check}${proved}${refused}`;
+  const obligations = a.obligations === undefined ? "" : `  [${a.obligations.map((o) => {
+    const witness = o.provedBy === undefined ? "" : ` by ${o.provedBy}`;
+    const relaxed = o.relaxedSites === undefined || o.relaxedSites.length === 0 ? "" : `, ${o.declaredProof === true ? "declared plan " : ""}relaxed ${o.relaxedSites.join(", ")}`;
+    const refusal = o.targetedRefusal === undefined ? "" : `, targeted proof refused: ${o.targetedRefusal}`;
+    return `${o.kind}: ${o.verdict}${witness}${relaxed}${refusal}`;
+  }).join("; ")}]`;
+  return `${a.verdict.padEnd(11)}  ${a.site.padEnd(18)}  ${a.check}${proved}${refused}${obligations}`;
 }

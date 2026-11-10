@@ -30,6 +30,8 @@ export function withJourneyExitCode(result: unknown): unknown {
   if (result === null || typeof result !== "object") return result;
   const outcome = (result as { outcome?: unknown }).outcome;
   if (typeof outcome !== "string" || !(JOURNEY_RUN_OUTCOMES as readonly string[]).includes(outcome)) return result;
+  // GAPS 21: a run that carries its job verdict already has the exit code the job's done check gives.
+  if ("job" in result && typeof (result as { exitCode?: unknown }).exitCode === "number") return result;
   return { ...result, exitCode: journeyExitCode(outcome as JourneyRunOutcome) };
 }
 

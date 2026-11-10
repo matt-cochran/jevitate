@@ -1,5 +1,5 @@
 import { facadeListIncoming, facadeGetCommand, facadeGetThread, facadeQueueAction, facadeQueueRetrieval, facadeApproveAction, facadeCancelCommand, facadeGetSiteHealth } from "@jevitate/mcp-facade";
-import { FsInboxStore } from "@jevitate/inbox";
+import { FsInboxStore, QUEUEABLE_INBOX_KINDS } from "@jevitate/inbox";
 import { currentEngineInfo } from "../engine.js";
 import type { McpToolCtx, McpToolGroup } from "./shared.js";
 import { jsonResult, errorResult } from "./shared.js";
@@ -87,7 +87,15 @@ export function inboxTools(ctx: McpToolCtx): McpToolGroup {
         properties: { ...queueCommonProperties, kind: { type: "string", enum: ["approval", "handback", "review"] } },
         required: queueCommonRequired,
       },
-      handler: inboxHandler((store, args) => facadeQueueAction(store, args)),
+      // #793: a `secret` item is only ever a held run's (journey-hold.ts, created through the run's
+      // `onHold` hook); an agent cannot queue one, so the tool's kinds stay the three it always took.
+      handler: async (args) => {
+        const kind = args !== null && typeof args === "object" ? (args as Record<string, unknown>).kind : undefined;
+        if (kind !== undefined && !(QUEUEABLE_INBOX_KINDS as readonly unknown[]).includes(kind)) {
+          return errorResult({ error: "invalid_args", message: "'kind' must be one of 'approval' | 'handback' | 'review'" });
+        }
+        return inboxHandler((store, a) => facadeQueueAction(store, a))(args);
+      },
     },
     queue_retrieval: {
       description:
@@ -97,7 +105,7 @@ export function inboxTools(ctx: McpToolCtx): McpToolGroup {
     },
     approve_action: {
       description:
-        "SM1: an agent can NEVER approve an inbox item over MCP — always refuses with human_approval_required. Approval is only permitted from the local jevitate UI.",
+        "SM1: an agent can NEVER approve an inbox item over MCP — always refuses with human_approval_required, and never reads or writes a held run (#793). Approval is only permitted from the local jevitate UI, or for a held run by a person typing `jevitate inbox approve <id>` at a terminal.",
       inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
       handler: async () => errorResult(facadeApproveAction()),
     },

@@ -40,6 +40,7 @@ import { clock, isRecord } from "@jevitate/domain";
 import { writeMissionResult } from "./mission-journal.js";
 import { findGitRoot, logsDirFor, type LayoutDeps } from "./project-dir.js";
 import { prepareMcpRunGuard } from "./mcp-run-guard.js";
+import { guardRequestWithMode, resolveSurfaceRunMode, runModeRecord, type RunModeRecord } from "./run-surface-mode.js";
 import { redactSensitivePath, redactSensitiveValue, redactThrown, type RedactionFieldRule } from "./terminal-result.js";
 
 /**
@@ -235,6 +236,8 @@ export interface VerifyFixReport extends VerifyFixResult {
   readonly allowlistOverride?: AllowlistOverride;
   /** #767: the `<vfArtifact stem>.result.json` this run wrote, when `resultArtifact` was requested. */
   readonly resultPath?: string;
+  /** 0.30.0 §5: the run mode of the replay's target (`run.mode`, `run.target.trust`), from the person-written files. */
+  readonly run?: RunModeRecord;
 }
 
 export class VerifyFixInputError extends Error {
@@ -545,15 +548,27 @@ async function replayFinding(opts: RunVerifyFixOptions, known: ReadonlySet<strin
   }
   // Guardrail #1: the replay may only ever touch the mission's own authorized origins.
   const origin = assertAuthorizedExploreTarget(mission.target.seedUrl, mission.target.allowlist);
+  const replayEnvironment = opts.env === undefined ? undefined : resolveJourneyEnvironment({ env: opts.env, targets: {}, ...(opts.environmentsFile === undefined ? {} : { environmentsFile: opts.environmentsFile }) });
+  // 0.30.0 §5: the run mode of the finding's origin, from the person-written files only. A finding's
+  // reproduction is no Journey (no approval to check): the mode goes to the guard below and to the report.
+  const decided = resolveSurfaceRunMode({ surface: "verify-fix", origin, environment: replayEnvironment, targetsFile: opts.runGuardTargetsFile, ...(opts.environmentsFile === undefined ? {} : { environmentsFile: opts.environmentsFile }) });
+  const runMode: RunModeRecord = runModeRecord(decided);
   // #789: over MCP a finding is not replayed on a production origin, with one in its allowlist, or under a production environment's allow list, before anything opens. The CLI is the person's.
-  prepareMcpRunGuard({
-    site: origin,
-    allowedOrigins: mission.target.allowlist,
-    refuseProductionInAllowlist: true,
-    environment: opts.env === undefined ? undefined : resolveJourneyEnvironment({ env: opts.env, targets: {}, ...(opts.environmentsFile === undefined ? {} : { environmentsFile: opts.environmentsFile }) }),
-    targetsFile: opts.runGuardTargetsFile,
-    environmentsFile: opts.environmentsFile,
-  });
+  // (No write guard is armed on its sessions, so test mode has nothing to relax here: production refuses in every mode.)
+  prepareMcpRunGuard(
+    guardRequestWithMode(
+      {
+        site: origin,
+        allowedOrigins: mission.target.allowlist,
+        refuseProductionInAllowlist: true,
+        environment: replayEnvironment,
+        targetsFile: opts.runGuardTargetsFile,
+        environmentsFile: opts.environmentsFile,
+      },
+      decided,
+      [],
+    ),
+  );
   const target = resolveTargetConfig(opts.targets ?? {}, origin);
   // #175: the operator's targets.json session is the last fallback (verify_fix over MCP of a
   // mission recorded without one); never an MCP argument.
@@ -802,6 +817,7 @@ async function replayFinding(opts: RunVerifyFixOptions, known: ReadonlySet<strin
   const report: VerifyFixReport = {
     ...result,
     exitCode: VERIFY_FIX_EXIT_CODES[result.verdict],
+    run: runMode,
     ...(branch === undefined ? {} : { branch }),
     ...(stale === undefined ? {} : { failure: { kind: "journey-stale" as const, message: stale.message } }),
     ...(evidence === undefined ? {} : { evidence }),

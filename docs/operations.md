@@ -11,6 +11,12 @@ two results from different builds in one dogfooding session were otherwise indis
 When they can't be determined (no `.git`, `git` unavailable), the field reads `unknown` —
 never a fabricated commit or time.
 
+Only a release tarball reports a bare `x.y.z (commit …, tree …, built …)`. Every other build (a
+source checkout, `npm link`, a local `pnpm pack`) reports `x.y.z-source-<commit>` (#784), so it
+never passes for the published version. A tool that needs the exact published build compares the
+whole `--version` line, or at least the version, commit and tree, and refuses `-source-`. Parsing
+only a `^\d+\.\d+\.\d+` prefix drops the marker.
+
 The same `{version, commit, builtAt}` (as `engine`) is on every mission's result — the
 persisted `*.result.json`, the `--json` envelope, and every issue draft's `## Environment`
 section — so a result on disk always says which build produced it. So is every other command's
@@ -280,6 +286,7 @@ stops being found once `.jevitate/` holds `db.sqlite` (which `site policy set` c
 | `baselines/`: `baseline tag` snapshots | `inbox/`, `missions/` (the queue), `trust/`, `sources/` (clones) |
 | `environments.json`: named environments for `--env` ([journeys](./journeys.md#environments---env)) | per-environment sessions and secret fields, in `targets.json` by origin |
 | `logs/<date>/`: run output (not committed) | `journeys/` and `logs/` when you are not in a repo |
+| `logs/holds/`: held runs (not committed): a signed record and a value-free checkpoint per hold | `verify-checkpoint.key`: the key that signs holds and checkpoints |
 | | `run/browser-slots/`: the machine-wide browser slots ([resource governance](#shared-machines-resource-governance)) |
 
 `.jevitate/.gitignore` (written by `init`, which only ever adds the lines it lacks) keeps `logs/`
@@ -291,6 +298,14 @@ Run output goes to `logs/<UTC date>/`, named by its artifact stem
 (`explore-2026-09-25T01-26-29-787Z.result.json`). `get_mission_result`, `verify_fix` and
 `report` find a result by its id in the project's logs, then in `~/.jevitate/logs`, then in the
 0.1.0 `~/.jevitate/recordings` and `~/.jevitate/ux-reports`.
+
+**Holds.** A run held for a person (see [run modes](./run-modes.md#holds-and-resume)) leaves
+`logs/holds/hold-<16 hex>.json` and `hold-<16 hex>.checkpoint.json` under the project's `.jevitate/` (under
+`~/.jevitate/` outside a project), and an inbox item with the same id. A hold lives 24 hours. After that,
+`jevitate inbox resume <id>` ends the run `inconclusive` with `E_HOLD_EXPIRED` (exit 2). The records hold no
+parameter value. They are signed with `~/.jevitate/verify-checkpoint.key`: a hold written without that key, or
+altered, is refused with `E_HOLD_INTEGRITY`. `jevitate inbox list` shows pending holds. A held run in CI
+never completes by itself: nothing but a person at a terminal answers it.
 
 Logs are pruned at the start of every command that writes them: a run older than 14 days is
 deleted, but the newest 50 runs are always kept. Change it in `~/.jevitate/config.json`:
@@ -393,7 +408,18 @@ recorded the same way.
 ## How it's packaged
 
 `@jevitate/cli` is a single bundled package — all internal `@jevitate/*`
-workspace code is compiled into `dist/bin.js` via esbuild, and only native/heavy
-dependencies (`playwright`, `better-sqlite3`, …) install alongside it. `jevitate`
-is a thin bare-name wrapper that re-execs the same binary. Every other
-`packages/*` is `private` and internal.
+workspace code is compiled into `dist/bin.js` (the `jevitate` command) and `dist/index.js` (the
+root export, `import("@jevitate/cli")`) via esbuild, and only native/heavy dependencies
+(`playwright`, `better-sqlite3`, …) install alongside it. `jevitate` is a thin bare-name wrapper
+that re-execs the same binary. Every other `packages/*` is `private` and internal.
+
+`playwright` is pinned to the exact version the release gate tested (#825), so a fresh install
+never floats to a newer one. Its Chromium revision comes with that version: after an upgrade that
+changes the pinned Playwright, browser commands refuse with "run: jevitate install-browser" until
+you run it once. `jevitate install-browser` installs exactly the revision the CLI checks for, and
+never removes the revisions other projects use.
+
+The release pack (`scripts/ci/pack-release.sh`) proves the tarball before it is uploaded: in an
+empty prefix holding only the declared dependencies, the bin's `--version` must match the manifest,
+`import("@jevitate/cli")` must load and report the same identity, and every exactly pinned
+dependency must be the version the frozen lockfile installed.

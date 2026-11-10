@@ -1,4 +1,5 @@
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
+import { REPLAY_SECRET_FIELD_HELP, collectSecretField, secretParamNamesArgvWarning, secretParamsCarriedBy } from "./secret-params.js";
 import { BranchReplayInputError, JourneyPrefixStaleError, prefixFromBranch, recordedBranchOf, type JourneyPrefix, type RecordedBranch } from "./journey-prefix.js";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
@@ -15,6 +16,7 @@ import { positiveIntArg } from "./cli-args.js";
 import { formatRegressionCaptureHuman, formatRegressionRunHuman } from "./cli-output.js";
 import { type EmulationSpec } from "@jevitate/playwright";
 import { prepareMcpRunGuard } from "./mcp-run-guard.js";
+import { guardRequestWithMode, resolveSurfaceRunMode, runModeRecord } from "./run-surface-mode.js";
 import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, type EnvironmentFlags, type ResolvedJourneyEnvironment } from "./environments.js";
 import {
   type CliDeps,
@@ -37,6 +39,12 @@ import {
 } from "./cli-shared.js";
 
 /** Registers `jevitate regression`: `capture` and `run`. */
+/** #809: the existing argv warning for a `--param` that names a secret, by name only (never the value). */
+export function warnParamNamesOnArgv(write: ((line: string) => void) | undefined, param: Readonly<Record<string, string>>, command?: string): void {
+  const names = secretParamsCarriedBy(null, param);
+  if (names.length > 0) write?.(secretParamNamesArgvWarning(names, command));
+}
+
 export function registerRegressionCommands(program: Command, deps: CliDeps): void {
   // Additive: `@jevitate/regression` — reproduce -> minimize -> commit a
   // failing Recording into a committed regression artifact (Ticket #5).
@@ -47,9 +55,10 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
   const regression = program.command("regression").description("capture, run and manage regression tests from discovered failures");
 
   /** #293: the prefix a branch-point failure replays through; `null` after refusing (exit 64). */
-  const branchPrefixOrRefuse = async (branch: RecordedBranch, params: Record<string, string>, storageState: string | undefined): Promise<JourneyPrefix | null> => {
+  const branchPrefixOrRefuse = async (branch: RecordedBranch, params: Record<string, string>, storageState: string | undefined, secretFields: readonly string[], command: string): Promise<JourneyPrefix | null> => {
     try {
-      return await prefixFromBranch(branch, { params, warn: (line) => program.configureOutput().writeErr?.(line), ...(storageState === undefined ? {} : { storageState }), dbPath: resolveDbPath(deps), environmentSeams: environmentSeams(deps) });
+      // #827: the prefix's secret parameters from --secret-field or the environment's targets.json, off the command line.
+      return await prefixFromBranch(branch, { params, secretFields, command, env: deps.explore?.env ?? process.env, ...(storageState === undefined ? {} : { storageState }), dbPath: resolveDbPath(deps), environmentSeams: environmentSeams(deps) });
     } catch (err) {
       if (!(err instanceof BranchReplayInputError)) throw err;
       emitJson(program, fail("E_REGRESSION_ARGS", err.message));
@@ -83,10 +92,11 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
     .option("--force", "overwrite an existing regression id's committed files (default: refused, #213)", false)
     .option(
       "--param <kv>",
-      "#293: a Journey param as key=value (repeatable) for a failure found from a Journey branch point — every replay goes through the same prefix; a secret param (never persisted) must be given again",
+      "#293: a Journey param as key=value (repeatable) for a failure found from a Journey branch point — every replay goes through the same prefix; a secret param (never persisted) must be given again: --secret-field keeps it off the command line",
       collectParam,
       {} as Record<string, string>,
     )
+    .option("--secret-field <binding>", REPLAY_SECRET_FIELD_HELP, collectSecretField, [] as string[])
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command) {
       // #245: demo mode (--headed/--slow-mo), resolved before any browser opens.
@@ -108,9 +118,11 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
         storageState?: string;
         force?: boolean;
         param: Record<string, string>;
+        secretField: string[];
         json?: boolean;
       } & FixtureFlags & EmulationFlags>();
-      const { from, id, dir, attempts, summary, result: resultPath, fingerprint, storageState, force, json, param } = flags;
+      const { from, id, dir, attempts, summary, result: resultPath, fingerprint, storageState, force, json, param, secretField } = flags;
+      warnParamNamesOnArgv(program.configureOutput().writeErr, param, "regression capture");
       if (refuseUnsafeName(program, id, "regression id")) return;
       // #218: unusable input is refused up front (64), never a capture that broke at runtime (2).
       for (const [flag, path] of [["--from", from], ["--result", resultPath]] as const) {
@@ -143,8 +155,12 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
             : recording.emulation.device !== undefined
               ? { device: recording.emulation.device }
               : { viewport: recording.emulation.viewport });
+        // 0.30.0 §5: the run mode of the Recording's site, from the person-written files only. A regression is
+        // no Journey (no approval to check); the mode reaches the #789 guard (test mode's relaxation) and the result.
+        const decided = resolveSurfaceRunMode({ surface: "regression", origin: recording.site, ...environmentSeams(deps) });
+        const modeNotes: string[] = [];
         // #789: the MCP floor, decided before a fixture or a browser. Undefined on the CLI.
-        const runGuard = prepareMcpRunGuard({ site: recording.site, allowedOrigins: [recording.site], ...environmentSeams(deps) });
+        const runGuard = prepareMcpRunGuard(guardRequestWithMode({ site: recording.site, allowedOrigins: [recording.site], ...environmentSeams(deps) }, decided, modeNotes));
         // #144: every reproduce/minimize replay restores the fixture state the Recording started from.
         fx = regressionFixtures(
           flags,
@@ -155,7 +171,7 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
         const replayFixture = fx;
         // #293: a failure found from a Journey branch point is reproduced THROUGH that prefix.
         const branch = resultPath === undefined ? undefined : recordedBranchOf((JSON.parse(await readFile(resultPath, "utf8")) as { result?: unknown }).result);
-        const prefix = branch === undefined ? undefined : await branchPrefixOrRefuse(branch, param, storageState);
+        const prefix = branch === undefined ? undefined : await branchPrefixOrRefuse(branch, param, storageState, secretField, "regression capture");
         if (prefix === null) return;
 
         const result = await runRegressionCapture({
@@ -189,7 +205,8 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
           const meta = JSON.parse(await readFile(result.metaPath, "utf8")) as Record<string, unknown>;
           await writeFile(result.metaPath, `${JSON.stringify({ ...meta, branch }, null, 2)}\n`);
         }
-        const envelope = ok(fx === undefined ? result : { ...result, fixtures: fx.record() });
+        const withMode = { ...result, run: runModeRecord(decided, modeNotes) };
+        const envelope = ok(fx === undefined ? withMode : { ...withMode, fixtures: fx.record() });
         if (json) {
           emitJson(program, envelope);
         } else {
@@ -226,10 +243,11 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
     .option("--storage-state <file>", "Playwright storageState JSON to open the replay session authenticated (#129); must exist")
     .option(
       "--param <kv>",
-      "#293: a Journey param as key=value (repeatable) for a failure found from a Journey branch point — every replay goes through the same prefix; a secret param (never persisted) must be given again",
+      "#293: a Journey param as key=value (repeatable) for a failure found from a Journey branch point — every replay goes through the same prefix; a secret param (never persisted) must be given again: --secret-field keeps it off the command line",
       collectParam,
       {} as Record<string, string>,
     )
+    .option("--secret-field <binding>", REPLAY_SECRET_FIELD_HELP, collectSecretField, [] as string[])
     .option("--json", "emit a JSON envelope")
     .option(TAG_FLAG, TAG_HELP, collectTag, [])
     .action(taggedAction(program, "regression run", async function (this: Command, id: string) {
@@ -241,9 +259,10 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
         emitJson(program, fail("E_REGRESSION_ARGS", err instanceof Error ? err.message : String(err)));
         return;
       }
-      const { dir, attempts, storageState: storageStateFlag, json, env: envName, baseUrl, param, ...emulationFlags } = this.opts<
-        { dir?: string; attempts?: string; storageState?: string; json?: boolean; param: Record<string, string> } & EmulationFlags & EnvironmentFlags
+      const { dir, attempts, storageState: storageStateFlag, json, env: envName, baseUrl, param, secretField, ...emulationFlags } = this.opts<
+        { dir?: string; attempts?: string; storageState?: string; json?: boolean; param: Record<string, string>; secretField: string[] } & EmulationFlags & EnvironmentFlags
       >();
+      warnParamNamesOnArgv(program.configureOutput().writeErr, param, "regression run");
       // #247: --env/--base-url choose where the regression replays (unknown env / bad file → 64).
       let environment: ResolvedJourneyEnvironment | undefined;
       try {
@@ -284,7 +303,7 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
         } catch {
           branch = undefined;
         }
-        const prefix = branch === undefined ? undefined : await branchPrefixOrRefuse(branch, param, storageState);
+        const prefix = branch === undefined ? undefined : await branchPrefixOrRefuse(branch, param, storageState, secretField, "regression run");
         if (prefix === null) return;
         // #149: --viewport/--device, else the committed Recording's OWN emulation.
         const runEmulation: EmulationSpec | undefined =
@@ -294,8 +313,12 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
             : recording.emulation.device !== undefined
               ? { device: recording.emulation.device }
               : { viewport: recording.emulation.viewport });
+        // 0.30.0 §5: the run mode of where the regression replays, from the person-written files only (a
+        // regression is no Journey: no approval to check); it reaches the #789 guard and the report.
+        const decided = resolveSurfaceRunMode({ surface: "regression", origin: environment?.baseUrl ?? recording.site, environment, ...environmentSeams(deps) });
+        const modeNotes: string[] = [];
         // #789: the MCP floor, decided before a browser. Undefined on the CLI.
-        const runGuard = prepareMcpRunGuard({ site: environment?.baseUrl ?? recording.site, allowedOrigins: environment?.allowedOrigins ?? [recording.site], environment, ...environmentSeams(deps) });
+        const runGuard = prepareMcpRunGuard(guardRequestWithMode({ site: environment?.baseUrl ?? recording.site, allowedOrigins: environment?.allowedOrigins ?? [recording.site], environment, ...environmentSeams(deps) }, decided, modeNotes));
         const report = await runRegressionRun({
           id,
           regressionsDir,
@@ -319,7 +342,7 @@ export function registerRegressionCommands(program: Command, deps: CliDeps): voi
           },
         });
         runGuard?.check();
-        const envelope = ok(withEngine(report));
+        const envelope = ok(withEngine({ ...report, run: runModeRecord(decided, modeNotes) }));
         if (json) {
           emitJson(program, envelope);
         } else {

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { EvidenceApprovalChannelSchema } from "@jevitate/adjudicator";
 
 /**
  * #437 — how an approval was made (`approval.provenance`), recorded on every approval record: a
@@ -27,6 +28,10 @@ export const APPROVAL_CHANNELS = ["tty", "non-interactive", "mcp", "ci", "pr-rev
 export type ApprovalChannel = (typeof APPROVAL_CHANNELS)[number];
 
 export const ApprovalChannelSchema = z.enum(APPROVAL_CHANNELS);
+// The evidence record's approval channels (@jevitate/adjudicator) are exactly these: one added on either side fails to build.
+type SameChannels<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+const _channelsMirrored: SameChannels<ApprovalChannel, z.infer<typeof EvidenceApprovalChannelSchema>> = true;
+void _channelsMirrored;
 
 /**
  * #469: the pull request a `pr-review` approval was verified against.

@@ -1,4 +1,4 @@
-import { FsJourneyStore, JourneyRegistry, type CatalogItemStatus, type Journey } from "@jevitate/journey";
+import { FsJourneyStore, JourneyRegistry, type CatalogItemStatus, type DoneCheckSpec, type Journey } from "@jevitate/journey";
 import { CatalogLoader, type CatalogJob, type CatalogPersona } from "./catalog.js";
 import { UnknownJourneyError } from "./journey-api.js";
 import { journeyReviewHash } from "./journey-review.js";
@@ -34,6 +34,8 @@ export interface JourneyLinkResult {
   /** The catalog state of an entry this call linked: `approved`, `draft` (never approved) or `stale` (edited since its approval). */
   readonly jobStatus?: CatalogItemStatus;
   readonly personaStatus?: CatalogItemStatus;
+  /** #800: the linked job's done check as stored (`done.at`, `done.check`); absent when no job is linked or it has none. */
+  readonly jobDone?: DoneCheckSpec;
   /** False when the links were already as asked: nothing was written. */
   readonly changed: boolean;
   /** One line per linked entry that is not approved: a person reviews and approves it before `journey promote`. */
@@ -104,9 +106,15 @@ export async function linkJourney(journeysDir: string, catalogDir: string | null
   ].filter((n): n is string => n !== null);
 
   const m = stored.metadata;
+  // #800: the linked job's done check, as stored (loaded when only the persona was passed).
+  if (m.job !== undefined && catalogDir !== null && jobs.length === 0) {
+    ({ jobs } = await new CatalogLoader({ catalogDir, journeysDir }).loadJobs());
+  }
+  const jobDone = m.job === undefined ? undefined : jobs.find((j) => j.id === m.job)?.job.done;
   return {
     journeyId: id,
     ...(m.job === undefined ? {} : { job: m.job, ...(jobEntry === undefined ? {} : { jobStatus: jobEntry.status }) }),
+    ...(jobDone === undefined ? {} : { jobDone }),
     ...(m.persona === undefined ? {} : { persona: m.persona, ...(personaEntry === undefined ? {} : { personaStatus: personaEntry.status }) }),
     changed,
     needsApproval,

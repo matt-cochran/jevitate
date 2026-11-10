@@ -1,9 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { Command } from "commander";
 import { fail, ok } from "./envelope.js";
-import { warnSecretParamsOnArgv } from "./secret-params.js";
-import { browserRunFromFlags, collectParam, emitCommandResult, withBrowserLaunchFlags, type BrowserLaunchFlags, type CliDeps } from "./cli-shared.js";
-import { isEnvironmentError, withEnvironmentFlags, fixtureRebaseUrl, type ResolvedJourneyEnvironment } from "./environments.js";
+import { REPLAY_SECRET_FIELD_HELP, collectSecretField, secretFieldErrorOf, warnSecretParamsOnArgv, withCommandSecretParams } from "./secret-params.js";
+import { browserRunFromFlags, collectParam, commandSecretSeams, emitCommandResult, environmentSeams, withBrowserLaunchFlags, type BrowserLaunchFlags, type CliDeps } from "./cli-shared.js";
+import { environmentFromFlags, isEnvironmentError, withEnvironmentFlags, fixtureRebaseUrl, type ResolvedJourneyEnvironment } from "./environments.js";
 import { buildMissionFixtures, withFixtureFlags, type FixtureFlags } from "./fixture-cli.js";
 import { withRecordedFixtures } from "./journey-fixtures.js";
 import { FixtureSpecError } from "./mission-fixtures.js";
@@ -47,6 +47,7 @@ export function registerJourneyReadiness(journey: Command, program: Command, dep
     .option("--with <toId>", "a linked pair: <id> produces, <toId> consumes (#582 handoff is checked)")
     .option("--mode <mode>", "report (static only) | replay (baseline run/chain) | prove (replay + verify --mutate)", "report")
     .option("--param <kv>", "param as key=value (repeatable; required ones are refused by name before any browser)", collectParam, {} as Record<string, string>)
+    .option("--secret-field <binding>", REPLAY_SECRET_FIELD_HELP, collectSecretField, [] as string[])
     .option("--requests <file>", "JSON Lines file of approved requests (required for a pair's replay/prove, as journey chain)")
     .option("--storage-state <file>", "Playwright storageState JSON to start each replay authenticated (as journey run)")
     .option("--json", "emit a JSON envelope")
@@ -68,7 +69,23 @@ export function registerJourneyReadiness(journey: Command, program: Command, dep
       }
       const mode: ReadinessMode = rawMode;
       await warnSecretParamsOnArgv(program.configureOutput().writeErr, layout.journeysDir, [id, withId], param);
-      const { env: envName, baseUrl } = this.opts<{ env?: string; baseUrl?: string }>();
+      const { env: envName, baseUrl, secretField } = this.opts<{ env?: string; baseUrl?: string; secretField: string[] }>();
+      // #827: a secret parameter from the environment (--secret-field, the target's targets.json secretFields), off the command line, as `journey verify`.
+      let runParams: Record<string, string> = param;
+      if (mode !== "report") {
+        try {
+          const environment = envName === undefined && baseUrl === undefined ? undefined : environmentFromFlags({ ...(envName === undefined ? {} : { env: envName }), ...(baseUrl === undefined ? {} : { baseUrl }) }, environmentSeams(deps));
+          ({ params: runParams } = await withCommandSecretParams({ dir: layout.journeysDir, ids: [id, withId], params: param, flags: secretField, environment, env: deps.explore?.env ?? process.env, seams: commandSecretSeams(deps, layout.journeysDir, flaggedCatalogDir(layout)) }));
+        } catch (err) {
+          // An environment error is left to readiness, which refuses in its own order (E_READINESS_TARGET first).
+          if (!isEnvironmentError(err)) {
+            const e = secretFieldErrorOf(err, "E_READINESS_ARGS");
+            if (e === undefined) throw err;
+            emitCommandResult(program, fail(e.code, e.message), { json: json === true, exitCode: EXIT_CODES.usage, command: "journey readiness" });
+            return;
+          }
+        }
+      }
       if (storageStateFlag !== undefined && !existsSync(storageStateFlag)) {
         emitCommandResult(program, fail("E_READINESS_ARGS", `storage state not found: ${storageStateFlag}`), { json: json === true, exitCode: EXIT_CODES.usage, command: "journey readiness" });
         return;
@@ -137,7 +154,7 @@ export function registerJourneyReadiness(journey: Command, program: Command, dep
             mode,
             ...(envName === undefined ? {} : { env: envName }),
             ...(baseUrl === undefined ? {} : { baseUrl }),
-            params: param,
+            params: runParams,
             ...(requests === undefined ? {} : { requests }),
             ...(storageStateFlag === undefined ? {} : { storageState: storageStateFlag }),
             ...(browser === undefined ? {} : { browser }),

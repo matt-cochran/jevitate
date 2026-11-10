@@ -6,6 +6,7 @@ import type { Journey } from "@jevitate/journey";
 import type { Recording } from "@jevitate/recording";
 import { ENVIRONMENTS_FILE, findProjectDir, type LayoutDeps } from "./project-dir.js";
 import { loadTargetsFile, TargetConfigError, type TargetConfig } from "./target-config.js";
+import { isDeclarableTrust, trustRefusal, type TargetTrust } from "./run-mode.js";
 
 /**
  * Named environments (#247). A Journey is environment-free: its steps are app-relative paths
@@ -28,6 +29,8 @@ import { loadTargetsFile, TargetConfigError, type TargetConfig } from "./target-
  *    #249); `synthetic: true` attests the environment runs on a seeded, synthetic tenant (never
  *    real customer data) — the data half of Journeeze's demo-media privacy attestation (#471): only
  *    a demo approved on such an environment is rendered under jz-mask-v1 and exported with media.
+ *    `trust` (0.30.0 §5) — `"test"`, `"harness"` or `"production"`: what run mode the environment's
+ *    own origins get (`run-mode.ts`); undeclared is `unknown` (automation mode).
  *    Keys starting with `$` (`$comment`) are documentation. The file is
  *    committed, so it NEVER holds a secret or a session: a `storageState`/`secret`/`password`/
  *    `token`/`cookie`/`credential` key anywhere in it is refused.
@@ -64,6 +67,8 @@ export interface EnvironmentDef {
   readonly production?: boolean;
   /** `synthetic: true` (#471): a seeded, synthetic tenant — an approved demo made here may export masked media. */
   readonly synthetic?: boolean;
+  /** 0.30.0 §5: the declared trust of the environment's origins (absent: undeclared). */
+  readonly trust?: Exclude<TargetTrust, "unknown">;
 }
 
 /** `.jevitate/environments.json` is missing a named environment, or is not what it should be. */
@@ -127,7 +132,7 @@ export function isEnvironmentError(err: unknown): err is EnvironmentError {
 const ENV_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** #561: a named secondary origin — lower-case, starts with a letter, at most 32 chars. */
 const NAMED_ORIGIN_NAME = /^[a-z][a-z0-9_-]{0,31}$/;
-const ENV_KEYS = new Set(["baseUrl", "allow", "origins", "fixtures", "hooks", "production", "synthetic"]);
+const ENV_KEYS = new Set(["baseUrl", "allow", "origins", "fixtures", "hooks", "production", "synthetic", "trust"]);
 const HOOK_KEYS = new Set(["before", "after"]);
 /** A key that would put a secret or a session into a committed file. */
 const SECRET_KEY = /storage.?state|secret|passw(or)?d|token|cookie|credential|api.?key|session|auth(orization)?$/i;
@@ -172,7 +177,7 @@ function parseEnvironment(v: unknown, where: string, baseDir: string): Environme
   refuseSecretKeys(v, where);
   const o = v as Record<string, unknown>;
   for (const k of Object.keys(o)) {
-    if (!ENV_KEYS.has(k) && !k.startsWith("$")) throw new EnvironmentConfigError(`${where}.${k}: unknown key (allowed: baseUrl, allow, origins, fixtures, hooks, production, synthetic)`);
+    if (!ENV_KEYS.has(k) && !k.startsWith("$")) throw new EnvironmentConfigError(`${where}.${k}: unknown key (allowed: baseUrl, allow, origins, fixtures, hooks, production, synthetic, trust)`);
   }
   if (o.baseUrl === undefined) throw new EnvironmentConfigError(`${where}.baseUrl is required`);
   const base = originOf(o.baseUrl);
@@ -220,6 +225,10 @@ function parseEnvironment(v: unknown, where: string, baseDir: string): Environme
   if (o.production !== undefined && typeof o.production !== "boolean") throw new EnvironmentConfigError(`${where}.production must be true or false`);
   if (o.synthetic !== undefined && typeof o.synthetic !== "boolean") throw new EnvironmentConfigError(`${where}.synthetic must be true or false`);
   if (o.synthetic === true && o.production === true) throw new EnvironmentConfigError(`${where}: an environment cannot be both production: true and synthetic: true`);
+  if (o.trust !== undefined && !isDeclarableTrust(o.trust)) throw new EnvironmentConfigError(trustRefusal(where, o.trust));
+  if (o.production === true && o.trust !== undefined && o.trust !== "production") {
+    throw new EnvironmentConfigError(`${where}: an environment cannot be both production: true and trust: ${JSON.stringify(o.trust)}`);
+  }
   return {
     baseUrl: base.origin,
     allow: allow.filter((a) => a !== base.origin),
@@ -228,6 +237,7 @@ function parseEnvironment(v: unknown, where: string, baseDir: string): Environme
     ...(hooks === undefined ? {} : { hooks }),
     ...(o.production === true ? { production: true } : {}),
     ...(o.synthetic === true ? { synthetic: true } : {}),
+    ...(o.trust === undefined ? {} : { trust: o.trust as Exclude<TargetTrust, "unknown"> }),
   };
 }
 
@@ -449,10 +459,11 @@ function absoluteUrl(s: string): URL | null {
  * absolute URL on the recorded site's origin (page urls, `navigate` urls, `urlIncludes` texts)
  * keeps its path/query/fragment on the new origin; app-relative paths are left as they are (they
  * resolve against the environment). A page or `navigate` step on any OTHER origin must be in the
- * environment's `allow` — otherwise `EnvironmentOriginRefusedError`, before anything opens.
- * Never guesses, never mutates the input.
+ * environment's `allow` or (#803) in this run's explicit `--allow` (normalized origins) — otherwise
+ * `EnvironmentOriginRefusedError`, before anything opens. Never guesses, never mutates the input.
  */
-export function rebaseRecording(recording: Recording, env: ResolvedJourneyEnvironment): Recording {
+export function rebaseRecording(recording: Recording, env: ResolvedJourneyEnvironment, allow: readonly string[] = []): Recording {
+  const permitted = [...env.allowedOrigins, ...normalizeAllowlist(allow).filter((o) => !env.allowedOrigins.includes(o))];
   const recordedOrigin = absoluteUrl(recording.site)?.origin;
   const named = namedOriginMap(env, recording.site);
   const refusals: string[] = [];
@@ -468,7 +479,7 @@ export function rebaseRecording(recording: Recording, env: ResolvedJourneyEnviro
     // #561: a named secondary origin moves to the target environment's same-named origin.
     const moved = moveNamedOrigin(raw, named);
     if (moved !== raw) return moved;
-    if (mustBeAllowed && !env.allowedOrigins.includes(u.origin)) refusals.push(`${where} is on ${u.origin}`);
+    if (mustBeAllowed && !permitted.includes(u.origin)) refusals.push(`${where} is on ${u.origin}`);
     return raw;
   };
   const walk = (v: unknown, where: string): unknown => {
@@ -488,7 +499,7 @@ export function rebaseRecording(recording: Recording, env: ResolvedJourneyEnviro
   if (refusals.length > 0) {
     throw new EnvironmentOriginRefusedError(
       `${refusals.join("; ")} — not allowed by the ${env.name === undefined ? `--base-url ${env.baseUrl}` : `environment '${env.name}'`} ` +
-        `(allowed: ${env.allowedOrigins.join(", ")}). Add the origin to its "allow" in .jevitate/environments.json to permit it; nothing was opened`,
+        `(allowed: ${permitted.join(", ")}). Add the origin to its "allow" in .jevitate/environments.json, or pass --allow <origin>, to permit it; nothing was opened`,
     );
   }
   return { ...recording, site: env.baseUrl, pages };
@@ -497,11 +508,11 @@ export function rebaseRecording(recording: Recording, env: ResolvedJourneyEnviro
 /**
  * `rebaseRecording` for a whole Journey; #561 also rewrites the end-state `http` check URLs through
  * the same named-origin map (every other metadata field, incl. origin-bound secretRefs, is untouched:
- * fail closed).
+ * fail closed). `allow` (#803) is the run's explicit `--allow`, which also permits a step's origin.
  */
-export function applyJourneyEnvironment(journey: Journey, env: ResolvedJourneyEnvironment | undefined): Journey {
+export function applyJourneyEnvironment(journey: Journey, env: ResolvedJourneyEnvironment | undefined, allow: readonly string[] = []): Journey {
   if (env === undefined) return journey;
-  const recording = rebaseRecording(journey.recording, env);
+  const recording = rebaseRecording(journey.recording, env, allow);
   const named = namedOriginMap(env, journey.recording.site);
   if (Object.keys(named).length === 0 || journey.metadata.endState === undefined) return { ...journey, recording };
   const endState = journey.metadata.endState.map((check) =>

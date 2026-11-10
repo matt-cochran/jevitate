@@ -1,5 +1,15 @@
-import { describe, expect, it } from "vitest";
-import { JourneyReviewSchema, applyAnnotationDraft, journeyProofHash, type AnnotationDraft, type Journey } from "@jevitate/journey";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Command } from "commander";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { ProfileManager } from "@jevitate/daemon";
+import { FakeClock, installClock, resetClock } from "@jevitate/domain";
+import { registerJourneyVerify, type JourneyVerifySeams } from "./journey-cli/verify.js";
+import { readVerifyRecord } from "./journey-review-store.js";
+import { __resetTerminalResultForTests, type TerminalResultDeps } from "./terminal-result.js";
+import { FsJourneyStore, JourneyReviewSchema, applyAnnotationDraft, journeyProofHash, type AnnotationDraft, type Journey } from "@jevitate/journey";
+import { legacyProofVerdict } from "@jevitate/domain";
 import { buildJourneyReview, journeyLegacyReviewHash, journeyReviewHash, renderReviewMarkdown, renderReviewText, reviewSheetHash, type JourneyVerifyRecord } from "./journey-review.js";
 
 /** #432 — the review sheet builder: one assertion per test, per section. */
@@ -64,7 +74,10 @@ export function fixtureJourney(overrides: Partial<Journey["metadata"]> = {}): Jo
 const VERIFY: JourneyVerifyRecord = {
   journeyId: "buy-pro",
   contentHash: journeyReviewHash(fixtureJourney()),
-  verdict: "proven",
+  proofHash: journeyProofHash(fixtureJourney()),
+  verdict: "sensitive",
+  // M5: a 0.30.0 receipt names the target origin it ran on.
+  target: { origin: new URL(SITE).origin },
   summary: { sensitive: 3, insensitive: 0, cascade: 0, notApplied: 0, error: 0, unpaired: 1 },
   at: "2026-10-02T00:00:00.000Z",
 };
@@ -176,11 +189,28 @@ describe("#432 buildJourneyReview", () => {
   });
 
   it("proof: the last mutation-proof verdict when one is recorded", () => {
-    expect(review.proof.verify).toMatchObject({ status: "recorded", verdict: "proven", stale: false });
+    expect(review.proof.verify).toMatchObject({ status: "recorded", verdict: "sensitive", stale: false });
+  });
+
+  it("proof: a 0.29.0 receipt's legacy word reads as sensitive (d-vocab-migration)", () => {
+    const r = buildJourneyReview(fixtureJourney(), { lastVerify: { ...VERIFY, verdict: legacyProofVerdict("sensitive") } });
+    expect(r.proof.verify).toMatchObject({ status: "recorded", verdict: "sensitive" });
+  });
+
+  it("proof: the sheet shows the proof as a checks-strength line, with whether it counts for a strict gate", () => {
+    const uncounted = renderReviewText(buildJourneyReview(fixtureJourney(), { lastVerify: VERIFY, approvedSnapshot: null }), { color: false, width: 400 });
+    expect(uncounted).toContain("checks strength: sensitive ✓ (does not count for a strict gate: the target cannot be reset)");
+    expect(uncounted).not.toMatch(/\bproven\b/);
+    const counted = renderReviewText(buildJourneyReview(fixtureJourney(), { lastVerify: { ...VERIFY, countsForGate: true }, approvedSnapshot: null }), { color: false, width: 400 });
+    expect(counted).toContain("checks strength: sensitive ✓");
+    expect(counted).not.toContain("does not count");
+    const full = renderReviewText(buildJourneyReview(fixtureJourney(), { lastVerify: { ...VERIFY, countsForGate: true }, approvedSnapshot: null }), { color: false, width: 400, full: true });
+    expect(full).toContain("Mutation proof (checks strength): sensitive");
+    expect(full).toContain("counts for a strict gate");
   });
 
   it("proof: a proof recorded for other content is stale", () => {
-    const r = buildJourneyReview(fixtureJourney(), { lastVerify: { ...VERIFY, contentHash: "0".repeat(64) } });
+    const r = buildJourneyReview(fixtureJourney(), { lastVerify: { ...VERIFY, proofHash: "0".repeat(64) } });
     expect(r.proof.verify).toMatchObject({ status: "recorded", stale: true });
   });
 
@@ -251,8 +281,9 @@ describe("#523 a mutation proof goes stale only when executable content changes"
     expect(buildJourneyReview(j, { lastVerify: PROOF }).proof.verify).toMatchObject({ stale: true });
   });
 
-  it("an old record without proofHash still compares the full content hash (stale after a prose change)", () => {
-    expect(buildJourneyReview(annotated(), { lastVerify: VERIFY }).proof.verify).toMatchObject({ stale: true });
+  it("an old record without planner identity must be reverified even when the content is unchanged", () => {
+    const { proofHash: _proofHash, ...legacy } = VERIFY;
+    expect(buildJourneyReview(fixtureJourney(), { lastVerify: legacy }).proof.verify).toMatchObject({ stale: true });
   });
 
   it("the approval still goes stale on an annotation change (journeyReviewHash)", () => {
@@ -344,5 +375,91 @@ describe("#659 — a waitFor step's documented result in the review sheet", () =
     };
     const journey: Journey = { ...base, recording: { ...base.recording, pages: [...base.recording.pages, waitPage] } };
     expect(buildJourneyReview(journey).proof.lint.findings.some((f) => f.rule === "intent-uncovered")).toBe(false);
+  });
+});
+
+describe("d-vocab-migration: `journey verify --json` carries verdict and verdictLegacy", () => {
+  type Run = NonNullable<JourneyVerifySeams["run"]>;
+  type RunResult = Awaited<ReturnType<Run>>;
+  const ID = "save-text";
+  const passed = { outcome: "ok", output: {} } as RunResult;
+  const requestBroken = { outcome: "quarantined", reason: "step 3 request check failed", outcomeFailures: [{ where: "step-request", step: 3, checkIndex: 0 }], blockedWrites: [{ method: "POST", path: "/api/save" }] } as unknown as RunResult;
+  const stepBroken = { outcome: "quarantined", reason: "step 2 postcondition failed", at: 1, failurePhase: "postcondition" } as RunResult;
+  const NAV = { step: { kind: "navigate", url: "/editor", expect: { kind: "visible", target: { role: "heading", name: "Editor" } } } };
+  const FILL = { step: { kind: "fill", target: { label: "Text" }, value: { redacted: false, value: "hello" }, expect: { kind: "valueEquals", target: { label: "Text" }, value: "hello" } } };
+  const SAVE = {
+    step: { kind: "click", target: { role: "button", name: "Save" }, expect: { kind: "count", target: { testId: "status" }, min: 0 } },
+    delta: { verdict: "relevant-change", why: "saved", changes: ["status"], requests: ["POST /api/save → 200"], overheadMs: 1 },
+    expectRequests: [{ kind: "responseStatus", method: "POST", pathGlob: "/api/save", status: { class: 2 } }],
+  };
+  const journeyOf = (steps: readonly unknown[]): Journey =>
+    ({ metadata: { id: ID, name: "Save text", promoted: false, params: [], createdAtIso: "2026-10-07T00:00:00.000Z" }, recording: { version: "1", site: "http://127.0.0.1:9", pages: [{ url: "/editor", steps }] } }) as unknown as Journey;
+  const terminal = (): TerminalResultDeps => ({
+    exit: () => undefined,
+    terminateBrowsers: () => undefined,
+    writeStdout: () => undefined,
+    writeStderr: () => undefined,
+    writeResult: (path) => path,
+    engine: () => ({ version: "0.0.0-test" }) as ReturnType<TerminalResultDeps["engine"]>,
+    onFatalError: () => () => undefined,
+    onProcessExit: () => () => undefined,
+    installKillSwitch: () => undefined,
+    sharedProcess: () => false,
+  });
+  /** The base reports each step's end, so the proof has a pace (and runs its independence and closing replays). */
+  const FAKE_ACTOR = { ability: () => ({ session: { page: {} } }) };
+  type Observed = { observer?: { beforeStep?: (s: never) => Promise<void>; afterStep?: (s: never) => Promise<void> } };
+  /** Replay 1 is the base, replay 2 the independence replay; then one per mutation in plan order (skip, block-write, stale fill), each breaking its paired check. */
+  const proving = (): Run => {
+    let raw = 0;
+    const answers = [requestBroken, requestBroken, stepBroken];
+    return (async (options: Observed) => {
+      raw += 1;
+      if (raw === 1) {
+        for (const index of [0, 1, 2]) {
+          await options.observer?.beforeStep?.({ index, actor: FAKE_ACTOR } as never);
+          await options.observer?.afterStep?.({ index, actor: FAKE_ACTOR, outcome: "done" } as never);
+        }
+        return passed;
+      }
+      return raw === 2 ? passed : (answers[raw - 3] ?? passed);
+    }) as unknown as Run;
+  };
+
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "jev-vocab-verify-"));
+    installClock(new FakeClock({ startMs: Date.parse("2026-11-09T12:00:00.000Z") }));
+    __resetTerminalResultForTests();
+  });
+  afterEach(async () => {
+    resetClock();
+    __resetTerminalResultForTests();
+    process.exitCode = undefined;
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function verifyJson(run: Run): Promise<{ verdict: string; verdictLegacy: string }> {
+    const out: string[] = [];
+    const program = new Command();
+    program.configureOutput({ writeOut: (s) => void out.push(s), writeErr: () => undefined });
+    registerJourneyVerify(program.command("journey"), program, { profiles: new ProfileManager("/unused"), journeysDir: dir, dbPath: join(dir, "no-site-policy.sqlite") }, { run, terminal: terminal() });
+    await program.parseAsync(["journey", "verify", ID, "--mutate", "--json"], { from: "user" });
+    return (JSON.parse(out.join("")) as { data: { verdict: string; verdictLegacy: string } }).data;
+  }
+
+  it("a sensitive proof: verdict 'sensitive', verdictLegacy 'proven', exit 0, and the receipt stores the new word", async () => {
+    await new FsJourneyStore(dir).put(journeyOf([NAV, FILL, SAVE]));
+    const data = await verifyJson(proving());
+    expect({ verdict: data.verdict, verdictLegacy: data.verdictLegacy }).toEqual({ verdict: "sensitive", verdictLegacy: "proven" });
+    expect(process.exitCode).toBe(0);
+    expect(await readVerifyRecord(dir, ID)).toMatchObject({ verdict: "sensitive", countsForGate: false });
+  });
+
+  it("an inconclusive proof: both are 'inconclusive'", async () => {
+    await new FsJourneyStore(dir).put(journeyOf([NAV]));
+    const data = await verifyJson((async () => passed) as unknown as Run);
+    expect({ verdict: data.verdict, verdictLegacy: data.verdictLegacy }).toEqual({ verdict: "inconclusive", verdictLegacy: "inconclusive" });
+    expect(process.exitCode).toBe(2);
   });
 });

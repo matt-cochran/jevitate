@@ -229,6 +229,8 @@ export class FsInboxStore implements InboxStore {
 
       const transition = resolveTransition(item.kind, req.action);
       if (transition === "illegal") throw new IllegalTransitionError(item.kind, req.action);
+      // #793: a secret is typed by code or by the person into the held session, never put in the inbox.
+      if (item.kind === "secret" && req.input !== undefined) throw new IllegalTransitionError(item.kind, "input");
 
       const now = clock.nowIso();
       const updated: InboxItem = { ...item, status: transition, resolvedAt: now };

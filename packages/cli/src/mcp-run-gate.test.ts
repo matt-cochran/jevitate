@@ -46,7 +46,7 @@ function journey(id: string, meta: Partial<Journey["metadata"]> = {}): Journey {
   } as Journey;
 }
 
-const approved = (j: Journey): Journey => ({ ...j, metadata: { ...j.metadata, promoted: true, approval: { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z" } } });
+const approved = (j: Journey): Journey => ({ ...j, metadata: { ...j.metadata, promoted: true, approval: { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z", provenance: { channel: "tty", agentSignals: [] } } } });
 
 const seed = (j: Journey): void => writeFileSync(join(journeysDir, `${j.metadata.id}.json`), JSON.stringify(j));
 

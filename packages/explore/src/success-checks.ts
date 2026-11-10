@@ -325,6 +325,7 @@ export function evaluateNetworkCheck(
     return {
       check: spec,
       passed: false,
+      unevaluable: true,
       detail: `expected ${describeStatus(check.status)}, but the ${inFlight} matching request(s) were sent and are still awaiting a response`,
     };
   }

@@ -11,6 +11,7 @@ import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import type { Assertion, RecordedStep } from "@jevitate/recording";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
+import { advisoryCatalogDir } from "./done-check-policy.testkit.js";
 import { buildMcpTools } from "./mcp-api.js";
 import { useSkippingTime } from "../../explore/src/testkit.js";
 
@@ -74,7 +75,7 @@ beforeAll(async () => {
   ]));
   // #788: MCP runs a promoted Journey whose approval is current: approved as stored (saving mints step ids).
   const saved = (await store.get("accept-invite"))!;
-  await store.put({ ...saved, metadata: { ...saved.metadata, approval: { contentHash: journeyReviewHash(saved), at: "2026-10-07T00:00:00.000Z" } } });
+  await store.put({ ...saved, metadata: { ...saved.metadata, approval: { contentHash: journeyReviewHash(saved), at: "2026-10-07T00:00:00.000Z", provenance: { channel: "tty", agentSignals: [] } } } });
   await store.put(journey("drop", "/drop?token=${inviteToken}", [], { kind: "urlIncludes", text: "/drop" }));
   await store.put({
     ...journey("go", "/${dest}", [], { kind: "urlIncludes", text: "/" }),
@@ -123,6 +124,7 @@ async function cli(args: string[]): Promise<{ out: string; err: string; exitCode
     profiles: new ProfileManager("/unused"),
     journeysDir: join(root, "journeys"),
     dbPath: join(root, "no-site-policy.sqlite"),
+    catalogDir: advisoryCatalogDir(root),
     explore: { browserPortFactory: () => new PlaywrightBrowserPort() },
   });
   program.configureOutput({ writeOut: (s) => out.push(s), writeErr: (s) => err.push(s) });

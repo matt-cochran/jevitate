@@ -11,6 +11,13 @@ import type { ChangeScope, SelfHealer } from "@jevitate/runtime";
 import type { EmulationSpec } from "@jevitate/playwright";
 import { safeRunPolicy as defaultRunPolicy, type RunPolicy } from "@jevitate/domain";
 import { runJourneyProgrammatically } from "./journey-api.js";
+import { registerRunSurfaceHooks } from "./run-surface-hooks.js";
+import { sentinelShadowGateway } from "./sentinel-hook.js";
+import { registerDoneCheckHooksOnce, runWithDoneCheck } from "./journey-done-check-hook.js";
+import { resolveCatalogDir } from "./catalog-api.js";
+import type { BrowserPort } from "@jevitate/playwright";
+import type { BoundSecretParams } from "./secret-params.js";
+import { runGuardedJourney } from "./journey-run-mode-gate.js";
 import { assertMcpRunnable } from "./journey-stale-api.js";
 import { runAsMcpInvocation } from "./approval-provenance.js";
 import { withJourneyRunRecord } from "./journey-run-record.js";
@@ -29,6 +36,7 @@ import { findingTools } from "./mcp-tools/findings.js";
 import { journeyTools } from "./mcp-tools/journey.js";
 import { exploreTools } from "./mcp-tools/explore.js";
 import { inboxTools } from "./mcp-tools/inbox.js";
+import { queueJourneyTools } from "./mcp-tools/queue-journey.js";
 import { cliTools } from "./mcp-tools/cli.js";
 
 
@@ -72,6 +80,16 @@ export interface McpJourneyRunOptions {
   readonly actionDeltas?: boolean;
   /** #486: the in-flight response bound of a step's responseStatus check (`--step-response-timeout`). */
   readonly stepResponseTimeoutMs?: number;
+  /**
+   * 0.30.0 §5.3 (owner decision 6): the secret parameters the operator's `targets.json` `secretFields`
+   * supplied for an automation-mode run of a person-approved Journey, and the origins each may be typed on.
+   * Set only by `run_journey`'s handler, never from an argument; the value goes to the browser only.
+   */
+  readonly boundSecretParams?: BoundSecretParams;
+  /** #800 `--no-done-check`: read nothing; the job reads unverified (basis no-check). */
+  readonly noDoneCheck?: boolean;
+  /** #800 `--require-done-check`: an unverified job exits 2 even under project.json's advisory policy. */
+  readonly requireDoneCheck?: boolean;
 }
 
 /**
@@ -103,6 +121,8 @@ export interface McpApiDeps {
    * an MCP result, or a log.
    */
   runJourney?: (id: string, params: Record<string, string>, storageState?: string, options?: McpJourneyRunOptions) => Promise<unknown>;
+  /** GAPS 21: the catalog dir a run's job done check is read from (default: the project's `.jevitate/`). */
+  catalogDir?: string;
   /**
    * #255: the directories MCP path arguments (storage states, fixtures, invariants, output dirs)
    * must resolve inside — default: the project and `~/.jevitate` (mcp-paths.ts).
@@ -114,6 +134,13 @@ export interface McpApiDeps {
   targetsConfigPath?: string;
   /** #790: test seam for the logs root run records go under (default: the project's `.jevitate/logs`). */
   runRecordLogsRoot?: string;
+  /** Test seam: the browser port `run_journey`'s default runner opens (default: Playwright). */
+  browserPortFactory?: () => BrowserPort;
+  /**
+   * Where the operator's `targets.json` `secretFields` (`env:VAR`) read their values (default
+   * `process.env`): the server's own environment, never a tool argument. Test seam.
+   */
+  secretEnv?: Readonly<Record<string, string | undefined>>;
   /**
    * #255 (`run_journey {selfHeal: hybrid|full}`): builds the self-heal gateways exactly as the CLI's
    * `--real`/`--fake-ai` do (`buildExploreGateways`). Absent: a heal mode is refused (setup_required).
@@ -228,12 +255,27 @@ function assertAllowlisted(name: string): void {
  * No handler ever fabricates a success.
  */
 export function buildMcpTools(deps: McpApiDeps): McpTool[] {
+  // 0.30.0: the run-mode and typed-parameter run hooks (once per process; cli-shared.ts).
+  // GAPS 17: Jev's write sentinel, only with JEVITATE_WRITE_SENTINEL=shadow and a Jev key (advisory, never a hold).
+  registerRunSurfaceHooks({ inboxDir: deps.inboxDir, sentinelGateway: sentinelShadowGateway() });
+  // GAPS 21 (#800): the job done check (it reads only inside a `DoneCheckRun` scope).
+  registerDoneCheckHooksOnce();
   const runJourney =
     deps.runJourney ??
     ((id: string, params: Record<string, string>, storageState?: string, o?: McpJourneyRunOptions) =>
       // #789: an MCP invocation, so the run guard applies (and an approval made here would say `mcp`).
       runAsMcpInvocation(() => withJourneyRunRecord({ channel: "mcp", id, params, logsRoot: deps.runRecordLogsRoot }, (runRecorder) => withSiteGate(deps.sitePolicyDbPath, (siteGate) =>
-        runJourneyProgrammatically({
+        // #797: the one guarded run (promotion check, mode gate, #789 guard) a queued Journey call goes through too.
+        runGuardedJourney({ journeysDir: deps.journeysDir, id, environment: o?.environment, targetsFile: deps.targetsConfigPath, run: () =>
+        // GAPS 21 (#800): the linked job's done check, read as `journey run` reads it; the result carries `job`.
+        runWithDoneCheck({
+          catalogDir: resolveCatalogDir(deps.catalogDir),
+          journeysDir: deps.journeysDir,
+          ...(o?.environment?.baseUrl === undefined ? {} : { origin: o.environment.baseUrl }),
+          ...(storageState === undefined ? {} : { storageState }),
+          ...(deps.browserPortFactory === undefined ? {} : { sessionPortFactory: deps.browserPortFactory }),
+          ...(o?.noDoneCheck === true ? { skip: true } : {}),
+        }, () => runJourneyProgrammatically({
           dir: deps.journeysDir,
           id,
           params,
@@ -253,7 +295,11 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
           ...(o?.fixtures === undefined ? {} : { fixtures: o.fixtures }),
           ...(o?.actionDeltas === true ? { actionDeltas: true } : {}),
           ...(o?.stepResponseTimeoutMs === undefined ? {} : { stepResponseTimeoutMs: o.stepResponseTimeoutMs }),
-        }),
+          ...(o?.boundSecretParams === undefined ? {} : { boundSecretParams: o.boundSecretParams }),
+          // §5.3: a target's secretFields `env:` sources are read from the server's environment (a test seam).
+          ...(deps.secretEnv === undefined ? {} : { secretEnv: deps.secretEnv }),
+          ...(deps.browserPortFactory === undefined ? {} : { browserPortFactory: deps.browserPortFactory }),
+        }), o?.requireDoneCheck === true ? "require" : undefined) }),
       ))));
   const pathRoots = deps.pathRoots ?? defaultMcpPathRoots();
   const credentialStore = deps.credentialStore ?? envCredentialStore();
@@ -298,6 +344,8 @@ export function buildMcpTools(deps: McpApiDeps): McpTool[] {
     ...journeyTools(ctx),
     ...exploreTools(ctx),
     ...inboxTools(ctx),
+    // 0.30.0 #797: queue a promoted Journey call (`mission run` drains it).
+    ...queueJourneyTools(ctx),
   };
 
   cliTools(ctx, wired);

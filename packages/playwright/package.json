@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@jevitate/domain": "workspace:*",
-    "playwright": "^1.49.0"
+    "playwright": "1.63.0"
   },
   "scripts": {
     "build": "tsc --build"

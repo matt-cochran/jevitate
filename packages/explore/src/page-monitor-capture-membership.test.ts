@@ -33,6 +33,22 @@ describe("RequestCapture membership by identity (#617)", () => {
     expect(capture.sent()).toEqual([expect.objectContaining({ path: "/api/save", status: null, pending: true })]);
   });
 
+  it("marks an overflow of abandoned requests truncated instead of certifying an absent request", () => {
+    const capture = new RequestCapture();
+    for (let i = 0; i < 20_000; i++) {
+      const key = {};
+      capture.began(key, finished({ path: "/api/other" }));
+      capture.ended(key, null);
+    }
+    expect(capture.truncated).toBe(false);
+    const dropped = {};
+    capture.began(dropped, finished({ path: "/api/save" }));
+    capture.ended(dropped, null);
+    expect(capture.sent()).toHaveLength(20_000);
+    expect(capture.sent().some((request) => request.path === "/api/save")).toBe(false);
+    expect(capture.truncated).toBe(true);
+  });
+
   it("lists in sent() a request it saw begin with its finished record once it ends", () => {
     const capture = new RequestCapture();
     const key = {};

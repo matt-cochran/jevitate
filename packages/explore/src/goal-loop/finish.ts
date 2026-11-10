@@ -10,6 +10,7 @@ import type { RunOutcome } from "../conversation.js";
 import { buildCrashReport } from "../crash-report.js";
 import type { ExploreRun, MissCause } from "../explore.js";
 import { MAX_REPORT_REJECTIONS } from "./limits.js";
+import { noRouteFound, noRouteShortfall } from "./no-route.js";
 import { targetStoppedAnswering } from "../mission-failure.js";
 import { emptyRecording } from "../record.js";
 import { redactText, redactUrl } from "../redact.js";
@@ -79,6 +80,30 @@ export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
     ctx.incomplete = `${missing}; ${incompleteReason(ctx.stop, ctx.incomplete, ctx.failure, ctx.hang, ctx.tracker)}`;
   }
 
+  // #826 — the decision budget ran out on the turn straight after a refused (or deferred) `blocked`:
+  // the model's next decision, the one the refusal asked for, was never taken. Said so, with the refusal.
+  if (ctx.stop === "exhausted" && ctx.refusedTurn && ctx.answer === undefined && ctx.failure === undefined && ctx.incomplete === null) {
+    const refusal = [...ctx.history].reverse().find((l) => /^blocked (?:refused|deferred)|deferred \(|recovery turn/.test(l));
+    ctx.incomplete =
+      `decision budget ran out straight after a refused blocked (${ctx.tracker.decisions} decisions, ${ctx.tracker.actions} actions) — ` +
+      `the decision the refusal asked for was never taken${refusal === undefined ? "" : `: ${quote(refusal, 240)}`}`;
+  }
+
+  // 0.30.0 (#807): the run covered every control it could reach (the floor, `no-route.ts`) and none led
+  // toward the goal: `inconclusive` (exit 2), `no-route-found`, naming what was searched — never a defect.
+  {
+    const noRoute = await noRouteFound(ctx);
+    if (noRoute !== null) {
+      ctx.failure = { kind: "no-route-found", message: noRoute };
+      ctx.incomplete = noRoute;
+      ctx.stop = "inconclusive";
+    }
+  }
+
+  // rc-030b: a blocked, stalled or exhausted run that did not end no-route-found says why (scorable).
+  const missed = ctx.stop === "blocked" || ctx.stop === "no-progress" || ctx.stop === "exhausted" ? noRouteShortfall(ctx) : null;
+  const noRouteMissed = missed === null ? null : redactText(missed.length > 240 ? `${missed.slice(0, 240)}…` : missed, ctx.secrets);
+
   await ctx.readOnly?.disarm();
   ctx.page.off("request", ctx.onRequestSeen);
   ctx.page.off("response", ctx.onDocumentResponse);
@@ -100,8 +125,14 @@ export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
     ctx.stop = "crashed";
   }
   // #423: the miss's structured cause, decided from the loop's own state — never from `reason` text.
+  // 0.30.0 (#807): a run that stopped at a boundary names its signal; `boundary` is returned beside it.
+  const boundary = finalOutcome.status !== "completed" && ctx.answer === undefined ? ctx.boundary : undefined;
   const missCause: MissCause | undefined =
-    finalOutcome.status === "completed" || ctx.answer !== undefined || (ctx.stop !== "blocked" && ctx.stop !== "no-progress")
+    boundary !== undefined
+      ? boundary.signal
+      : ctx.failure?.kind === "no-route-found"
+        ? "no-route-found"
+      : finalOutcome.status === "completed" || ctx.answer !== undefined || (ctx.stop !== "blocked" && ctx.stop !== "no-progress")
       ? undefined
       : ctx.lastReportNotFound
         ? "not-found"
@@ -151,7 +182,9 @@ export async function finishRun(ctx: RunContext): Promise<ExploreRun> {
     ...(ctx.answer !== undefined && finalOutcome.status === "completed" ? { answer: ctx.answer } : {}),
     ...(cause === null ? {} : { blockingCause: cause }),
     ...(missCause === undefined ? {} : { missCause }),
+    ...(boundary === undefined ? {} : { boundary }),
     ...(ctx.actionableControl === null ? {} : { actionableControl: ctx.actionableControl }),
+    ...(noRouteMissed === null ? {} : { noRouteShortfall: noRouteMissed }),
     ...(ctx.endedOnRejectedDone && ctx.stop === "done" ? { doneRejected: true as const } : {}),
     ...(ctx.stop === "crashed" && ctx.failure !== undefined
       ? { crash: buildCrashReport(ctx.failure, ctx.crashWatch.signals(), ctx.heap.samples(), { host: await ctx.probeHost() }) }

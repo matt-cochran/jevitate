@@ -13,7 +13,7 @@ import {
   type PersonaReview,
 } from "@jevitate/journey";
 import { journeyLinks, journeysForJob, journeysForPersona, personaLinkId, requireJob, requirePersona, type Catalog, type CatalogJourney } from "./catalog.js";
-import { preApprovalFindings, type ApprovalAction } from "./pre-approval.js";
+import { catalogLinkAnalyzer, preApprovalAnalyzers, preApprovalFindings, type ApprovalAction } from "./pre-approval.js";
 import { catalogRefIssues, describeRefIssue, jobSheetRefIssues } from "./catalog-refs.js";
 import { jevLayerOf, type JevSetup } from "./jev-advisor.js";
 
@@ -29,6 +29,32 @@ function sheetCtx(action: ApprovalAction, opts: SheetOptions) {
   return { action, ...(opts.readiness === true ? { readiness: true } : {}), ...(opts.jev === undefined ? {} : { jev: opts.jev }) };
 }
 
+const nativeOwnerFindings = new WeakMap<PersonaReview | JobReview, ReadonlySet<Finding>>();
+
+/** Private producer evidence survives schema parsing without trusting a finding's analyzer label. */
+export function isNativeCatalogOwnerFinding(review: PersonaReview | JobReview, finding: Finding): boolean {
+  return nativeOwnerFindings.get(review)?.has(finding) === true;
+}
+
+async function catalogFindings(kind: "persona" | "job", id: string, catalog: Catalog, action: ApprovalAction, opts: SheetOptions) {
+  const native = new Set<Finding>();
+  const analyzers = preApprovalAnalyzers().map((analyzer) => analyzer !== catalogLinkAnalyzer ? analyzer : {
+    ...analyzer,
+    async analyze(...args: Parameters<typeof analyzer.analyze>) {
+      const found = (await analyzer.analyze(...args)).map((f) => structuredClone(f));
+      for (const f of found) native.add(f);
+      return found;
+    },
+  });
+  const findings = await preApprovalFindings({ kind, id }, catalog, sheetCtx(action, opts), analyzers);
+  return { findings, native };
+}
+
+function rememberNativeFindings<T extends PersonaReview | JobReview>(review: T, findings: readonly Finding[], native: ReadonlySet<Finding>): T {
+  nativeOwnerFindings.set(review, new Set(review.findings.filter((_finding, index) => native.has(findings[index]!))));
+  return review;
+}
+
 /**
  * #433 — the persona and job review sheets (`persona|job review <id>`, MCP `review_persona` /
  * `review_job`) and `catalog status`. Built from a loaded `Catalog`; the sheets carry the
@@ -41,8 +67,8 @@ function journeyRef(catalog: Catalog, j: CatalogJourney): { id: string; name: st
 
 export async function buildPersonaReview(catalog: Catalog, id: string, action: ApprovalAction = "review", opts: SheetOptions = {}): Promise<PersonaReview> {
   const p = requirePersona(catalog, id);
-  const findings = await preApprovalFindings({ kind: "persona", id }, catalog, sheetCtx(action, opts));
-  return PersonaReviewSchema.parse({
+  const { findings, native } = await catalogFindings("persona", id, catalog, action, opts);
+  const review = PersonaReviewSchema.parse({
     id: p.id,
     ...(p.description === undefined ? {} : { description: p.description }),
     ...(p.role === undefined ? {} : { role: p.role }),
@@ -56,11 +82,12 @@ export async function buildPersonaReview(catalog: Catalog, id: string, action: A
     ...(p.approval === undefined ? {} : { approval: p.approval }),
     contentHash: p.contentHash,
   });
+  return rememberNativeFindings(review, findings, native);
 }
 
 export async function buildJobReview(catalog: Catalog, id: string, action: ApprovalAction = "review", opts: SheetOptions = {}): Promise<JobReview> {
   const job = requireJob(catalog, id);
-  const findings = await preApprovalFindings({ kind: "job", id }, catalog, sheetCtx(action, opts));
+  const { findings, native } = await catalogFindings("job", id, catalog, action, opts);
   const journeys = journeysForJob(catalog, id);
   const personas = job.personas.map((pid) => {
     const mine = journeys.filter((j) => personaLinkId(catalog, j) === pid);
@@ -71,7 +98,7 @@ export async function buildJobReview(catalog: Catalog, id: string, action: Appro
       promotedJourneys: mine.filter((j) => j.promoted).map((j) => j.id),
     };
   });
-  return JobReviewSchema.parse({
+  const review = JobReviewSchema.parse({
     id: job.id,
     story: job.story,
     trigger: job.job.trigger,
@@ -93,6 +120,7 @@ export async function buildJobReview(catalog: Catalog, id: string, action: Appro
     ...jtbdFields(job.job),
     refIssues: jobSheetRefIssues(catalog, id),
   });
+  return rememberNativeFindings(review, findings, native);
 }
 
 /** #465: the job's jtbd fields as written, each only when present. */

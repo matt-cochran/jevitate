@@ -151,7 +151,7 @@ describe("a replay that never settles", () => {
   });
 
   it("leaves the prior receipt unchanged", async () => {
-    await writeVerifyRecord(dir, { journeyId: ID, contentHash: "a".repeat(64), proofHash: "b".repeat(64), verdict: "proven", summary: {}, at: "2026-10-26T00:00:00.000Z" });
+    await writeVerifyRecord(dir, { journeyId: ID, contentHash: "a".repeat(64), proofHash: "b".repeat(64), verdict: "sensitive", summary: {}, at: "2026-10-26T00:00:00.000Z" });
     const before = await readFile(verifyRecordPath(dir, ID), "utf8");
     const { run, reached } = stuckAfter(1);
     const parsing = verifyCommand([], { run, terminal: fakeProcess().terminal });

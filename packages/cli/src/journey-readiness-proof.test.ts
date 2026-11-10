@@ -24,7 +24,7 @@ function journey(id: string, metadata: Partial<Journey["metadata"]> = {}): Journ
 }
 
 /** A `review` dep that returns the given Journey and the given `verify` record, with nothing else in play. */
-function reviewDep(journey: Journey, verify: unknown): NonNullable<JourneyReadinessDeps["review"]> {
+function reviewDep(journey: Journey, verify: unknown, policy?: unknown): NonNullable<JourneyReadinessDeps["review"]> {
   const review = {
     id: journey.metadata.id,
     name: journey.metadata.name,
@@ -33,17 +33,19 @@ function reviewDep(journey: Journey, verify: unknown): NonNullable<JourneyReadin
     steps: [],
     sideEffects: { writeRequests: [], riskyControls: [], origins: [] },
     inputs: { params: [], secrets: [] },
-    proof: { endState: [], stepAssertions: [], lint: { errors: 0, warnings: 0, findings: [] }, verify },
+    proof: { endState: [], stepAssertions: [], lint: { errors: 0, warnings: 0, findings: [] }, verify, ...(policy === undefined ? {} : { policy }) },
     changeSinceApproval: { kind: "first-approval" },
     contentHash: "a".repeat(64),
     attention: [],
     catalog: { linked: true, job: { id: "j", status: "approved" }, persona: { id: "p", status: "approved" }, unvetted: [], needsReReview: [] },
+    // Owner decision "Proof role": the job gates; these tests are about the proof line.
+    job: { attainment: "achieved", basis: "done-check", doneCheckPolicy: "require", outcome: "ok" },
   } as unknown as JourneyReview;
   return (async () => ({ journey, review })) as unknown as NonNullable<JourneyReadinessDeps["review"]>;
 }
 
-function receipt(journey: Journey, verify: unknown) {
-  return runJourneyReadiness({ id: journey.metadata.id, journeysDir: "/tmp/jev-609" }, { review: reviewDep(journey, verify) });
+function receipt(journey: Journey, verify: unknown, policy?: unknown) {
+  return runJourneyReadiness({ id: journey.metadata.id, journeysDir: "/tmp/jev-609" }, { review: reviewDep(journey, verify, policy) });
 }
 
 function proofOf(r: Awaited<ReturnType<typeof runJourneyReadiness>>) {
@@ -56,7 +58,7 @@ function proofBlocker(r: Awaited<ReturnType<typeof runJourneyReadiness>>) {
 
 const PROVEN_WITH_TARGETED = {
   status: "recorded" as const,
-  verdict: "proven",
+  verdict: "sensitive",
   at: "2026-01-01T00:00:00Z",
   stale: false,
   summary: { sensitive: 5, targeted: 2, insensitive: 0, cascade: 0, notApplied: 0, error: 0, unpaired: 0 },
@@ -93,9 +95,9 @@ const GENERIC_INCONCLUSIVE = {
 };
 
 describe("journey readiness proof detail", () => {
-  it("counts a proven assertion once even when a targeted proof also proved it", async () => {
+  it("counts a sensitive assertion once even when a targeted proof also proved it", async () => {
     const r = await receipt(journey("publish"), PROVEN_WITH_TARGETED);
-    expect(proofOf(r)?.detail).toMatch(/^proven 5\/5/);
+    expect(proofOf(r)?.detail).toMatch(/^checks strength: sensitive 5\/5/);
   });
 
   it("names how many assertions came through a targeted proof", async () => {
@@ -108,44 +110,47 @@ describe("journey readiness proof detail", () => {
     expect(proofOf(r)?.state).toBe("inconclusive");
   });
 
-  it("explains a refused targeted proof with a blocker naming mutationPairs", async () => {
+  it("explains a refused targeted proof on its checks-strength line, naming mutationPairs", async () => {
     const r = await receipt(journey("publish"), UNPAIRED_REFUSAL);
-    expect(proofBlocker(r)?.why).toContain("mutationPairs");
+    expect(proofOf(r)?.detail).toContain("mutationPairs");
   });
 
-  it("explains a refused targeted proof with a blocker naming the unpaired site", async () => {
+  it("explains a refused targeted proof on its checks-strength line, naming the unpaired site", async () => {
     const r = await receipt(journey("publish"), UNPAIRED_REFUSAL);
-    expect(proofBlocker(r)?.why).toContain("step:3");
+    expect(proofOf(r)?.detail).toContain("step:3");
   });
 
-  it("explains a refused targeted proof with a blocker naming the mutation", async () => {
+  it("explains a refused targeted proof on its checks-strength line, naming the mutation", async () => {
     const r = await receipt(journey("publish"), UNPAIRED_REFUSAL);
-    expect(proofBlocker(r)?.why).toContain("swap-param:threadId");
+    expect(proofOf(r)?.detail).toContain("swap-param:threadId");
   });
 
-  it("offers the verify command as the blocker's next step", async () => {
+  it("under the advisory default an inconclusive proof warns on the checks-strength line and does not gate (owner clarification 2026-11-09)", async () => {
     const r = await receipt(journey("publish"), UNPAIRED_REFUSAL);
+    expect(proofOf(r)).toMatchObject({ state: "inconclusive", advisory: true });
+    expect(proofBlocker(r)).toBeUndefined();
+    expect(r.verdict).toBe("technically-ready");
+  });
+
+  it("under require-sensitive a refused targeted proof never becomes technical readiness", async () => {
+    const r = await receipt(journey("publish"), UNPAIRED_REFUSAL, { mode: "require-sensitive", passed: false, freshness: "fresh", verdict: "inconclusive", reason: "mutation proof is inconclusive", next: "jevitate journey verify publish --mutate", waiver: { status: "absent" } });
+    expect(r.verdict).toBe("inconclusive");
     expect(proofBlocker(r)?.next).toBe("jevitate journey verify publish --mutate");
   });
 
-  it("never turns a refused targeted proof into technical readiness", async () => {
-    const r = await receipt(journey("publish"), UNPAIRED_REFUSAL);
-    expect(r.verdict).toBe("inconclusive");
-  });
-
-  it("explains a relaxation-bound refusal with a blocker naming the bound", async () => {
+  it("explains a relaxation-bound refusal on its checks-strength line, naming the bound", async () => {
     const r = await receipt(journey("publish"), BOUND_REFUSAL);
-    expect(proofBlocker(r)?.why).toContain("bound 4");
+    expect(proofOf(r)?.detail).toContain("bound 4");
   });
 
   it("keeps today's detail for an inconclusive proof without a targeted refusal", async () => {
     const r = await receipt(journey("publish"), GENERIC_INCONCLUSIVE);
-    expect(proofOf(r)?.detail).toBe("the unmutated replay failed");
+    expect(proofOf(r)?.detail).toMatch(/^the unmutated replay failed/);
   });
 
   it("gives generic guidance for an inconclusive proof without a targeted refusal", async () => {
     const r = await receipt(journey("publish"), GENERIC_INCONCLUSIVE);
-    expect(proofBlocker(r)?.why).toContain("cascade assertions");
+    expect(proofOf(r)?.detail).toContain("cascade assertions");
   });
 });
 

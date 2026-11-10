@@ -8,14 +8,17 @@ import {
   mutationReplay,
   relaxedMutationReplay,
   needsRelaxedReplay,
-  classifyMutation,
-  judgeAssertions,
-  mutationProofVerdict,
   assertionSiteKey,
   type Journey,
   type JourneyMutation,
   type MutationRunResult,
+  mutationPlanSites,
+  type MutationPlan,
 } from "./index.js";
+import { classifyMutation, judgeAssertions as judgeSites, mutationProofVerdict } from "@jevitate/adjudicator";
+/** #812: the adjudicator's judging of a Journey's own assertion sites, as `journey verify` gathers them. */
+const judgeAssertions = (j: Journey, plan: MutationPlan, results: ReadonlyMap<string, MutationRunResult>) =>
+  judgeSites(journeyAssertions(j), plan, results, new Map(mutationPlanSites(j).map((s) => [s.site, s])));
 
 // #402 — the pure half of `journey verify --mutate`: which mutations a Journey gets, which assertion
 // each one must break, how a mutated replay is set up, and how its result is classified.
@@ -160,7 +163,7 @@ describe("#402 mutationReplay", () => {
 
   it("block-write blocks writes in that step's window only", () => {
     const journey = saveJourney();
-    expect(mutationReplay(journey, { kind: "block-write", step: 3, id: "block-write:3" })).toEqual({ journey, blockIndex: 2, blockRequests: ["POST /api/save → 200"] });
+    expect(mutationReplay(journey, { kind: "block-write", step: 3, id: "block-write:3" })).toEqual({ journey, blockIndex: 2, blockRequests: ["POST /api/save → 200"], blockMatchers: [{ method: "POST", pathGlob: "/api/save", literal: true }] });
   });
 
   it("stale-value types an empty value", () => {
@@ -257,6 +260,42 @@ describe("#402 classifyMutation", () => {
     expect(classifyMutation(site("step-request:3:0"), skip3, failed({ where: "step-request", step: 3, checkIndex: 0 }))).toBe("sensitive");
   });
 
+  describe("an evaluated own request survives its own DOM postcondition", () => {
+    const request = { where: "step-request" as const, step: 3, checkIndex: 0, evaluated: true as const };
+    const post = { where: "step" as const, step: 3, postcondition: true };
+
+    it.each([undefined, "not-applied", "error", "passed"] as const)("retains original evidence when relaxed outcome is %s", (outcome) => {
+      const original = failed(request, post);
+      const result = outcome === undefined ? original : { ...original, relaxed: { outcome, failedSites: [] } };
+      expect(classifyMutation(site("step-request:3:0"), skip3, result)).toBe("sensitive");
+    });
+
+    it.each([
+      ["own action failure", { where: "step", step: 3, postcondition: false }],
+      ["earlier action failure", { where: "step", step: 2, postcondition: false }],
+      ["earlier postcondition failure", { where: "step", step: 2, postcondition: true }],
+      ["earlier request failure", { where: "step-request", step: 2, checkIndex: 0, evaluated: true }],
+      ["unevaluable or truncated capture", { where: "unevaluable" }],
+    ] satisfies [string, MutationRunResult["failedSites"][number]][])("refuses %s", (_label, failure) => {
+      expect(classifyMutation(site("step-request:3:0"), skip3, failed(request, post, failure))).toBe("cascade");
+    });
+
+    it("does not invent evidence for an unstarted/missing own capture or the wrong request index", () => {
+      expect(classifyMutation(site("step-request:3:0"), skip3, failed({ where: "step-request", step: 3, checkIndex: 0 }, post))).toBe("cascade");
+      expect(classifyMutation(site("step-request:3:0"), skip3, failed({ ...request, checkIndex: 1 }, post))).toBe("cascade");
+    });
+
+    it.each(["not-applied", "error"] as const)("does not prove an inapplicable or errored run (%s)", (outcome) => {
+      expect(classifyMutation(site("step-request:3:0"), skip3, { outcome, failedSites: [request, post] })).toBe(outcome);
+    });
+
+    it("avoids unnecessary relaxation when only already evaluated own sites are paired", () => {
+      const plan = planJourneyMutations(saveJourney({ stepRequests: true }));
+      expect(needsRelaxedReplay(plan, skip3, failed(request, post))).toBe(false);
+      expect(needsRelaxedReplay(planJourneyMutations(journey), skip3, failed(request, post))).toBe(true);
+    });
+  });
+
   it("the paired end-state check failed with an earlier step-request failing too: cascade", () => {
     expect(classifyMutation(site("end-state:0"), skip3, failed({ where: "step-request", step: 2, checkIndex: 0 }, { where: "end-state", index: 0 }))).toBe("cascade");
   });
@@ -302,7 +341,7 @@ describe("#402 mutationProofVerdict", () => {
   it("every paired assertion sensitive: proven (unpaired ones do not count)", () => {
     expect(
       mutationProofVerdict({ basePassed: true, mutations: [ok], assertions: [{ site: "step:1", verdict: "unpaired" }, { site: "step:2", verdict: "sensitive", provedBy: "skip:2" }] }).verdict,
-    ).toBe("proven");
+    ).toBe("sensitive");
   });
   it("a failed fixture restore keeps every-sensitive assertions from reading proven", () => {
     expect(mutationProofVerdict({ basePassed: true, mutations: [ok], assertions: [{ site: "step:2", verdict: "sensitive" }], restoreFailed: true }).verdict).toBe("inconclusive");
@@ -341,7 +380,7 @@ describe("#402 mutationProofVerdict", () => {
   it("a refused targeted proof, which ran no replay, is not an errored replay", () => {
     expect(
       mutationProofVerdict({ basePassed: true, mutations: [{ ...ok, targeted: [{ site: "end-state:0", relaxedSites: [], outcome: "error" as const, failedSites: [], refused: "not paired" }] }], assertions: [{ site: "step:2", verdict: "sensitive" }] }).verdict,
-    ).toBe("proven");
+    ).toBe("sensitive");
   });
   it("any insensitive: insensitive", () => {
     expect(
@@ -370,22 +409,22 @@ describe("#554 relaxed replay", () => {
     expect(relaxedMutationReplay(journey, skip3)).toEqual({ journey, skipIndex: 2 });
   });
 
-  it("relaxedMutationReplay block-write keeps a weak expect on the step's own target and drops waitFor", () => {
+  it("relaxedMutationReplay block-write keeps a no-claim expect and drops waitFor", () => {
     const journey = saveJourney({ stepRequests: true });
     journey.recording.pages[0]!.steps[2]!.step = { kind: "click", target: { role: "button", name: "Save" }, expect: { kind: "visible", target: { role: "button", name: "Save" } }, waitFor: { maxMs: 30_000 } };
     expect(relaxedMutationReplay(journey, blockWrite3).journey.recording.pages[0]!.steps[2]).toEqual({
-      step: { kind: "click", target: { role: "button", name: "Save" }, expect: { kind: "visible", target: { role: "button", name: "Save" } } },
+      step: { kind: "click", target: { role: "button", name: "Save" }, expect: { kind: "urlIncludes", text: "" } },
       delta: saveWrite,
       expectRequests: [status2xx],
     });
   });
 
-  it("relaxedMutationReplay stale-value types an empty value and keeps a weak expect on the fill target", () => {
+  it("relaxedMutationReplay stale-value types an empty value and keeps a no-claim expect", () => {
     expect(relaxedMutationReplay(saveJourney(), { kind: "stale-value", step: 2, id: "stale-value:2" }).journey.recording.pages[0]!.steps[1]!.step).toEqual({
       kind: "fill",
       target: { label: "Text" },
       value: { redacted: false, value: "" },
-      expect: { kind: "visible", target: { label: "Text" } },
+      expect: { kind: "urlIncludes", text: "" },
     });
   });
 
@@ -418,15 +457,35 @@ describe("#554 relaxed replay", () => {
     const results = new Map<string, MutationRunResult>([
       ["skip:3", { ...failed(ownPost), relaxed: failed({ where: "step-request", step: 3, checkIndex: 0 }, { where: "end-state", index: 0 }) }],
       ["block-write:3", { ...failed(ownPost), relaxed: failed({ where: "end-state", index: 0 }) }],
-      ["stale-value:2", failed({ where: "step", step: 2, postcondition: true })],
+      ["stale-value:2", { ...failed({ where: "step", step: 2, postcondition: true }), relaxed: failed({ where: "end-state", index: 0 }) }],
     ]);
     expect(judgeAssertions(journey, plan, results)).toEqual([
       { site: "step:1", verdict: "unpaired" },
       { site: "step:2", verdict: "sensitive", provedBy: "stale-value:2" },
       { site: "step:3", verdict: "sensitive", provedBy: "skip:3" },
       { site: "step-request:3:0", verdict: "sensitive", provedBy: "skip:3" },
-      { site: "end-state:0", verdict: "sensitive", provedBy: "skip:3" },
+      { site: "end-state:0", verdict: "sensitive", provedBy: "skip:3", obligations: [
+        { kind: "data", verdict: "sensitive", provedBy: "stale-value:2" },
+        { kind: "action", verdict: "sensitive", provedBy: "skip:3" },
+      ] },
     ]);
+  });
+
+  it("a sensitive write cannot substitute for missing saved-data evidence", () => {
+    const journey = saveJourney({ endState: true });
+    const plan = planJourneyMutations(journey);
+    const results = new Map<string, MutationRunResult>([
+      ["skip:3", { ...failed(ownPost), relaxed: failed({ where: "end-state", index: 0 }) }],
+      ["block-write:3", { ...failed(ownPost), relaxed: failed({ where: "end-state", index: 0 }) }],
+      ["stale-value:2", failed({ where: "step", step: 2, postcondition: true })],
+    ]);
+    expect(judgeAssertions(journey, plan, results).find((a) => a.site === "end-state:0")).toEqual({
+      site: "end-state:0", verdict: "cascade", obligations: [
+        { kind: "data", verdict: "cascade" },
+        { kind: "action", verdict: "sensitive", provedBy: "skip:3" },
+      ],
+    });
+    expect(mutationProofVerdict({ basePassed: true, mutations: [...results.values()], assertions: judgeAssertions(journey, plan, results) }).verdict).toBe("inconclusive");
   });
 
   it("mutationProofVerdict is proven when every paired site is sensitive via the relaxed replay", () => {
@@ -435,9 +494,9 @@ describe("#554 relaxed replay", () => {
     const results = new Map<string, MutationRunResult>([
       ["skip:3", { ...failed(ownPost), relaxed: failed({ where: "step-request", step: 3, checkIndex: 0 }, { where: "end-state", index: 0 }) }],
       ["block-write:3", { ...failed(ownPost), relaxed: failed({ where: "end-state", index: 0 }) }],
-      ["stale-value:2", failed({ where: "step", step: 2, postcondition: true })],
+      ["stale-value:2", { ...failed({ where: "step", step: 2, postcondition: true }), relaxed: failed({ where: "end-state", index: 0 }) }],
     ]);
-    expect(mutationProofVerdict({ basePassed: true, mutations: plan.mutations, assertions: judgeAssertions(journey, plan, results) }).verdict).toBe("proven");
+    expect(mutationProofVerdict({ basePassed: true, mutations: plan.mutations, assertions: judgeAssertions(journey, plan, results) }).verdict).toBe("sensitive");
   });
 });
 

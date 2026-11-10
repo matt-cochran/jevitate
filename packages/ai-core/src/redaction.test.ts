@@ -11,6 +11,7 @@ import {
   redactContext,
   redactModelPayload,
   redactText,
+  registerDeclaredSecrets,
   redactUrl,
 } from "./index.js";
 
@@ -144,6 +145,67 @@ describe("short secrets (#454) — matched as whole tokens, never inside ordinar
 
   it("makes the payload guard reject a short secret right after a newline inside a structured payload", () => {
     expect(() => assertNoSecretInPayload({ text: "line one\nme" }, ["me"])).toThrow(SecretLeakError);
+  });
+});
+
+describe("F5 — a short secret inside a longer token", () => {
+  it("masks a 3-5 character secret of letters and digits wherever it occurs, inside a longer token too", () => {
+    expect(redactText("Code abcPw12xdef here", ["Pw12x"])).toBe(`Code abc${REDACTION_MASK}def here`);
+    expect(redactText("ref=x9q7z", ["9q7"])).toBe(`ref=x${REDACTION_MASK}z`);
+    expect(() => assertNoSecretInPayload({ text: "abcPw12xdef" }, ["Pw12x"])).toThrow(SecretLeakError);
+  });
+
+  it("masks a single-kind 3-5 character secret where it does not continue a run of its own kind", () => {
+    // Digits next to letters, letters next to digits or punctuation: a token boundary of its own kind.
+    expect(redactText("pin1234x", ["1234"])).toBe(`pin${REDACTION_MASK}x`);
+    expect(redactText("abc123 and x_abc", ["abc"])).toBe(`${REDACTION_MASK}123 and x_${REDACTION_MASK}`);
+    expect(() => assertNoSecretInPayload({ text: "pin1234x" }, ["1234"])).toThrow(SecretLeakError);
+  });
+
+  it("never masks a single-kind short secret inside a longer run of its own kind", () => {
+    expect(redactText("12345 and 01234", ["1234"])).toBe("12345 and 01234");
+    expect(redactText("the cabbage and abcdef", ["abc", "bag"])).toBe("the cabbage and abcdef");
+    expect(redactText("data-base", ["a-b"])).toBe("data-base");
+    expect(() => assertNoSecretInPayload({ text: "12345 cabbage" }, ["1234", "bag"])).not.toThrow();
+  });
+
+  it("a declared all-digit 3-5 character secret is masked inside a longer digit run while its run lasts; a discovered one is not", () => {
+    const run = registerDeclaredSecrets(["4821", "abc", "12345678"]);
+    try {
+      expect(redactText("order 148213 and 4821", ["4821"])).toBe(`order 1${REDACTION_MASK}3 and ${REDACTION_MASK}`);
+      expect(() => assertNoSecretInPayload({ text: "148213" }, ["4821"])).toThrow(SecretLeakError);
+      // Only all-digit ones change: a declared letters secret keeps the short-secret rule.
+      expect(redactText("the cabbage", ["abc"])).toBe("the cabbage");
+      // A value no run declared keeps the rule.
+      expect(redactText("12345", ["1234"])).toBe("12345");
+    } finally {
+      run.release();
+    }
+    expect(redactText("order 148213", ["4821"])).toBe("order 148213");
+  });
+
+  it("two runs declaring the same digits: it stays declared until both end", () => {
+    const a = registerDeclaredSecrets(["9090"]);
+    const b = registerDeclaredSecrets(["9090"]);
+    a.release();
+    a.release();
+    expect(redactText("190901", ["9090"])).toBe(`1${REDACTION_MASK}1`);
+    b.release();
+    expect(redactText("190901", ["9090"])).toBe("190901");
+  });
+
+  it("a one- or two-character secret stays whole-token only", () => {
+    expect(redactText("Timeout me2 a1b step7", ["me", "a1", "7"])).toBe("Timeout me2 a1b step7");
+    expect(redactText("user me, room 7", ["me", "7"])).toBe(`user ${REDACTION_MASK}, room ${REDACTION_MASK}`);
+  });
+
+  it("masks at least everything the whole-token rule masked (a symbol edge is never narrower)", () => {
+    expect(redactText("##ab and a#ab", ["#ab"])).toBe(`#${REDACTION_MASK} and a${REDACTION_MASK}`);
+    expect(redactText("pass=abc&x", ["abc"])).toBe(`pass=${REDACTION_MASK}&x`);
+  });
+
+  it("masks the encoded form of an embedded short secret", () => {
+    expect(redactText("/x?q=zzP%40w1zz", ["P@w1"])).toBe(`/x?q=zz${REDACTION_MASK}zz`);
   });
 });
 

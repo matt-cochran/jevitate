@@ -11,6 +11,7 @@ import { FsJourneyStore, JourneySchema, type Journey } from "@jevitate/journey";
 import { FakeGenerationGateway, type GenerationPort } from "@jevitate/ai-core";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
+import { advisoryCatalogDir } from "./done-check-policy.testkit.js";
 import { annotationDraftPath } from "./journey-annotate-api.js";
 import { useSkippingTime } from "../../explore/src/testkit.js";
 
@@ -118,8 +119,10 @@ async function cli(journeysDir: string, args: string[], gen?: GenerationPort): P
   const err: string[] = [];
   const program = buildProgram({
     profiles: new ProfileManager("/unused"),
+    approval: { env: {}, stdinIsTTY: () => true, stdoutIsTTY: () => true, prompt: async () => "token", user: () => "offline-test" },
     journeysDir,
     dbPath: join(dir, "no-site-policy.sqlite"),
+    catalogDir: advisoryCatalogDir(dir),
     explore: { browserPortFactory: () => new PlaywrightBrowserPort(), ...(gen === undefined ? {} : { gen }) },
   });
   program.configureOutput({ writeOut: (s) => out.push(s), writeErr: (s) => err.push(s) });

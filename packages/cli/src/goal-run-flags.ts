@@ -29,6 +29,7 @@ import type { SecretCommandRunner } from "@jevitate/explore";
 import type { ServerLogOptions } from "./explore-shared.js";
 
 const collect = (v: string, prev: string[]): string[] => [...prev, v];
+const MAX_RENDER_WAIT_MS = 300_000;
 
 /** Each shared flag, built fresh per command (commander owns an `Option` once added). */
 export const GOAL_RUN_OPTIONS = {
@@ -121,6 +122,11 @@ export const GOAL_RUN_OPTIONS = {
     new Option("--reply-max-chars <n>", "conversational pages: cap on each generated chat message (goal and usability; default 300)").argParser(
       intArg({ min: 20, max: 2000 }),
     ),
+  renderWaitMs: () =>
+    new Option(
+      "--render-wait-ms <ms>",
+      "goal exploration and Journey authoring: bounded wait for each page perception to settle (default 15000; maximum 300000). Does not ignore requests, suppress hang detection, or change success checks",
+    ).argParser(intArg({ min: 1, max: MAX_RENDER_WAIT_MS })),
   jobWaitMs: () =>
     new Option(
       "--job-wait-ms <ms>",
@@ -234,6 +240,7 @@ export interface GoalRunFlags extends EmulationFlags, ScreenshotsFlags {
   replyCeilingMs?: string | number;
   replyMaxChars?: string | number;
   jobWaitMs?: string | number;
+  renderWaitMs?: string | number;
   deny: string[];
   paid: string[];
   allowControl?: string[];
@@ -270,6 +277,16 @@ const asError = (err: unknown): GoalRunFlagError =>
         err instanceof SessionFileInProjectError || err instanceof TargetConfigError ? err.code : "E_EXPLORE_ARGS",
         err instanceof Error ? err.message : String(err),
       );
+
+/** #837: retain the core default unless a finite, explicitly bounded wait was supplied. */
+export function renderWaitMsFromFlags(o: Pick<GoalRunFlags, "renderWaitMs">): number | undefined {
+  if (o.renderWaitMs === undefined) return undefined;
+  const value = Number(o.renderWaitMs);
+  if (!Number.isInteger(value) || value < 1 || value > MAX_RENDER_WAIT_MS) {
+    throw new GoalRunFlagError("E_EXPLORE_ARGS", `--render-wait-ms must be an integer from 1 to ${MAX_RENDER_WAIT_MS}`);
+  }
+  return value;
+}
 
 /** `--dialogs`: a mistyped value never silently means "dismiss" (#334). */
 export function dialogsFromFlags(o: Pick<GoalRunFlags, "dialogs">): DialogPolicy | undefined {
@@ -349,6 +366,7 @@ export function targetFlagsFromFlags(o: Partial<GoalRunFlags>, dialogs: DialogPo
 
 /** Everything a goal run takes from these flags (the `runExploration` options of the same names). */
 export interface GoalRunShaping {
+  readonly renderWaitMs?: number;
   readonly successWhen?: SuccessWhen;
   readonly allowVacuousChecks?: boolean;
   readonly actionDeltas?: boolean;
@@ -383,6 +401,7 @@ export interface ResolveGoalRunDeps {
 export function resolveGoalRunFlags(o: GoalRunFlags, url: string, deps: ResolveGoalRunDeps = {}): GoalRunShaping {
   const env = deps.env ?? process.env;
   try {
+    const renderWaitMs = renderWaitMsFromFlags(o);
     const dialogs = dialogsFromFlags(o);
     const successWhen = successWhenFromFlags(o);
     if (o.saveStorageState !== undefined) assertSessionFileOutsideProject(o.saveStorageState, "--save-storage-state");
@@ -405,6 +424,7 @@ export function resolveGoalRunFlags(o: GoalRunFlags, url: string, deps: ResolveG
       if (!(err instanceof TypeError)) throw err;
     }
     return {
+      ...(renderWaitMs === undefined ? {} : { renderWaitMs }),
       ...(successWhen === undefined ? {} : { successWhen }),
       ...(o.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
       ...(o.actionDeltas === true ? { actionDeltas: true } : {}),

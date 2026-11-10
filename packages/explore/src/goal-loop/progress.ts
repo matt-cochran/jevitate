@@ -21,8 +21,9 @@ import { descriptorToLocator } from "@jevitate/recorder";
 import type { RunContext } from "./context.js";
 import type { ActionableControlEvidence } from "./context/types.js";
 import { armRecoveryTurn, collectActionableControlEvidence, forwardControls } from "./handle-blocked.js";
-import { EXPECTED_RETURN, savedAndLeft, settledNavigation } from "./helpers.js";
+import { EXPECTED_RETURN, forwardStepKey, savedAndLeft, settledNavigation } from "./helpers.js";
 import { LAST_CHANCE_NOTE, LAST_CHANCE_NO_WRITE_NOTE, MAX_MOVING_SCROLLS, NO_PROGRESS_RECOVERY_NOTE } from "./limits.js";
+import { returnToStart } from "./return-to-start.js";
 import type { Flow, Perceived } from "./step.js";
 import { clock } from "@jevitate/domain";
 
@@ -133,6 +134,9 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
       !m.sawNewState &&
       snap.signature !== m.before &&
       m.seenBefore.has(snap.signature) &&
+      // RC3 lab (j3-deadend): the same action from the same state landed where it first led — a
+      // repeated forward step (a wizard walked again), not an action that sent the page back.
+      ctx.enteredBy.get(snap.signature) !== forwardStepKey(m.before, m.label) &&
       // A link that navigated to ANOTHER route already visited is ordinary navigation, not an
       // in-place action that silently undid itself (#153): the stall rule is for in-place actions.
       !((m.linkFromRoute ?? null) !== null && m.linkFromRoute !== hangRoute(snap.url)) &&
@@ -210,6 +214,8 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
       // report or done that code must reject, and the run stops before it can act on the rejection.
       ctx.history.push(targeted ?? (ctx.writeGoal && !ctx.wroteOk ? LAST_CHANCE_NO_WRITE_NOTE : LAST_CHANCE_NOTE));
     } else {
+      // #807 (gap 11): a no-progress dead end offers the return before it stops.
+      if ((await returnToStart(ctx, snap.url)) !== null) return "continue";
       ctx.stop = "no-progress";
       return "stop";
     }
@@ -220,6 +226,8 @@ export async function checkProgress(ctx: RunContext, step: Perceived): Promise<F
   const cycle = await noteCycle(ctx, snap, text);
   if (cycle !== null) {
     ctx.history.push(cycle);
+    // #807: so does a loop with nowhere to go.
+    if ((await returnToStart(ctx, snap.url)) !== null) return "continue";
     ctx.incomplete = cycle;
     ctx.stop = "no-progress";
     return "stop";

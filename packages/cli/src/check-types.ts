@@ -1,4 +1,6 @@
 import type { ApprovalChannel } from "@jevitate/journey";
+import type { JobVerdict } from "@jevitate/adjudicator";
+import type { DoneCheckPolicy } from "@jevitate/domain";
 // check-types.ts — `jevitate check` option, result and error types (#231).
 import type { SlownessReport } from "./cold-start-report.js";
 import type { OutcomeTargetResult } from "./outcome-targets.js";
@@ -158,6 +160,14 @@ export interface RunCheckOptions {
    * the cwd; null: none, the defaults apply).
    */
   readonly projectDir?: string | null;
+  /**
+   * H5 (0.30.0): each Journey item reads its job's done check, as `journey run` does, and folds the
+   * verdict: a job not achieved is a gating `done-check-failed` finding (exit 1); an unverified pass
+   * holds the suite at exit 2 under policy `require` (a harness target excepted). `skip`
+   * (`--no-done-check`) reads nothing (the job reads unverified, no-check); `policy`
+   * (`--require-done-check` → `require`) overrides project.json's `doneCheckPolicy`.
+   */
+  readonly doneCheck?: { readonly skip?: boolean; readonly policy?: DoneCheckPolicy };
 }
 
 export type ItemKind = "journey" | "goal" | "mission" | "verify-fix";
@@ -194,6 +204,8 @@ export interface CheckItemReport {
   readonly outcomeTargets?: readonly OutcomeTargetResult[];
   /** #470: how stable a Journey item's locators are (advisory; gates only past `maxBrittleSteps`). */
   readonly locatorHealth?: LocatorHealth;
+  /** H5 (0.30.0): a Journey item's job verdict (its done check), absent when no done-check hook ran. */
+  readonly job?: JobVerdict;
 }
 
 /**
@@ -301,7 +313,8 @@ export interface CheckResult {
   readonly suitePath: string;
   readonly verdict: "pass" | "fail" | "pending-review";
   /**
-   * 0 pass · 1 a gating finding · 2 no gating finding, but an item errored or the budget was exceeded ·
+   * 0 pass · 1 a gating finding (a job not achieved is one: `done-check-failed`) · 2 no gating finding, but an
+   * item errored, the budget was exceeded, or (H5) a Journey item passed with an unverified job under `require` ·
    * 5 (#453) nothing failed but a self-heal proposed a Journey revision awaiting review. Precedence 1 > 2 > 5 > 0.
    */
   readonly exitCode: 0 | 1 | 2 | 5;
@@ -332,7 +345,11 @@ export interface CheckResult {
     readonly gatingFindings: number;
     /** #453: Journey items whose self-heal proposed a revision awaiting review. */
     readonly pendingReview: number;
+    /** H5 (0.30.0): Journey items that passed with an unverified job under policy `require` (they hold the suite at exit 2). */
+    readonly unverified: number;
   };
+  /** H5 (0.30.0): the `doneCheckPolicy` the Journey items' job verdicts folded with. */
+  readonly doneCheckPolicy: DoneCheckPolicy;
   /** #470: locator health over the check's Journey items (advisory unless `maxBrittleSteps` is set). */
   readonly locatorHealth?: LocatorHealthSummary;
   /** #486: advisory slowness of Journey replays — cold starts (slow first replay only) and late-2xx steps. Never gates. */

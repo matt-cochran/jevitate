@@ -7,6 +7,7 @@ import { FsJourneyStore, JourneyRegistry, type Journey } from "@jevitate/journey
 import type { BrowserPort, OpenOptions } from "@jevitate/playwright";
 import type { Recording } from "@jevitate/recording";
 import { buildProgram } from "./program.js";
+import { advisoryCatalogDir } from "./done-check-policy.testkit.js";
 import { runCheck, type CheckRunners } from "./check-api.js";
 import { parseSuite } from "./check-suite.js";
 import { initProjectDir } from "./project-dir.js";
@@ -125,6 +126,35 @@ describe(".jevitate/environments.json", () => {
 
   it("#471: `synthetic` must be a boolean", () => {
     expect(() => loadEnvironmentsFile(envFile({ x: { baseUrl: "https://x.test", synthetic: "yes" } }))).toThrow(/\[x\]\.synthetic must be true or false/);
+  });
+
+  it("0.30.0 §5: `trust` parses as test, harness or production; absent, the entry is as before", () => {
+    const envs = loadEnvironmentsFile(
+      envFile({
+        t: { baseUrl: "https://t.test", trust: "test" },
+        h: { baseUrl: "https://h.test", trust: "harness" },
+        p: { baseUrl: "https://p.test", trust: "production", production: true },
+        plain: { baseUrl: "https://plain.test" },
+      }),
+    );
+    expect(envs.t).toEqual({ baseUrl: "https://t.test", allow: [], trust: "test" });
+    expect(envs.h?.trust).toBe("harness");
+    expect(envs.p).toEqual({ baseUrl: "https://p.test", allow: [], production: true, trust: "production" });
+    expect(envs.plain).toEqual({ baseUrl: "https://plain.test", allow: [] });
+  });
+
+  it("0.30.0 §5: an unknown `trust` value is refused, listing the allowed ones", () => {
+    for (const bad of ["staging", "unknown", "TEST", true, null]) {
+      expect(() => loadEnvironmentsFile(envFile({ x: { baseUrl: "https://x.test", trust: bad } }))).toThrow(
+        /\[x\]\.trust must be one of "test", "harness", "production"/,
+      );
+    }
+  });
+
+  it("0.30.0 §5: `production: true` with a looser `trust` is refused", () => {
+    expect(() => loadEnvironmentsFile(envFile({ x: { baseUrl: "https://x.test", production: true, trust: "test" } }))).toThrow(
+      /cannot be both production: true and trust: "test"/,
+    );
   });
 
   it("NEVER holds secrets or sessions: such keys are refused, pointing at ~/.jevitate", () => {
@@ -280,6 +310,7 @@ describe("journey run --env / --base-url (CLI)", () => {
     const program = buildProgram({
       profiles: new ProfileManager("/unused"),
       dbPath: join(root, "db.sqlite"),
+      catalogDir: advisoryCatalogDir(root),
       ...(opts.environmentsFile === undefined ? {} : { environmentsFile: opts.environmentsFile }),
       explore: { browserPortFactory: () => port, targetsConfigPath },
     });
@@ -355,6 +386,32 @@ describe("journey run --env / --base-url (CLI)", () => {
     expect(r.out.error?.code).toBe("E_ENV_ORIGIN_REFUSED");
     expect(r.code).toBe(64);
     expect(h.opens).toHaveLength(0);
+  });
+
+  // #803: an explicit --allow is part of the origin preflight, for journey run and journey verify alike.
+  const tidepool = "https://tidepool.example.test";
+  const crossOrigin = () => journey(recording([{ url: "/x", steps: [{ step: { kind: "navigate", url: `${tidepool}/x`, expect: { kind: "urlIncludes", text: "/x" } } }] }]));
+
+  it("journey run: a cross-origin step the environment omits but --allow names reaches the browser (#803)", async () => {
+    const dir = await seed(crossOrigin());
+    const h = harness({ environmentsFile: envFile({ local: { baseUrl: "http://localhost:3000" } }) });
+    const r = await h.run(["journey", "run", "login", "--dir", dir, "--env", "local", "--allow", tidepool, "--json"]);
+    expect(r.out.error?.code).not.toBe("E_ENV_ORIGIN_REFUSED");
+    expect(h.opens[0]?.allowedOrigins).toEqual(["http://localhost:3000", tidepool]);
+  });
+
+  it("journey verify --mutate: a cross-origin step the environment omits but --allow names passes origin preflight (#803)", async () => {
+    const dir = await seed(crossOrigin());
+    const refused = harness({ environmentsFile: envFile({ local: { baseUrl: "http://localhost:3000" } }) });
+    const before = await refused.run(["journey", "verify", "login", "--dir", dir, "--mutate", "--env", "local", "--json"]);
+    // Without --allow it is still refused, before any browser.
+    expect(before.out.error?.code).toBe("E_ENV_ORIGIN_REFUSED");
+    expect(refused.opens).toHaveLength(0);
+    const h = harness({ environmentsFile: envFile({ local: { baseUrl: "http://localhost:3000" } }) });
+    const r = await h.run(["journey", "verify", "login", "--dir", dir, "--mutate", "--env", "local", "--allow", tidepool, "--json"]);
+    expect(r.out.error?.code).not.toBe("E_ENV_ORIGIN_REFUSED");
+    expect(h.opens.length).toBeGreaterThan(0);
+    expect(h.opens[0]?.allowedOrigins).toEqual(["http://localhost:3000", tidepool]);
   });
 
   it("the environment's session (~/.jevitate/targets.json[origin]) is used when --storage-state is absent", async () => {

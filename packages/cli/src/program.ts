@@ -20,8 +20,11 @@ import {
   withBrowserLaunchFlags,
   browserLaunchFromFlags,
   buildExploreGateways,
-  fakeDoneJudge,
+  resolveInboxDir,
 } from "./cli-shared.js";
+import { registerRunSurfaceHooks } from "./run-surface-hooks.js";
+import { sentinelShadowGateway } from "./sentinel-hook.js";
+import { registerDoneCheckHooksOnce } from "./journey-done-check-hook.js";
 import { registerInitCommands } from "./init-cli.js";
 import { registerProfileCommands } from "./profile-cli.js";
 import { registerSiteCommands } from "./site-cli.js";
@@ -50,7 +53,6 @@ import { registerAcceptanceAuditCommands } from "./acceptance-audit-cli.js";
 import { registerJourneezeHintCommands } from "./journeeze-hint-cli.js";
 
 export type { CliDeps, RecordCliDeps } from "./cli-shared.js";
-export { fakeDoneJudge } from "./cli-shared.js";
 
 /**
  * `--version`'s display string: `x.y.z (commit <sha>, tree <tree>, built <iso>)`, so results from
@@ -67,6 +69,11 @@ export function buildProgram(deps: CliDeps): Command {
   trackActionCommand(program);
   // #434/#435: the readiness and catalog-analysis pre-approval analyzers (once per process).
   registerBuiltinAnalyzers();
+  // 0.30.0: the run-mode and typed-parameter run hooks (once per process; cli-shared.ts).
+  // GAPS 17: Jev's write sentinel, only with JEVITATE_WRITE_SENTINEL=shadow and a Jev key (advisory, never a hold).
+  registerRunSurfaceHooks({ inboxDir: resolveInboxDir(deps), sentinelGateway: sentinelShadowGateway(deps.catalogDir === undefined ? {} : { catalogDir: deps.catalogDir }) });
+  // GAPS 21 (#800): the job done check (read only inside a `DoneCheckRun` scope, which `journey run` opens).
+  registerDoneCheckHooksOnce();
 
   registerInitCommands(program, deps);
   registerProfileCommands(program, deps);

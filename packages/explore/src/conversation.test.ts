@@ -66,6 +66,9 @@ describe("UnsubmittedTypeTracker — the repeated-type anti-pattern", () => {
   });
 });
 
+import { settleDoneCheck } from "./goal-loop/read-back.js";
+import type { RunContext } from "./goal-loop/context.js";
+
 describe("groundDone — a proposed done is weighed by code", () => {
   it("rejects while typed text was never submitted, whatever the oracle says", () => {
     const v = groundDone({ unsubmitted: ["Type a reply"], successCheck: true });
@@ -76,6 +79,8 @@ describe("groundDone — a proposed done is weighed by code", () => {
     expect(groundDone({ unsubmitted: [], successCheck: true })).toEqual({
       accept: true,
       outcome: { status: "completed", verifiedBy: "success-condition" },
+      attainment: "unverified",
+      basis: "no-check",
     });
     expect(groundDone({ unsubmitted: [], successCheck: false })).toMatchObject({ accept: false, reason: /success condition/ });
   });
@@ -90,11 +95,22 @@ describe("groundDone — a proposed done is weighed by code", () => {
     expect(groundDone({ unsubmitted: [] })).toMatchObject({ accept: false });
   });
 
+  it("0.30.0: a verdict accepted by grounded judgment alone has attainment unverified (no-check)", () => {
+    expect(groundDone({ unsubmitted: [], goalMetProbability: 0.9 })).toMatchObject({
+      accept: true,
+      outcome: { verifiedBy: "grounded-judgment" },
+      attainment: "unverified",
+      basis: "no-check",
+    });
+  });
+
   it("#188: code-observed sign-in completion proves a sign-in-only goal — never without the observation, the scope, or over an oracle", () => {
     const signedIn = { completed: true, goalIsSignIn: 0.9 };
     expect(groundDone({ unsubmitted: [], goalMetProbability: 0.3, signIn: signedIn })).toEqual({
       accept: true,
       outcome: { status: "completed", verifiedBy: "sign-in-signals" },
+      attainment: "unverified",
+      basis: "no-check",
     });
     // Code did not observe the sign-in complete (still on the 2FA form): the model's scope alone is nothing.
     expect(groundDone({ unsubmitted: [], goalMetProbability: 0.3, signIn: { completed: false, goalIsSignIn: 0.99 } })).toMatchObject({ accept: false });
@@ -111,6 +127,8 @@ describe("groundDone — a proposed done is weighed by code", () => {
     expect(groundDone({ unsubmitted: [], goalMetProbability: 0.42, save: savedOk })).toEqual({
       accept: true,
       outcome: { status: "completed", verifiedBy: "save-signals" },
+      attainment: "unverified",
+      basis: "no-check",
     });
     // Code evidence is named first even when the judgment also clears the threshold.
     expect(groundDone({ unsubmitted: [], goalMetProbability: 0.95, save: savedOk })).toMatchObject({ outcome: { verifiedBy: "save-signals" } });
@@ -177,5 +195,20 @@ describe("messages and options", () => {
     expect(isSubmitControl({ role: "button", tag: "button", inputType: null, name: "Send" })).toBe(true);
     expect(isSubmitControl({ role: "button", tag: "button", inputType: null, name: "Close inspector" })).toBe(false);
     expect(isSubmitControl({ role: "link", tag: "a", inputType: null, name: "Send feedback" })).toBe(false);
+  });
+});
+
+describe("0.30.0 settleDoneCheck — the fresh-context reading decides attainment", () => {
+  const accepted = groundDone({ unsubmitted: [], goalMetProbability: 0.9 });
+  const ctxWith = (doneCheck?: () => Promise<boolean | null>) => ({ cfg: { doneCheck } }) as unknown as RunContext;
+
+  it("a false reading rejects the verdict as not-achieved", async () => {
+    const v = await settleDoneCheck(ctxWith(async () => false), accepted);
+    expect(v).toMatchObject({ accept: false, attainment: "not-achieved", basis: "done-check" });
+  });
+  it("a true reading is achieved; an unreadable one stays unverified; no check leaves it alone", async () => {
+    expect(await settleDoneCheck(ctxWith(async () => true), accepted)).toMatchObject({ accept: true, attainment: "achieved", basis: "done-check" });
+    expect(await settleDoneCheck(ctxWith(async () => null), accepted)).toMatchObject({ accept: true, attainment: "unverified", basis: "reading-unknown" });
+    expect(await settleDoneCheck(ctxWith(), accepted)).toBe(accepted);
   });
 });

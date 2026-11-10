@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ActionDeltaRecord, RecordedStep, Recording, Step, ValueOrVar } from "@jevitate/recording";
 import { deriveStepExpectations } from "./step-expectations.js";
 import { expectedResultFromDelta } from "../replay-deltas.js";
+import { RunRecorder } from "../record.js";
 
 const publish = { testId: "publish" };
 const click = (target = publish): Step => ({ kind: "click", target, expect: { kind: "visible", target } });
@@ -11,6 +12,52 @@ const only = (r: Recording): RecordedStep => r.pages[0]!.steps[0]!;
 const titleFill = (value: ValueOrVar): Step => ({ kind: "fill", target: { label: "Title" }, value, expect: { kind: "visible", target: { label: "Title" } } });
 
 describe("#400 deriveStepExpectations: a step's expect comes from what it changed, never its own target", () => {
+  it("a native select asserts the measured DOM value when its label differs", () => {
+    const target = { testId: "source", display: { role: "combobox", name: "Source" } };
+    const recorder = new RunRecorder("http://app.test");
+    recorder.select(target, "Platform templates", 0, 0, "platform");
+    expect(only(deriveStepExpectations(recorder.finish())).step).toMatchObject({
+      expect: { kind: "valueEquals", target, value: "platform" },
+    });
+  });
+
+  it("an unmeasured select never guesses the DOM value from the chosen label", () => {
+    const target = { testId: "source" };
+    const step: Step = { kind: "select", target, value: { redacted: false, value: "Platform templates" }, expect: { kind: "visible", target } };
+    expect(only(deriveStepExpectations(rec({ step }))).step).toMatchObject({ expect: { kind: "count", min: 0 } });
+  });
+
+  it("a measured secret selection never persists its value in the assertion", () => {
+    const recorder = new RunRecorder("http://app.test", undefined, ["private-value"]);
+    recorder.select({ testId: "private-option" }, "Private label", 0, 0, "private-value");
+    expect(only(deriveStepExpectations(recorder.finish())).step).toMatchObject({ expect: { kind: "count", min: 0 } });
+  });
+
+  it.each(["source", "secret1"])("a measured select promoted to %s does not retain its first literal", (name) => {
+    const target = { testId: "source" };
+    const step: Step = { kind: "select", target, value: { var: name }, expect: { kind: "valueEquals", target, value: "first-private-value" } };
+    expect(only(deriveStepExpectations(rec({ step }), { secretVars: ["secret1"] })).step).toMatchObject({ expect: { kind: "count", min: 0 } });
+  });
+
+  it.each(["/editor?tab=templates", "/editor#templates"])("preserves genuine navigation to %s", (url) => {
+    const step: Step = { kind: "click", target: { testId: "templates" }, expect: { kind: "urlIncludes", text: url } };
+    expect(only(deriveStepExpectations(rec({ step }))).step).toEqual(step);
+  });
+
+  it("a same-route SPA transition asserts its observed outcome instead of its unchanged URL", () => {
+    const step: Step = { kind: "click", target: { testId: "use-template" }, expect: { kind: "urlIncludes", text: "/editor" } };
+    const out = only(deriveStepExpectations(rec({ step,
+      delta: delta({ verdict: "relevant-change", changes: ['+ heading "Campaign Objective" [level=2]'] }),
+    })));
+    expect(out.step).toMatchObject({ expect: { kind: "visible", target: { role: "heading", name: "Campaign Objective" } } });
+  });
+
+  it("a native select containing a secret never derives a value assertion", () => {
+    const target = { testId: "private-option" };
+    const step: Step = { kind: "select", target, value: { var: "secret1" }, expect: { kind: "visible", target } };
+    expect(only(deriveStepExpectations(rec({ step }), { secretVars: ["secret1"] })).step).toMatchObject({ expect: { kind: "count", min: 0 } });
+  });
+
   it("a write step gets responseStatus:<METHOD> <path>=2xx from the request its delta recorded", () => {
     const out = only(
       deriveStepExpectations(

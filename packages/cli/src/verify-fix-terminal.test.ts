@@ -512,14 +512,15 @@ describe("the one redacted verify-fix report", () => {
   });
 
   describe("a --param value and MIN_MASKED_PARAM_LENGTH", () => {
-    it("leaves a value too short to be a secret readable (5 characters)", async () => {
-      const terminal = await runJson("Save on acmeX staging", "--param", "tenant=acmeX");
-      expect(terminal.envelopes()[0]?.data["title"]).toBe("Save on acmeX staging");
+    // The floor is the credential guard's short-secret floor (MIN_MASKED_PARAM_LENGTH = 3, verify-fix-cli.ts), lowered from 6.
+    it("leaves a value too short to be a secret readable (2 characters)", async () => {
+      const terminal = await runJson("Save on ac staging", "--param", "tenant=ac");
+      expect(terminal.envelopes()[0]?.data["title"]).toBe("Save on ac staging");
     });
 
-    it("masks a value at the limit (6 characters)", async () => {
-      const terminal = await runJson("Save on acmeXY staging", "--param", "tenant=acmeXY");
-      expect(terminal.stdout.join("")).not.toContain("acmeXY");
+    it("masks a value at the limit (3 characters)", async () => {
+      const terminal = await runJson("Save on acm staging", "--param", "tenant=acm");
+      expect(terminal.envelopes()[0]?.data["title"]).toBe("Save on «redacted» staging");
     });
 
     it("still masks a short --secret: the limit is only for a --param", async () => {

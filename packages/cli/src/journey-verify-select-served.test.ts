@@ -148,7 +148,7 @@ describe("journey verify --mutate proves a select-fed parameter (#579, served)",
   });
 
   it("on a select with no enabled alternative, the proof is not proven", () => {
-    expect(only.report.verdict).not.toBe("proven");
+    expect(only.report.verdict).not.toBe("sensitive");
   });
 
   it("a reviewed mutationValues entry is the swap's source", () => {

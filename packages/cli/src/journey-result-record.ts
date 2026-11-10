@@ -1,9 +1,11 @@
-import { JOURNEY_MISSION_OUTCOME, journeyExitCode, type MissionOutcome } from "@jevitate/domain";
+import { journeyExitCode, journeyMissionOutcome, type DoneCheckPolicy, type MissionOutcome } from "@jevitate/domain";
+import type { JobVerdict } from "@jevitate/adjudicator";
 import type { Journey } from "@jevitate/journey";
 import type { HealReport, JourneyRunResult } from "@jevitate/runtime";
 import { redactSecretParams } from "./journey-api.js";
 import { journeyStepUrl } from "./check-plan.js";
 import { runLocatorHealth } from "./locator-health-api.js";
+import { DONE_CHECK_FAILED_MESSAGE, doneCheckExitInput } from "./journey-done-check.js";
 
 /**
  * #453: the `*.result.json` record of one Journey run — what `jevitate report`, the run index and a
@@ -35,6 +37,10 @@ export interface JourneyResultContext {
   readonly heal?: HealReport;
   /** #470: the test-id convention for `locatorHealth` (default: the project's config, else data-testid/data-test). */
   readonly testIdAttributes?: readonly string[];
+  /** H5: the run's job verdict (its done-check scope's); the record keeps it and folds it into the exit. */
+  readonly job?: JobVerdict;
+  /** H5: the policy the job folds with (owner decision 3: default `require`). */
+  readonly doneCheckPolicy?: DoneCheckPolicy;
 }
 
 export interface JourneyResultRecord {
@@ -49,14 +55,19 @@ export function journeyResultRecord(r: JourneyRunResult, ctx: JourneyResultConte
   const heal = r.heal ?? ctx.heal;
   // #470: how each step's target resolved, and the run's locator health (advisory; never gates here).
   const locatorHealth = runLocatorHealth(ctx.journey, r.resolved, ...(ctx.testIdAttributes === undefined ? [] : [ctx.testIdAttributes]));
+  // H5 (owner decisions 2/3): the job verdict folds into the record's outcome and exit as `journey run` folds it.
+  const jobInput = doneCheckExitInput(ctx.job, ctx.doneCheckPolicy);
+  const failed = r.outcome === "quarantined" || r.outcome === "heal-exhausted";
   const record: JourneyResultRecord = {
-    missionOutcome: JOURNEY_MISSION_OUTCOME[r.outcome],
-    exitCode: journeyExitCode(r.outcome),
+    missionOutcome: journeyMissionOutcome(r.outcome, jobInput),
+    exitCode: journeyExitCode(r.outcome, jobInput),
     result: {
       mode: "journey",
       journeyId: ctx.journey.metadata.id,
       outcome: r.outcome,
-      ...(r.outcome === "quarantined" || r.outcome === "heal-exhausted" ? { reason: r.reason, ...(r.at === undefined ? {} : { at: r.at }) } : {}),
+      ...(failed ? { reason: r.reason, ...(r.at === undefined ? {} : { at: r.at }) } : {}),
+      ...(ctx.job === undefined ? {} : { job: ctx.job }),
+      ...(ctx.job?.attainment === "not-achieved" && !failed ? { failure: { kind: "done-check-failed", message: DONE_CHECK_FAILED_MESSAGE } } : {}),
       ...(url === undefined ? {} : { url }),
       ...(heal === undefined ? {} : { heal }),
       ...(ctx.proposal === undefined ? {} : { proposal: ctx.proposal }),

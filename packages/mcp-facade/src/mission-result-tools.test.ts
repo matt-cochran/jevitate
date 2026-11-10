@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isMissionResultId, isQueuedMissionId, missionResultFileName, parseResultOutcome } from "./mission-result-tools.js";
+import { isMissionResultId, isQueuedJourneyCallId, isQueuedMissionId, missionResultFileName, parseResultOutcome } from "./mission-result-tools.js";
 
 const STAMP = "2026-09-24T15-24-50-561Z";
 
@@ -85,5 +85,14 @@ describe("mission result ids (#117)", () => {
     expect(parseResultOutcome("failed")).toEqual({ outcome: "defects-found", goalOutcome: "failed" });
     expect(parseResultOutcome("toString")).toBeNull();
     expect(parseResultOutcome("bogus")).toBeNull();
+  });
+});
+
+describe("0.30.0 #797 (GAPS 19) queued Journey call ids", () => {
+  it("accepts exactly `journey-<uuid>`, never a path or another id shape", () => {
+    expect(isQueuedJourneyCallId("journey-549db40a-cd30-4706-b7f5-01ddea8f6d1f")).toBe(true);
+    for (const id of ["549db40a-cd30-4706-b7f5-01ddea8f6d1f", "journey-../x", "journey-549DB40A-CD30-4706-B7F5-01DDEA8F6D1F", "journey-549db40a-cd30-4706-b7f5-01ddea8f6d1f.json", "explore-2026-09-23T00-00-00-000Z", "", 7]) {
+      expect(isQueuedJourneyCallId(id), String(id)).toBe(false);
+    }
   });
 });

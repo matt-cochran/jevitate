@@ -277,16 +277,18 @@ const send = (res, status, type, body) => {
 const json = (res, status, data) => send(res, status, "application/json", JSON.stringify(data));
 
 /** The request handler for one variant, closing over a fresh in-memory store. */
+const seedState = () => ({
+  profile: { name: "Ada Lovelace", email: "ada@example.com" },
+  contacts: [
+    { name: "Grace Hopper", email: "grace@example.com" },
+    { name: "Alan Turing", email: "alan@example.com" },
+  ],
+  sent: [],
+  imported: [],
+});
+
 function createHandler(variant) {
-  const state = {
-    profile: { name: "Ada Lovelace", email: "ada@example.com" },
-    contacts: [
-      { name: "Grace Hopper", email: "grace@example.com" },
-      { name: "Alan Turing", email: "alan@example.com" },
-    ],
-    sent: [],
-    imported: [],
-  };
+  const state = seedState();
 
   return async (req, res) => {
     try {
@@ -314,6 +316,12 @@ function createHandler(variant) {
         if (typeof body.name === "string") state.profile.name = body.name;
         if (typeof body.email === "string") state.profile.email = body.email;
         return json(res, 200, { ok: true, profile: state.profile });
+      }
+
+      // #801: back to the state a fresh start has — the reset a fixture runs between replays.
+      if (req.method === "POST" && path === "/api/reset") {
+        Object.assign(state, seedState());
+        return json(res, 200, { ok: true });
       }
 
       if (req.method === "POST" && path === "/api/messages") {

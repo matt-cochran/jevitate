@@ -13,7 +13,7 @@
 //
 // Bounds: one cell at a time, one 127.0.0.1 server started here, --real only against it.
 import { spawn } from "node:child_process";
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,6 +22,28 @@ const fixtureDir = resolve(here, "../../test/fixtures/accuracy-lab");
 
 /** The identity of one cell, used by the matrix to skip cells already recorded. */
 export const cellKey = (cell) => `${cell.variant}|${cell.job}|${cell.strategy}|${cell.replicate}`;
+
+/**
+ * GAPS 29: a goal cell with no done check reads `inconclusive` (decision 3: an unverified pass exits 2).
+ * Each job gets its real done condition as a catalog job, read in a fresh context from the server-rendered
+ * page that shows the durable state (not the form the run typed into).
+ */
+export const LAB_JOB_DONE = {
+  J1: { at: "/profile", check: "textIncludes:[data-testid=profile-current]|Ada Byron / ada.byron@example.com" },
+  J2: { at: "/contacts", check: "textIncludes:[data-testid=sent-list]|Hello from Acme" },
+  J3: { at: "/contacts", check: "textIncludes:[data-testid=contact-list]|Katherine Johnson" },
+};
+
+/** The scratch project a goal cell starts from (its cwd): `.jevitate/jobs.json` with the job's done check. */
+export function labJobProject(outDir, jobId, jobTruthId) {
+  const done = LAB_JOB_DONE[jobId];
+  if (!done) throw new Error(`no done check for job ${JSON.stringify(jobId)}`);
+  const dir = join(outDir, "job-project", jobId);
+  mkdirSync(join(dir, ".jevitate"), { recursive: true });
+  const job = { id: jobTruthId, trigger: "the user wants the job done", motivation: "complete the job", outcome: "the app's saved state shows it is done", done: { version: 1, ...done } };
+  writeFileSync(join(dir, ".jevitate", "jobs.json"), `${JSON.stringify({ jobs: [job] }, null, 2)}\n`);
+  return dir;
+}
 
 function argValue(name, fallback) {
   const i = process.argv.indexOf(name);
@@ -50,7 +72,7 @@ const startApp = (variant) => {
   return { child, ready };
 };
 
-const runJevitate = (port, { strategy, goal, entry, artifactDir, timeoutMs, maxActions }) =>
+const runJevitate = (port, { strategy, goal, entry, artifactDir, timeoutMs, maxActions, projectDir, jobId }) =>
   new Promise((resolveRun) => {
     const startedAt = Date.now();
     const bin = process.env.JEVITATE_BIN;
@@ -67,8 +89,9 @@ const runJevitate = (port, { strategy, goal, entry, artifactDir, timeoutMs, maxA
         "--max-actions", String(maxActions),
         "--real",
         ...(strategy === "usability" ? ["--app-class", "internal"] : []),
+        ...(strategy === "goal" && jobId ? ["--job", jobId] : []),
       ],
-      { cwd: fixtureDir, stdio: ["ignore", "pipe", "pipe"] },
+      { cwd: projectDir ?? fixtureDir, stdio: ["ignore", "pipe", "pipe"] },
     );
     let stdout = "";
     let stderr = "";
@@ -128,7 +151,8 @@ export async function runCell({ variant, job: jobId, strategy = "goal", replicat
 
   let run;
   try {
-    run = await runJevitate(port, { strategy, goal: job.goal, entry: job.entry, artifactDir, timeoutMs, maxActions });
+    const projectDir = strategy === "goal" ? labJobProject(outDir, jobId, job.id) : undefined;
+    run = await runJevitate(port, { strategy, goal: job.goal, entry: job.entry, artifactDir, timeoutMs, maxActions, projectDir, jobId: projectDir ? job.id : undefined });
   } finally {
     server.child.kill("SIGTERM");
   }
@@ -167,6 +191,8 @@ export async function runCell({ variant, job: jobId, strategy = "goal", replicat
     missionOutcome: data?.missionOutcome ?? null,
     goalOutcome: data?.goalOutcome ?? null,
     failureKind: data?.failure?.kind ?? null,
+    goalReason: data?.goalReason ?? null,
+    jobVerdict: data?.job ?? null,
     fingerprints,
     findings,
     actions: data?.actions ?? data?.depth?.actions ?? null,

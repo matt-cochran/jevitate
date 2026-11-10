@@ -81,6 +81,32 @@ export function explainLaunchFailure(err: unknown, opts: Pick<OpenOptions, "exec
   );
 }
 
+/** Linux's `sun_path` is 108 bytes with its NUL: the longest Unix socket path Chromium can bind. */
+const LINUX_UNIX_SOCKET_PATH_MAX = 107;
+/** What Chromium's ProcessSingleton adds to its temp dir: `/org.chromium.Chromium.XXXXXX/SingletonSocket`. */
+const SINGLETON_SOCKET_SUFFIX = "/org.chromium.Chromium.XXXXXX/SingletonSocket";
+
+/**
+ * A persistent-context Chromium (an extension session's throwaway profile, a `persistentProfile`) binds
+ * its ProcessSingleton socket at `$TMPDIR/org.chromium.Chromium.XXXXXX/SingletonSocket` — under the
+ * temp dir, not the profile. On Linux a `TMPDIR` longer than 62 characters puts that past the Unix
+ * socket limit and Chromium dies at launch ("Socket path too long"), which Playwright reports only as
+ * "Target page, context or browser has been closed". Returns why, naming the path and its length,
+ * before any browser starts; `undefined` when it fits (or on a platform where it doesn't apply).
+ */
+export function singletonSocketPathRefusal(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string | undefined {
+  if (platform !== "linux") return undefined;
+  // Chromium's base::GetTempDir on Linux: $TMPDIR when set and non-empty, else /tmp.
+  const tmp = env.TMPDIR !== undefined && env.TMPDIR !== "" ? env.TMPDIR.replace(/\/+$/, "") || "/" : "/tmp";
+  const socket = `${tmp}${SINGLETON_SOCKET_SUFFIX}`;
+  if (socket.length <= LINUX_UNIX_SOCKET_PATH_MAX) return undefined;
+  return (
+    `Chromium cannot start a persistent profile with TMPDIR=${tmp} (${tmp.length} characters): its singleton socket ` +
+    `${socket} would be ${socket.length} characters, past the ${LINUX_UNIX_SOCKET_PATH_MAX}-character Unix socket limit. ` +
+    `Set TMPDIR to a directory of at most ${LINUX_UNIX_SOCKET_PATH_MAX - SINGLETON_SOCKET_SUFFIX.length} characters (e.g. TMPDIR=/tmp)`
+  );
+}
+
 /** The pool type the Playwright port runs on. */
 export type PlaywrightBrowserPool = BrowserPool<BrowserContext, BrowserContextOptions>;
 
@@ -158,6 +184,8 @@ export interface PlaywrightBrowserPortDeps {
   readonly launchPersistentContext?: LaunchPersistentContext;
   /** Testing seam — defaults to `process.platform`. */
   readonly platform?: NodeJS.Platform;
+  /** Testing seam — the environment whose TMPDIR the singleton-socket check reads; defaults to `process.env`, which the browser inherits. */
+  readonly env?: NodeJS.ProcessEnv;
   /** Defaults to the process-wide `sharedBrowserPool()`. */
   readonly pool?: PlaywrightBrowserPool;
   /**
@@ -226,6 +254,7 @@ export class PlaywrightBrowserPort implements BrowserPort {
   readonly #launch: Launch;
   readonly #launchPersistent: LaunchPersistentContext;
   readonly #platform: NodeJS.Platform;
+  readonly #env: NodeJS.ProcessEnv;
   readonly #pool: PlaywrightBrowserPool | undefined;
   readonly #liveness: { readonly unresponsiveMs?: number } | false;
   readonly #openTimeoutMs: number;
@@ -240,6 +269,7 @@ export class PlaywrightBrowserPort implements BrowserPort {
     this.#launch = deps.launch ?? ((options) => chromium.launch(marked(options)));
     this.#launchPersistent = deps.launchPersistentContext ?? ((dir, options) => chromium.launchPersistentContext(dir, marked(options)));
     this.#platform = deps.platform ?? process.platform;
+    this.#env = deps.env ?? process.env;
     this.#pool = deps.pool;
     this.#probe = deps.probe ?? ((url) => probeReachable(url));
     this.#originProbe = deps.originProbe ?? ((url) => probeOriginReadiness(url));
@@ -334,6 +364,8 @@ export class PlaywrightBrowserPort implements BrowserPort {
       throw new Error("storageState cannot be combined with persistentProfile: a persistent profile already carries its own state");
     }
     const extensions = opts.extensions ?? [];
+    const socketRefusal = singletonSocketPathRefusal(this.#env, this.#platform);
+    if (socketRefusal !== undefined) throw extensions.length > 0 ? new ExtensionLoadError(socketRefusal) : new Error(socketRefusal);
     // #256: the headless shell (Playwright's default headless binary) cannot load extensions; the
     // full Chromium build in new-headless mode can. An explicit channel/executable is kept as given.
     const channel = opts.channel ?? (extensions.length > 0 && opts.headless && opts.executablePath === undefined ? "chromium" : undefined);

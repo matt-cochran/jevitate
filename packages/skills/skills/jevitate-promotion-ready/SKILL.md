@@ -48,6 +48,17 @@ without `--readiness`. ○ items (such as a skipped Jev review) never fail it.
 6. **`jevitate journey review <id> --strict`** (add `--json` for `strict: { passed, warnings }`).
    Fix every ⚠ it names and rerun until it exits 0. Do not hand over before then.
    `--stale --strict` is refused.
+   **One exception: approval-only ⚠ items.** A ⚠ that only a person's approval settles ("Changed
+   since approval", "Catalog links need re-review", each with its owner actions) cannot be fixed by
+   you, and rerunning strict review never clears it. When those are the only ⚠ items, run
+   `jevitate journey readiness <id> --json`: `verdict: "technically-ready"` with them listed under
+   `awaitingHuman` (each with its hash-bound command) is the handoff. Any other blocker (a job the
+   latest run did not achieve, an unverified job under `doneCheckPolicy: require`, a proof the
+   project's `mutationProofPolicy` requires, weak checks, missing intent, unresolved links) is still
+   yours to fix first. Strict review and CI keep failing until the owner approves.
+   The job gates: `journey run` on a non-production target must read the job's done check
+   `achieved`. The mutation proof is the checks-strength line; under the default
+   `mutationProofPolicy: advisory` it never blocks.
 7. **Hand the owner the ordered command list**, each with `--reviewed-hash`.
 
 ## The owner's commands (human-only)

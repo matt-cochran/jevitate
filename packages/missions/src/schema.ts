@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AssertionSchema, InvariantSpecSchema, type Assertion, type InvariantSpec } from "@jevitate/recording";
+import { AssertionSchema, InvariantSpecSchema, isSecretName, type Assertion, type InvariantSpec } from "@jevitate/recording";
 
 // `id` is used to build a filesystem path (both for `MissionTarget`s and for
 // `QueuedMission`s), so it is constrained to a safe format at the schema
@@ -186,6 +186,14 @@ export interface MissionRequest {
    * `explore --min-actions` / `--min-distinct-states` values, capped by the budget at run time.
    */
   minEffort?: { minActions?: number; minDistinctStates?: number };
+  /**
+   * #800 (`goal-based` with a goal only): the catalog job (`.jevitate/jobs.json`) whose done check
+   * verifies the run, as `explore --job` / `run_exploration {job}`. An id only: the check is resolved
+   * from the drain's catalog when the mission runs, read in fresh contexts before and after.
+   */
+  job?: string;
+  /** #800: an unverified job (no done check, or one already true) exits 2 even when project.json says advisory (`--require-done-check`). */
+  requireDoneCheck?: boolean;
 }
 
 /** #255: the screenshot modes a queued mission may ask for (`--screenshots [mode]`, never a dir). */
@@ -205,8 +213,13 @@ function strategyShapeIssues(req: {
   viewport?: { width: number; height: number };
   device?: string;
   minEffort?: { minActions?: number; minDistinctStates?: number };
+  job?: string;
+  requireDoneCheck?: boolean;
 }): string[] {
   const issues: string[] = [];
+  // #800: a job's done check verifies a goal run (`explore --goal --job`), so only a goal-based mission with a goal takes one.
+  if (req.job !== undefined && (req.strategy !== "goal-based" || req.goal === undefined)) issues.push("job is accepted only for strategy goal-based with a goal");
+  if (req.requireDoneCheck !== undefined && (req.strategy !== "goal-based" || req.goal === undefined)) issues.push("requireDoneCheck is accepted only for strategy goal-based with a goal");
   // #424: the minimum effort gates the goal loop's own endings — a goal-based mission's.
   if (req.minEffort !== undefined && req.strategy !== "goal-based") issues.push(`minEffort is not accepted for strategy ${req.strategy} (goal-based only)`);
   // #149: mutually exclusive, whatever the strategy.
@@ -248,6 +261,8 @@ const MissionRequestFields = {
     .object({ minActions: z.number().int().positive().optional(), minDistinctStates: z.number().int().positive().optional() })
     .strict()
     .optional(),
+  job: z.string().regex(SAFE_ID_RE, "job must be a catalog job id (letters, digits, '.', '_', '-'), never a path").optional(),
+  requireDoneCheck: z.boolean().optional(),
 };
 
 export const MissionRequestSchema: z.ZodType<MissionRequest> = z
@@ -305,3 +320,97 @@ export const QueuedMissionSchema: z.ZodType<QueuedMission> = z
   })
   .strict()
   .superRefine(refineStrategyShape);
+
+/**
+ * #797 (0.30.0): a queued call of a promoted Journey. It carries the Journey's id and the content hash
+ * the call was queued against (a Journey changed since is refused at run time), non-secret params, the
+ * environment name or a base URL, and when it was requested. NEVER a secret value: a secret-named param
+ * is refused at parse (the message names the param, never its value); a secret the Journey needs is met
+ * at run time by the run's secret mode (vault or hold).
+ */
+export interface QueuedJourneyCall {
+  kind: "journey";
+  journey: { id: string; hash: string };
+  params?: Record<string, string>;
+  env?: string;
+  baseUrl?: string;
+  /** #800 `--no-done-check`: the run reads no done check (the job reads unverified, basis no-check). */
+  noDoneCheck?: boolean;
+  /** #800 `--require-done-check`: an unverified job exits 2 even under the advisory policy. */
+  requireDoneCheck?: boolean;
+  requestedAt: string;
+}
+
+export const QueuedJourneyCallSchema: z.ZodType<QueuedJourneyCall> = z
+  .object({
+    kind: z.literal("journey"),
+    journey: z.object({ id: z.string().regex(SAFE_ID_RE, "invalid id"), hash: z.string().min(1) }).strict(),
+    params: z.record(z.string(), z.string()).optional(),
+    env: z.string().min(1).optional(),
+    baseUrl: z.string().min(1).optional(),
+    noDoneCheck: z.boolean().optional(),
+    requireDoneCheck: z.boolean().optional(),
+    requestedAt: z.string().min(1),
+  })
+  .strict()
+  .superRefine((call, ctx) => {
+    if (call.noDoneCheck === true && call.requireDoneCheck === true) {
+      ctx.addIssue({ code: "custom", path: ["requireDoneCheck"], message: "noDoneCheck and requireDoneCheck cannot be used together" });
+    }
+    for (const name of Object.keys(call.params ?? {})) {
+      if (isSecretName(name)) {
+        ctx.addIssue({ code: "custom", path: ["params", name], message: `param '${name}' is secret-named: a queued call never stores a secret value; the run meets it with its secret mode (vault or hold)` });
+      }
+    }
+    if (call.env !== undefined && call.baseUrl !== undefined) {
+      ctx.addIssue({ code: "custom", path: ["baseUrl"], message: "give env or baseUrl, not both" });
+    }
+  });
+
+/** What the queue holds: an exploration mission or a Journey call. */
+export type QueuedEntry = QueuedMission | QueuedJourneyCall;
+
+export const QueuedEntrySchema: z.ZodType<QueuedEntry> = z.union([QueuedMissionSchema, QueuedJourneyCallSchema]);
+
+/**
+ * #797: a queued Journey call as the queue holds it (`<queue dir>/journeys/<id>.json`), beside the
+ * exploration missions: the call itself (never a secret value) plus its lifecycle, the same as a
+ * mission's (`queued` → `running` → `done` | `failed`). `done` means the run reached an outcome
+ * (`outcome`, `exitCode`); `failed` means it could not run at all (`code`, `error`: a refusal such as
+ * `E_JOURNEY_APPROVAL_STALE`, value-free).
+ */
+export interface QueuedJourneyRecord {
+  id: string;
+  status: QueuedMissionStatus;
+  enqueuedAtIso: string;
+  call: QueuedJourneyCall;
+  startedAtIso?: string;
+  finishedAtIso?: string;
+  /** The run's outcome (`ok`, `failed`, `held`, `inconclusive`, …), once `done`. */
+  outcome?: string;
+  /** The run's id: its run record's `<stamp>-<suffix>` key, naming `logs/<date>/journey-evidence-<runId>/evidence.json` (absent when run records are off). */
+  runId?: string;
+  exitCode?: number;
+  /** The refusal or error code of a run that could not finish (`failed`, or a `held` run's code). */
+  code?: string;
+  error?: string;
+  /** GAPS 23 (#800): the linked job's verdict from its done check, once `done` (code tokens only, never a value). */
+  job?: { attainment: string; basis: string };
+}
+
+export const QueuedJourneyRecordSchema: z.ZodType<QueuedJourneyRecord> = z
+  .object({
+    id: z.string().regex(SAFE_ID_RE, "invalid id"),
+    status: z.enum(QUEUED_MISSION_STATUSES),
+    enqueuedAtIso: z.string(),
+    call: QueuedJourneyCallSchema,
+    startedAtIso: z.string().optional(),
+    finishedAtIso: z.string().optional(),
+    outcome: z.string().optional(),
+    runId: z.string().regex(SAFE_ID_RE, "invalid run id").optional(),
+    exitCode: z.number().int().optional(),
+    code: z.string().optional(),
+    error: z.string().optional(),
+    job: z.object({ attainment: z.string().regex(/^[a-z-]{1,40}$/), basis: z.string().regex(/^[a-z-]{1,40}$/) }).strict().optional(),
+  })
+  .strict();
