@@ -1,6 +1,0 @@
----
-"@jevitate/cli": minor
-"jevitate": minor
----
-
-`journey readiness` gates on the job, and the mutation proof is advisory there too (owner decision "Proof role"). The receipt leads with a `job` check: the latest run's `job.attainment` passes when `achieved`, blocks (exit 1) when `not-achieved`, and when `unverified` (no run of this version, no done check, a run from before 0.30.0) follows `doneCheckPolicy`: `require` (the default) exits 2 with the reason and the fix, `advisory` shows it without gating. Under the default `mutationProofPolicy: advisory`, a missing, stale or insensitive proof no longer blocks readiness (it was exit 2 or 1) or fails `journey review --strict` (it was a ⚠); it is the checks-strength line, marked `advisory: true` on the receipt. An unwaived `inconclusive` proof does not gate under `advisory` either (it was exit 2); `require-attempt` / `require-sensitive` gate as before. Every `journey run`, `run_journey` and queued call now records `job: {attainment, basis}` (code tokens only) and `journey.proofHash` in its `journey-run-*.json`; `journey review` shows the latest run's job verdict first (`job` in `--json`). What to do: run each Journey once with a done check before `journey readiness`, or set `"doneCheckPolicy": "advisory"`.

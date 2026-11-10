@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
-## [0.30.0] – unreleased
+## [0.30.0] – 2026-11-10
 
 ### Behaviour changes
 
@@ -19,6 +19,8 @@ behaviour changes).
 - **MCP cannot loosen limits (#799).** `site_policy` only tightens; `mission_targets` cannot promote a target.
 - **A target no file declares runs in automation mode.**
 - **`explore --job` with an unknown job id exits 64** (`E_EXPLORE_JOB`, a usage error). It exited 2.
+- **A missing route is no longer a defect (#807).** A goal run that opened every page it could reach and tried every safe control, with none leading toward the goal, ends `inconclusive` (exit 2), `goalReason: "no-route-found"`, naming the pages it searched; it exited 1 (`defects-found`). A run below that coverage floor ends as before and names the first gap in `noRouteShortfall`; a page with a hidden or unperceived control never reads `no-route-found`.
+- **With a done check, the job decides the exit.** A goal run that gave up or ran out of budget while its done check reads achieved exits 0 (`succeeded`); a pass whose done check reads false reports `goalOutcome: "failed"`, `goalReason: "done-check-failed"` (exit 1).
 
 ### Added
 
@@ -32,6 +34,7 @@ behaviour changes).
 - **Reconcile and receipts (#795)**, **typed Journey parameters (#796)** (`E_JOURNEY_PARAM_TYPE`), and **catalog contract v3** (`jobs[].done`, typed parameters).
 - **Shadow write sentinel (#794).** `JEVITATE_WRITE_SENTINEL=shadow`; advisory, holds nothing.
 - **Harness targets (#802).** A pass on a `trust: "harness"` target, goal runs included, exits 0 and reads `unverified`.
+- **`--render-wait-ms` (#837).** Goal exploration and Journey authoring take a bounded settle wait, with the same MCP arguments and suite goal option, for authenticated pages that take longer than the default 15 s to settle before the first action. The default is unchanged, and hang detection, success checks and authorization still apply.
 
 ### Fixed
 
@@ -44,6 +47,7 @@ behaviour changes).
 - **Proof soundness (#811, #813, #821, #805, #806).** Causal request pairing replaces the last-write rule; waived postconditions; read-only UI transitions no longer need persistence; observation horizons. A sibling end-state check that held while its neighbours failed stays a `cascade` and the refusal says why; `journey verify --plan` flags an absence check that shares mutations (#817). A proof from another engine version is `stale` with a `staleCause` instead of blaming an unchanged Journey (#816).
 - **Secrets on argv (#827)** warn by name; **`editText`**, **short-secret masking** and **`extract as` naming** (0.29.0 accepted limits). An adversarial mission's `scope.routeGlobs` no longer holds a prefix's URL secret in plain text.
 - **Log pruning** counts a run's evidence folder with its record (#790).
+- **Goal-run stalls (#241).** Re-walking a wizard forward to a state it reached before is not a `ui-no-progress` hang, and a background poll after a send that sent nothing no longer keeps the run waiting.
 
 ### Limits
 
