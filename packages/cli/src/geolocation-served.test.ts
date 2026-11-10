@@ -119,7 +119,7 @@ describe("--geolocation (#329, served)", () => {
     expect(report.base.outcome, r.out).toBe("ok");
     expect(report.mutations.length, r.out).toBeGreaterThan(0);
     expect(report.mutations.every((mutation) => mutation.outcome !== "error"), r.out).toBe(true);
-    expect(report.verdict, r.out).toBe("proven");
+    expect(report.verdict, r.out).toBe("sensitive");
 
     const receipt = await readVerifyRecord(join(dir, "journeys"), "near");
     const stored = await new FsJourneyStore(join(dir, "journeys")).get("near");

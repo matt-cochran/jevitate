@@ -13,8 +13,17 @@ export type Secret = z.infer<typeof SecretSchema>;
 export const asSecret = (s: string): Secret => SecretSchema.parse(s);
 export const revealSecret = (s: Secret): string => s as unknown as string;
 
-export const InboxItemKindSchema = z.enum(["handback", "approval", "review"]);
+/**
+ * #793: `secret` is a held run waiting for a person to supply a secret step at a terminal (vault
+ * autofill or a visible handback). It never carries the value: `resolve` refuses input on it.
+ */
+export const InboxItemKindSchema = z.enum(["handback", "approval", "review", "secret"]);
 export type InboxItemKind = z.infer<typeof InboxItemKindSchema>;
+/** The kinds an agent may queue over MCP (`queue_action`): a `secret` item exists only as a held run's. */
+export const QUEUEABLE_INBOX_KINDS: readonly InboxItemKind[] = Object.freeze(["approval", "handback", "review"]);
+/** #793 (docs/design/0.30.0-evidence-and-trust.md §5.4): the kinds of a held run, as `HoldRecord.kind`. */
+export const HoldKindSchema = z.enum(["approval", "handback", "secret"]);
+export type HoldKind = z.infer<typeof HoldKindSchema>;
 export const InboxItemStatusSchema = z.enum(["pending", "approved", "rejected", "resolved", "expired"]);
 export type InboxItemStatus = z.infer<typeof InboxItemStatusSchema>;
 
@@ -35,6 +44,8 @@ export const InboxItemSchema = z.object({
   run: z.string(), journey: z.string(), step: z.string(),
   reason: z.string(), agent: z.string(),
   targetUrl: z.string().optional(),
+  /** #793: the durable hold (`.jevitate/logs/holds/<holdId>.json`) this item is the inbox face of. */
+  holdId: z.string().regex(SAFE_INBOX_ID_RE, "invalid hold id").optional(),
   hasScreenshot: z.boolean(),
   findings: z.array(FindingSchema).optional(),
   thread: z.array(ThreadEntrySchema),
@@ -67,6 +78,7 @@ export function resolveTransition(kind: InboxItemKind, action: Action): InboxIte
     approval: { approve: "approved", reject: "rejected" },
     handback: { resume: "resolved", reject: "rejected" },
     review:   { approve: "approved", reject: "rejected" },
+    secret:   { resume: "resolved", reject: "rejected" },
   };
   return table[kind][action] ?? "illegal";
 }

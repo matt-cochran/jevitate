@@ -1,4 +1,4 @@
-import { warnSecretParamsOnArgv } from "./secret-params.js";
+import { REPLAY_SECRET_FIELD_HELP, collectSecretField, secretFieldErrorOf, warnSecretParamsOnArgv, withCommandSecretParams, type BoundSecretParams } from "./secret-params.js";
 import { JourneyRunRefusedError } from "@jevitate/mcp-facade";
 import { TAG_FLAG, TAG_HELP, collectTag, taggedAction } from "./run-tags-cli.js";
 import { existsSync } from "node:fs";
@@ -6,6 +6,8 @@ import { Command } from "commander";
 import { ok, fail } from "./envelope.js";
 import { JourneyRequiresAuthError } from "./journey-api.js";
 import { runJourneyLoadTest, UnknownLoadJourneyError } from "./load-api.js";
+import { RunModeRefusedError } from "./journey-run-mode-gate.js";
+import { RunGuardRefusedError } from "./mcp-run-guard.js";
 import { withSiteGate } from "./site-gate-cli.js";
 import { withEngine } from "./engine.js";
 import { finiteNumberArg, positiveIntArg } from "./cli-args.js";
@@ -23,6 +25,7 @@ import {
   emulationFromFlags,
   collectParam,
   emitJson,
+  commandSecretSeams,
   environmentSeams,
 } from "./cli-shared.js";
 
@@ -33,6 +36,7 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
   withEnvironmentFlags(withBrowserLaunchFlags(withEmulationFlags(load.command("run <journeyId>"))))
     .option("--dir <path>", "journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys)")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
+    .option("--secret-field <binding>", REPLAY_SECRET_FIELD_HELP, collectSecretField, [] as string[])
     // `--authorized-origin` is mandatory, but enforced IN THE ACTION (below)
     // via a `fail` envelope rather than commander's `.requiredOption` — which
     // hard-exits via `process.exit`, inconsistent with this CLI's convention
@@ -53,9 +57,10 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
     .option("--json", "emit a JSON envelope")
     .option(TAG_FLAG, TAG_HELP, collectTag, [])
     .action(taggedAction(program, "load run", async function (this: Command, journeyId: string) {
-      const { dir, param, authorizedOrigin, concurrency, iterations, seed, storageState: storageStateFlag, json, env: envName, baseUrl, ...emulationFlags } = this.opts<{
+      const { dir, param: paramFlags, secretField, authorizedOrigin, concurrency, iterations, seed, storageState: storageStateFlag, json, env: envName, baseUrl, ...emulationFlags } = this.opts<{
         dir?: string;
         param: Record<string, string>;
+        secretField: string[];
         authorizedOrigin: string[];
         concurrency: string;
         iterations: string;
@@ -63,7 +68,7 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
         storageState?: string;
         json?: boolean;
       } & EmulationFlags & EnvironmentFlags>();
-      await warnSecretParamsOnArgv(program.configureOutput().writeErr, resolveJourneysDir(deps, dir), [journeyId], param);
+      await warnSecretParamsOnArgv(program.configureOutput().writeErr, resolveJourneysDir(deps, dir), [journeyId], paramFlags, "load run");
       if (authorizedOrigin.length === 0) {
         emitJson(
           program,
@@ -78,6 +83,17 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
       } catch (err) {
         if (!isEnvironmentError(err)) throw err;
         emitJson(program, fail(err.code, err.message));
+        return;
+      }
+      // #827: a secret parameter from the environment (--secret-field, targets.json), off the command line.
+      let param: Record<string, string>;
+      let bound: BoundSecretParams | undefined;
+      try {
+        ({ params: param, bound } = await withCommandSecretParams({ dir: resolveJourneysDir(deps, dir), ids: [journeyId], params: paramFlags, flags: secretField, environment, env: deps.explore?.env ?? process.env, seams: commandSecretSeams(deps, resolveJourneysDir(deps, dir)) }));
+      } catch (err) {
+        const e = secretFieldErrorOf(err, "E_LOAD_RUN_ARGS");
+        if (e === undefined) throw err;
+        emitJson(program, fail(e.code, e.message));
         return;
       }
       const storageState = storageStateFlag ?? environment?.storageState;
@@ -98,6 +114,8 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
           dir: resolveJourneysDir(deps, dir),
           id: journeyId,
           params: param,
+          ...(bound === undefined ? {} : { boundSecretParams: bound }),
+          ...(deps.explore?.env === undefined ? {} : { secretEnv: deps.explore.env }),
           concurrency: Number(concurrency),
           iterationsPerActor: Number(iterations),
           seed: Number(seed),
@@ -107,6 +125,7 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
           ...(loadRunEmulation === undefined ? {} : { emulation: loadRunEmulation }),
           ...(storageState !== undefined ? { storageState } : {}),
           ...(environment === undefined ? {} : { environment }),
+          ...environmentSeams(deps),
         })).then((r) => withEngine(r));
         const envelope = ok(report);
         if (json) {
@@ -119,6 +138,11 @@ export function registerLoadCommands(program: Command, deps: CliDeps): void {
         if (isEnvironmentError(err)) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof JourneyRunRefusedError) {
+          emitJson(program, fail(err.code, err.message));
+        } else if (err instanceof RunModeRefusedError) {
+          // 0.30.0 §5: refused by the target's run mode before any browser; never a failed run to retry.
+          emitJson(program, fail(err.refusalCode, err.message));
+        } else if (err instanceof RunGuardRefusedError) {
           emitJson(program, fail(err.code, err.message));
         } else if (err instanceof UnknownLoadJourneyError) {
           emitJson(program, fail("E_UNKNOWN_JOURNEY", String(err.message)));

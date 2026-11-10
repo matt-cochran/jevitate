@@ -94,8 +94,11 @@ export class LoopCycleDetector {
   }
 }
 
+/** How every #367 cycle reason starts (a stop that names its loop keeps that cause). */
+export const CYCLE_REASON_PREFIX = "no progress: the run went round a loop";
+
 /** The no-progress reason for a detected cycle (#367): the loop named, and why it is no progress. */
 export function describeCycle(v: CycleVerdict, repeats = CYCLE_REPEATS): string {
   const loop = v.labels.length === 1 ? `${v.labels[0]!} over and over` : v.labels.join(" ↔ ");
-  return `no progress: the run went round a loop — ${loop} — ${repeats} times (${v.steps} steps between the same ${v.states} page states, no request sent, nothing new on the page)`;
+  return `${CYCLE_REASON_PREFIX} — ${loop} — ${repeats} times (${v.steps} steps between the same ${v.states} page states, no request sent, nothing new on the page)`;
 }

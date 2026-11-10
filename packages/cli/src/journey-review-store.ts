@@ -199,6 +199,9 @@ function isVerifyRecord(v: unknown): v is JourneyVerifyRecord {
     typeof o.contentHash === "string" &&
     (o.proofHash === undefined || typeof o.proofHash === "string") &&
     (o.proofContext === undefined || JourneyProofContextSchema.safeParse(o.proofContext).success) &&
+    // M5: the target origin and app version the proof ran on (0.30.0); absent on an older receipt.
+    (o.target === undefined || (o.target !== null && typeof o.target === "object" && typeof (o.target as { origin?: unknown }).origin === "string")) &&
+    (o.appVersion === undefined || typeof o.appVersion === "string") &&
     typeof o.verdict === "string" &&
     typeof o.at === "string" &&
     (o.reason === undefined || typeof o.reason === "string") &&

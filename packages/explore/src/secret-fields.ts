@@ -30,8 +30,12 @@ import { decodeBase32, totp } from "./totp.js";
  * it is read. This module never runs it: the caller supplies the runner.
  */
 
-/** What a binding matches: a control's label, test id, input type, element id or name attribute. */
-export type FieldMatcherKey = "label" | "testId" | "type" | "id" | "name";
+/**
+ * What a binding matches: a control's label, test id, input type, element id or name attribute; or
+ * (#819) `param`, a replayed Journey's secret parameter by its name, for a secret no field types (a token
+ * in a `navigate` URL). A `param` binding never matches a live control.
+ */
+export type FieldMatcherKey = "label" | "testId" | "type" | "id" | "name" | "param";
 
 export interface FieldMatcher {
   readonly key: FieldMatcherKey;
@@ -73,7 +77,7 @@ export class SecretFieldSpecError extends Error {
   }
 }
 
-const MATCHER_KEYS: ReadonlySet<string> = new Set<FieldMatcherKey>(["label", "testId", "type", "id", "name"]);
+const MATCHER_KEYS: ReadonlySet<string> = new Set<FieldMatcherKey>(["label", "testId", "type", "id", "name", "param"]);
 
 /**
  * Parses `<key>=<value>=env:<NAME>` and resolves NAME from `env`. Throws `SecretFieldSpecError`
@@ -113,7 +117,7 @@ export function parseSecretField(
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || !MATCHER_KEYS.has(key) || value === "") {
     // The spec is not echoed: a value pasted in place of `env:<VAR>` must not reach a log.
     throw new SecretFieldSpecError(
-      `${flag} expects '<label|testId|type|id|name>=<value>=env:<VAR>' (e.g. 'label=Password=env:APP_PASSWORD'); the value itself is read from the environment variable, never passed on the command line`,
+      `${flag} expects '<label|testId|type|id|name|param>=<value>=env:<VAR>' (e.g. 'label=Password=env:APP_PASSWORD', or 'param=inviteToken=env:INVITE_TOKEN' for a replay's URL secret); the value itself is read from the environment variable, never passed on the command line`,
     );
   }
   const secret = env[name];
@@ -158,6 +162,9 @@ export function fieldMatches(m: FieldMatcher, c: Control): boolean {
       return c.descriptor.anchor?.id === m.value;
     case "name":
       return c.descriptor.anchor?.name === m.value;
+    case "param":
+      // #819: a Journey parameter, bound by name on a replay; never a live control.
+      return false;
   }
 }
 

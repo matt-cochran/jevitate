@@ -2,10 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { RecordedStep, Step } from "@jevitate/recording";
 import {
   JourneySchema,
-  classifyMutation,
   journeyAssertions,
-  judgeAssertions,
-  mutationProofVerdict,
   mutationReplay,
   relaxedMutationReplay,
   planJourneyMutations,
@@ -13,7 +10,13 @@ import {
   type Journey,
   type JourneyMutation,
   type MutationRunResult,
+  mutationPlanSites,
+  type MutationPlan,
 } from "./index.js";
+import { classifyMutation, judgeAssertions as judgeSites, mutationProofVerdict } from "@jevitate/adjudicator";
+/** #812: the adjudicator's judging of a Journey's own assertion sites, as `journey verify` gathers them. */
+const judgeAssertions = (j: Journey, plan: MutationPlan, results: ReadonlyMap<string, MutationRunResult>) =>
+  judgeSites(journeyAssertions(j), plan, results, new Map(mutationPlanSites(j).map((s) => [s.site, s])));
 
 // #565 — `journey verify --mutate` proves parameter-relative checks: a non-secret parameter an
 // assertion names is swapped and truncated where the app receives it (the assertion still expects
@@ -134,9 +137,12 @@ describe("#565 mutationReplay: a param mutation alters params, not the recording
     expect(stepAt(j, 3)).toMatchObject({ expect: { kind: "valueEquals", value: REPLY } });
   });
 
-  it("a relaxed param replay leaves the reading step a weak claim on its own target", () => {
-    const j = relaxedMutationReplay(composeJourney(), mutationById("swap-param:reply"), { params }).journey;
-    expect(stepAt(j, 3)).toMatchObject({ expect: { kind: "visible", target: { label: "Reply" } } });
+  it("a relaxed param replay waives the reading step without inventing target survival", () => {
+    const original = composeJourney();
+    const before = structuredClone(original);
+    const j = relaxedMutationReplay(original, mutationById("swap-param:reply"), { params }).journey;
+    expect(stepAt(j, 3)).toMatchObject({ expect: { kind: "urlIncludes", text: "" } });
+    expect(original).toEqual(before);
   });
 
   it("a {var} fill's stale-value types an altered value of the parameter", () => {
@@ -164,11 +170,12 @@ describe("#565 classification and verdict of parameter-relative checks", () => {
     expect(classifyMutation(siteByKey("end-state:0"), mutationById("swap-param:reply"), ignored)).toBe("insensitive");
   });
 
-  it("the proof is proven when every param mutation breaks its checks", () => {
+  it("the proof is proven when parameter and preview mutations each break their own checks", () => {
     const p = plan();
-    const results = new Map(p.mutations.map((m) => [m.id, failedAtFill]));
+    const previewFailure: MutationRunResult = { outcome: "failed", failedSites: [{ where: "step", step: 4, postcondition: true }], relaxed: { outcome: "failed", failedSites: [{ where: "end-state", index: 0 }] } };
+    const results = new Map(p.mutations.map((m) => [m.id, m.id === "skip:4" ? previewFailure : failedAtFill]));
     const assertions = judgeAssertions(composeJourney(), p, results);
-    expect(mutationProofVerdict({ basePassed: true, mutations: [...results.values()], assertions }).verdict).toBe("proven");
+    expect(mutationProofVerdict({ basePassed: true, mutations: [...results.values()], assertions }).verdict).toBe("sensitive");
   });
 
   it("the proof is insensitive when the param mutations leave the end state passing", () => {

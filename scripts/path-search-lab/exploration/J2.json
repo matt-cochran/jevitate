@@ -1,0 +1,118 @@
+{
+ "journey": "J2",
+ "source": "coverage-2026-11-08T16-05-07-187Z.transcript.json",
+ "steps": 12,
+ "pool": {
+  "/contacts": [
+   {
+    "role": "link",
+    "name": "Acme CRM",
+    "testId": "nav-home"
+   },
+   {
+    "role": "link",
+    "name": "Profile"
+   },
+   {
+    "role": "link",
+    "name": "Contacts"
+   },
+   {
+    "role": "link",
+    "name": "Import",
+    "testId": "nav-import"
+   },
+   {
+    "role": "button",
+    "name": "Send",
+    "testId": "send-message"
+   }
+  ],
+  "/": [
+   {
+    "role": "link",
+    "name": "Acme CRM"
+   },
+   {
+    "role": "link",
+    "name": "Profile"
+   },
+   {
+    "role": "link",
+    "name": "Contacts"
+   },
+   {
+    "role": "link",
+    "name": "Import"
+   },
+   {
+    "role": "link",
+    "name": "Update my profile",
+    "testId": "job-update-profile"
+   },
+   {
+    "role": "link",
+    "name": "Send a message to a contact",
+    "testId": "job-send-message"
+   },
+   {
+    "role": "link",
+    "name": "Import contacts from a CSV",
+    "testId": "job-import-contacts"
+   }
+  ],
+  "/profile": [
+   {
+    "role": "link",
+    "name": "Acme CRM"
+   },
+   {
+    "role": "link",
+    "name": "Profile"
+   },
+   {
+    "role": "link",
+    "name": "Contacts",
+    "testId": "nav-contacts"
+   },
+   {
+    "role": "link",
+    "name": "Import"
+   },
+   {
+    "role": "button",
+    "name": "Save",
+    "testId": "profile-save"
+   }
+  ],
+  "/import": [
+   {
+    "role": "link",
+    "name": "Acme CRM"
+   },
+   {
+    "role": "link",
+    "name": "Profile",
+    "testId": "nav-profile"
+   },
+   {
+    "role": "link",
+    "name": "Contacts"
+   },
+   {
+    "role": "link",
+    "name": "Import"
+   },
+   {
+    "role": "button",
+    "name": "Continue",
+    "testId": "import-continue"
+   },
+   {
+    "role": "button",
+    "name": "Import",
+    "testId": "import-confirm"
+   }
+  ]
+ }
+}

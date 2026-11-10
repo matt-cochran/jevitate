@@ -12,6 +12,7 @@ import { FsJourneyStore, type Journey } from "@jevitate/journey";
 import { Recorder } from "@jevitate/recorder";
 import { useSkippingTime } from "../../explore/src/testkit.js";
 import { buildProgram } from "./program.js";
+import { advisoryCatalogDir } from "./done-check-policy.testkit.js";
 import { runRecording } from "./record-api.js";
 
 // #304: Node and page time skip idle waits; assertions unchanged.
@@ -135,6 +136,7 @@ async function cli(args: string[]): Promise<{ out: string; exitCode: number | un
     profiles: new ProfileManager(join(root, "profiles")),
     journeysDir,
     dbPath: join(root, "no-site-policy.sqlite"),
+    catalogDir: advisoryCatalogDir(root),
     explore: { browserPortFactory: () => new PlaywrightBrowserPort() },
   });
   const override = (c: Command): void => {

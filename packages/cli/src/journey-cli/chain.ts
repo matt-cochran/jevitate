@@ -1,3 +1,4 @@
+import { resolve as resolvePath } from "node:path";
 import { JourneyRunRefusedError } from "@jevitate/mcp-facade";
 import { existsSync, readFileSync } from "node:fs";
 import { Command } from "commander";
@@ -9,13 +10,14 @@ import {
   emitJson,
   type EmulationFlags,
   emulationFromFlags,
+  commandSecretSeams,
   environmentSeams,
   resolveDbPath,
   withBrowserLaunchFlags,
   withEmulationFlags,
   writeRawResult,
 } from "../cli-shared.js";
-import { warnSecretParamsOnArgv } from "../secret-params.js";
+import { REPLAY_SECRET_FIELD_HELP, collectSecretField, secretFieldErrorOf, warnSecretParamsOnArgv, withBoundSecretParams, withCommandSecretParams, type BoundSecretParams } from "../secret-params.js";
 import {
   type EnvironmentFlags,
   environmentFromFlags,
@@ -27,7 +29,9 @@ import {
 } from "../environments.js";
 import { fail, ok } from "../envelope.js";
 import { UnknownJourneyError } from "../journey-api.js";
-import { chainSucceeded, JourneyChainError, runJourneyChain } from "../journey-chain.js";
+import { chainExitCode, JourneyChainError, runJourneyChain } from "../journey-chain.js";
+import { resolveCatalogDir } from "../catalog-api.js";
+import { doneCheckPolicyOf } from "../journey-done-check-hook.js";
 import { withSiteGate } from "../site-gate-cli.js";
 import { withProjectFlags } from "../project-layout.js";
 import { DEPRECATED_DIR_HELP, journeyLayout } from "./shared.js";
@@ -44,6 +48,7 @@ export function registerJourneyChain(journey: Command, program: Command, deps: C
     .requiredOption("--to <id>", "the prepare-only reply Journey, run once per matched request")
     .requiredOption("--requests <file>", "JSON Lines file of approved requests ({commentId, account, replyText})")
     .option("--param <kv>", "param as key=value (repeatable)", collectParam, {} as Record<string, string>)
+    .option("--secret-field <binding>", `${REPLAY_SECRET_FIELD_HELP}. Binds the discover (--from) Journey's secret parameters`, collectSecretField, [] as string[])
     .option("--dir <path>", DEPRECATED_DIR_HELP)
     .option("--storage-state <file>", "Playwright storageState JSON to start each run authenticated; must exist")
     .option("--allow-draft", "also run Journeys that are not promoted (authoring); without it both must be promoted")
@@ -53,7 +58,8 @@ export function registerJourneyChain(journey: Command, program: Command, deps: C
       const layout = journeyLayout(program, deps, { dir: locationFlags.dir, project: locationFlags.project, journeysDir: locationFlags.journeysDir });
       if (layout === null) return;
       const chainJourneysDir = layout.journeysDir;
-      const { from, to, requests: requestsFile, storageState: storageStateFlag, json, allowDraft, param } = this.opts<{
+      const { from, to, requests: requestsFile, storageState: storageStateFlag, json, allowDraft, param: paramFlags, secretField } = this.opts<{
+        secretField: string[];
         from: string;
         to: string;
         requests: string;
@@ -62,7 +68,7 @@ export function registerJourneyChain(journey: Command, program: Command, deps: C
         allowDraft?: boolean;
         param: Record<string, string>;
       }>();
-      await warnSecretParamsOnArgv(program.configureOutput().writeErr, chainJourneysDir, [from, to], param);
+      await warnSecretParamsOnArgv(program.configureOutput().writeErr, chainJourneysDir, [from, to], paramFlags, "journey chain");
       const { env: envName, baseUrl } = this.opts<EnvironmentFlags>();
       // #247: --env/--base-url choose where both runs go (unknown env / bad file → 64, nothing opened).
       let environment: ResolvedJourneyEnvironment | undefined;
@@ -76,6 +82,17 @@ export function registerJourneyChain(journey: Command, program: Command, deps: C
       } catch (err) {
         if (!isEnvironmentError(err)) throw err;
         emitJson(program, fail(err.code, err.message));
+        return;
+      }
+      // #827: the producer's secret parameters from the environment (--secret-field, targets.json), off the command line.
+      let param: Record<string, string>;
+      let bound: BoundSecretParams | undefined;
+      try {
+        ({ params: param, bound } = await withCommandSecretParams({ dir: chainJourneysDir, ids: [from], params: paramFlags, flags: secretField, environment, env: deps.explore?.env ?? process.env, seams: commandSecretSeams(deps, chainJourneysDir) }));
+      } catch (err) {
+        const e = secretFieldErrorOf(err, "E_CHAIN_ARGS");
+        if (e === undefined) throw err;
+        emitJson(program, fail(e.code, e.message));
         return;
       }
       const storageState = storageStateFlag ?? environment?.storageState;
@@ -105,12 +122,17 @@ export function registerJourneyChain(journey: Command, program: Command, deps: C
         return;
       }
 
+      // H5: every run in the chain reads its job's done check, with this project's catalog and policy.
+      const catalogDir = resolveCatalogDir(deps.catalogDir);
       try {
-        const result = await withSiteGate(resolveDbPath(deps), (siteGate) =>
+        const result = await withSiteGate(resolveDbPath(deps), (siteGate) => withBoundSecretParams(bound, () =>
           runJourneyChain({
+            catalogDir,
             from,
             to,
             requests,
+            // #827 (§5.3): a hold the producer reaches resumes the whole chain from this file.
+            requestsPath: resolvePath(requestsFile),
             ...(Object.keys(param).length === 0 ? {} : { params: param }),
             dir: chainJourneysDir,
             requirePromoted: allowDraft !== true,
@@ -121,13 +143,14 @@ export function registerJourneyChain(journey: Command, program: Command, deps: C
             ...(storageState !== undefined ? { storageState } : {}),
             ...(environment === undefined ? {} : { environment }),
             ...(allow.length === 0 ? {} : { allow }),
-          }),
+          })),
         );
         const envelope = ok(result);
         if (json) emitJson(program, envelope);
         else writeRawResult(program, result);
-        // §5 step 5: 0 only when every request matched and every run was `ok`.
-        process.exitCode = chainSucceeded(result) ? 0 : 1;
+        // §5 step 5: 0 only when every request matched and every run was `ok`; H5: with every job verdict folded in
+        // (a job not achieved 1, an unverified pass 2 under `require`, owner decisions 2/3).
+        process.exitCode = chainExitCode(result, doneCheckPolicyOf(catalogDir));
       } catch (err) {
         if (err instanceof JourneyChainError) {
           emitJson(program, fail(err.code, err.message));

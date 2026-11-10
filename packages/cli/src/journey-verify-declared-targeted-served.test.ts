@@ -171,8 +171,10 @@ describe("journey verify --mutate declared targeted proof (#616, served)", () =>
     expect(assertion(declared.report, "end-state:0")?.relaxedSites).toEqual([...FULL_RELAX]);
   });
 
-  it("with that plan declared, the proof verdict is proven (exit code 0)", () => {
-    expect(declared.exitCode).toBe(verifyExitCode("proven"));
+  // 0.30.0 decision 4: proven -> sensitive ("proven" is only verdictLegacy on the report, never an input here).
+  it("with that plan declared, the proof verdict is sensitive (exit code 0)", () => {
+    expect(verifyExitCode("sensitive")).toBe(0);
+    expect(declared.exitCode).toBe(verifyExitCode("sensitive"));
   });
 
   it("a declared plan that omits a blocking defense stays a cascade naming the omitted site", () => {

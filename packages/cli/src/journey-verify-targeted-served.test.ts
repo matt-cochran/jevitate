@@ -150,7 +150,7 @@ afterAll(async () => {
 
 describe("journey verify --mutate targeted proof (#609, served)", () => {
   it("a blocking click check no longer hides the end state: the proof is proven", () => {
-    expect(proven.report.verdict).toBe("proven");
+    expect(proven.report.verdict).toBe("sensitive");
   });
 
   it("the end-state assertion is proven sensitive by the swap-param mutation", () => {
@@ -174,7 +174,7 @@ describe("journey verify --mutate targeted proof (#609, served)", () => {
   });
 
   it("mutated and targeted replays follow --base-url, so the proof on the environment is proven", () => {
-    expect(onEnv.report.verdict).toBe("proven");
+    expect(onEnv.report.verdict).toBe("sensitive");
   });
 
   it("when the blocking check is not paired, the proof is inconclusive", () => {
@@ -188,6 +188,6 @@ describe("journey verify --mutate targeted proof (#609, served)", () => {
   });
 
   it("with a declared context check relaxed in turn, the proof is proven", () => {
-    expect(context.report.verdict).toBe("proven");
+    expect(context.report.verdict).toBe("sensitive");
   });
 });

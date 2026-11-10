@@ -240,6 +240,27 @@ and the busy indicator. The indicator matches by its description
 (`[data-testid=taste-busy]`, `role=status "Approving…"`) or by its visible words
 (`Approving*`), so a pattern may name either (#687).
 
+### Slow page bootstrap
+
+Goal exploration and `explore-author-journey` accept `--render-wait-ms` for a slow
+authenticated bootstrap or test transport. It sets the finite page-perception
+settle ceiling, including subsequent perceptions and hang confirmation. Values
+must be integers from 1 to 300000; omitting the flag retains the normal 15000 ms
+default and resource-governance behavior.
+
+```bash
+jevitate explore --url http://localhost:3000 --goal "Open Reports" \
+  --success 'urlIncludes:/reports' --render-wait-ms 60000 --real --json
+```
+
+This changes how long code waits, not what proves success. Requests, DOM changes,
+hard failures, and genuinely nonsettling pages remain observable. It neither
+marks an API call as background nor lifts an authorization or write guard.
+Other exploration strategies refuse this flag rather than silently ignore it.
+The direct MCP exploration and authoring tools accept `renderWaitMs`; suite goal
+items and their target defaults use the same field and bounds. Queued missions
+retain their existing fixed schema and the normal engine default.
+
 ### Job-wait budget and the no-progress ceiling
 
 A busy state that outlasts the render ceiling (`ui-no-progress`) is a hang
@@ -263,6 +284,42 @@ detail says why. Either the budget was spent ("past the 900s job-wait
 budget"), or the page stopped showing work code recognizes before then ("after
 376s of the 900s job-wait budget"). It also gives the wall-clock time since
 the first deferral and when the app last completed a request.
+
+### Returning to an earlier page
+
+A goal run remembers each page it has seen that still offers controls it has
+not tried. When the current branch is a dead end (the model reports `blocked`,
+the page has no control at all, or the run stalls past its last-chance turn),
+the run goes back to the most recent such page instead of stopping, and takes
+the control it had not tried. The return is a navigation in the Recording, so a
+Journey saved from the run replays it with no model. A page with nothing
+untried is never a target, a sign-in page after a credential was typed is never
+a target, a page is returned to at most twice and a run at most three times, and
+a target outside the allowlist is refused. A real dead end (a disabled control
+with no other route) still ends `blocked` once the returns are spent.
+
+**A refused `blocked`.** When the model reports `blocked` while an obvious forward control is still untried on
+the page, the run refuses it with a hint naming that control, and takes another decision. The hint ranks a
+control the goal names by its whole name first (`Show the demo` for "press Show the demo"), then one the goal
+names in part, then one only the page's instruction suggests. A name counts as stated in part when two or more
+of its words are in the goal (`Publish report` for "Publish the Q3 sales report"), or its only word is a
+variant of a goal word (`Reports`); one shared word among several does not count. If the decision budget ends
+straight after such a refusal, the run says so ([outcomes](./outcomes.md)).
+
+**No route found.** When a goal run gives up, stalls or runs out of budget after it has covered every control
+it could reach, and none leads toward the goal, it ends `inconclusive` (exit `2`) with
+`goalReason: "no-route-found"`, and its reason lists the pages it opened. Code decides the coverage floor
+from the run's own tracking: every top-level navigation page opened, no untried control left on any page
+seen (a link counts once its destination was opened; three pages of one shape, such as `/customer/1`,
+`/customer/2`, `/customer/3`, cover the rest), no control naming the goal, and nothing clickable on a
+page that the run cannot use (an `onclick` element outside a control, a canvas, a frame) or that it hides
+(a link in a hover or collapsed menu to a page not opened, a hidden button). Below the floor the run ends as
+it did before, and the result's `noRouteShortfall` names the first gap (or the other cause that kept the
+ending). A give-up below the floor whose only gaps the run can still open (an unopened page, an untried
+safe control) is deferred, at most 3 times and only after an action since the last, with a hint naming
+what is left; the floor, not the hint, decides the ending. A role word on the page ("Viewer", "Read-only", "Guest") is named as a
+hint that another role may see more; it is never read as a wall. See
+[no route found](./outcomes.md#no-route-found).
 
 ### Known limits of the hang heuristics
 

@@ -11,11 +11,14 @@ import { UnknownJourneyError, JourneyRequiresAuthError } from "./journey-api.js"
 import { formatScreenshotsLine, parseScreenshotsArg, type ScreenshotsSpec } from "./run-screenshots.js";
 import {
   annotateJourney,
+  annotationStatus,
   approveJourneyAnnotations,
   AnnotationDraftNotFoundError,
   InvalidAnnotationDraftError,
   StaleAnnotationDraftError,
 } from "./journey-annotate-api.js";
+import { approvalRefusal } from "./approval-provenance.js";
+import { AnnotationTransactionError } from "./journey-annotation-approval-store.js";
 import { withSiteGate } from "./site-gate-cli.js";
 import { buildMissionFixtures, checkSetupRefs, withFixtureFlags, type FixtureFlags } from "./fixture-cli.js";
 import { FixtureSetupError, FixtureSpecError, UnboundSetupRefError } from "./mission-fixtures.js";
@@ -62,11 +65,13 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
     .option("--real", "draft with the live OpenRouter generation gateway (requires keys)", false)
     .option("--fake-ai", "draft with the deterministic fake generator (pipeline smoke only)", false)
     .option("--approve", "apply the reviewed draft to the Journey (shows the diff; refused if the Journey changed since the draft)", false)
+    .option("--status", "read-only native annotation transaction status; no replay or approval")
+    .option("--reviewed-hash <hash>", "apply only the exact annotation transaction returned by --status")
     .option("--action-deltas", "opt-in (#303): record what each replayed step changed and draft its expected result from that delta (by code, redacted) — the model is asked only for what the delta cannot say")
     .option("--json", "emit a JSON envelope")
     .action(async function (this: Command, id: string) {
       const ownFixtureFlags = this.opts<FixtureFlags>();
-      const { dir, param, storageState: storageStateFlag, real, fakeAi, approve, json, env: envName, baseUrl, screenshots: screenshotsFlag, actionDeltas, project, journeysDir: journeysDirFlag, ...emulationFlags } = this.opts<{
+      const { dir, param, storageState: storageStateFlag, real, fakeAi, approve, status, reviewedHash, json, env: envName, baseUrl, screenshots: screenshotsFlag, actionDeltas, project, journeysDir: journeysDirFlag, ...emulationFlags } = this.opts<{
         actionDeltas?: boolean;
         dir?: string;
         project?: string;
@@ -76,6 +81,8 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
         real?: boolean;
         fakeAi?: boolean;
         approve?: boolean;
+        status?: boolean;
+        reviewedHash?: string;
         json?: boolean;
       } & EmulationFlags & EnvironmentFlags & ScreenshotsFlags>();
       const out = program.configureOutput().writeOut;
@@ -84,8 +91,15 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
       const journeysDir = layout.journeysDir;
       await warnSecretParamsOnArgv(program.configureOutput().writeErr, journeysDir, [id], param);
 
-      if (approve === true) {
+      if (reviewedHash !== undefined && (approve !== true || !/^[a-f0-9]{64}$/.test(reviewedHash))) {
+        emitJson(program, fail("E_JOURNEY_ANNOTATE_ARGS", "--reviewed-hash requires --approve and an exact native transaction hash"));
+        return;
+      }
+      if (approve === true || status === true) {
         if (
+          (approve === true && status === true) ||
+          actionDeltas === true ||
+          Object.keys(this.opts()).some((key) => !["dir", "project", "journeysDir", "param", "real", "fakeAi", "approve", "status", "reviewedHash", "json"].includes(key) && this.getOptionValueSource(key) === "cli") ||
           real === true ||
           fakeAi === true ||
           Object.keys(param).length > 0 ||
@@ -96,21 +110,34 @@ export function registerJourneyAnnotateCommand(journey: Command, program: Comman
         ) {
           emitJson(
             program,
-            fail("E_JOURNEY_ANNOTATE_ARGS", "--approve applies an existing draft: it replays nothing, so it takes no --real/--fake-ai/--param/--storage-state/--env/--base-url/--screenshots"),
+            fail("E_JOURNEY_ANNOTATE_ARGS", "--status and --approve are exclusive and accept no drafting, fixture, emulation, or runtime options"),
           );
           return;
         }
         try {
-          const result = await approveJourneyAnnotations(journeysDir, id);
+          if (status === true) {
+            const result = await annotationStatus(journeysDir, id);
+            if (json) emitJson(program, ok(result));
+            else out?.(`journey '${id}' annotation state: ${result.state}\n`);
+            process.exitCode = EXIT_CODES.ok;
+            return;
+          }
+          const result = await approveJourneyAnnotations(journeysDir, id, {
+            ...(deps.approval === undefined ? {} : { approval: deps.approval }),
+            ...(reviewedHash === undefined ? {} : { reviewedHash }),
+            showChanges: (changes) => (json ? program.configureOutput().writeErr : out)?.(formatAnnotationChanges([...changes])),
+          });
           if (json) {
             emitJson(program, ok(result));
           } else {
-            out?.(formatAnnotationChanges(result.changes));
             out?.(`applied ${result.changes.length} change(s) to journey '${id}' (${result.coverage.withObjective}/${result.coverage.steps} steps now have an objective)\n`);
             process.exitCode = EXIT_CODES.ok;
           }
         } catch (err) {
-          if (err instanceof UnknownJourneyError) emitJson(program, fail("E_UNKNOWN_JOURNEY", err.message));
+          const refusal = approvalRefusal(err);
+          if (refusal !== null) emitJson(program, fail(refusal.code, refusal.message));
+          else if (err instanceof AnnotationTransactionError) emitJson(program, fail(err.code, err.message));
+          else if (err instanceof UnknownJourneyError) emitJson(program, fail("E_UNKNOWN_JOURNEY", err.message));
           else if (err instanceof AnnotationDraftNotFoundError || err instanceof InvalidAnnotationDraftError || err instanceof StaleAnnotationDraftError) {
             emitJson(program, fail(err.code, err.message));
           } else emitJson(program, fail("E_JOURNEY_ANNOTATE", String(err instanceof Error ? err.message : err)));

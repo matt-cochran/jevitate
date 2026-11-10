@@ -1,0 +1,338 @@
+{
+  "schema": "jevitate.evidence",
+  "version": 1,
+  "producedAt": "2026-11-09T12:55:56.050Z",
+  "producer": {
+    "jevitate": "0.29.0-source-e71fb65e",
+    "commit": "e71fb65e"
+  },
+  "subject": {
+    "kind": "mutation-proof",
+    "journey": {
+      "id": "probe",
+      "hash": "db1477a4a20565eb1d499949b4ad7fbcbd3e9951c44bb404787c96736ff04035"
+    }
+  },
+  "run": {
+    "mode": "automation",
+    "channel": "cli",
+    "target": {
+      "origin": "http://127.0.0.1:46503",
+      "trust": "unknown"
+    },
+    "paramsDigest": "unkeyed",
+    "secretParamNames": []
+  },
+  "steps": [],
+  "writes": {
+    "sent": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "answered": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "aborted": {
+      "known": false,
+      "reason": "not-gathered"
+    },
+    "openAtClose": {
+      "known": true,
+      "value": 0
+    },
+    "shapes": []
+  },
+  "mutation": {
+    "plan": {
+      "mutations": [
+        {
+          "id": "skip:2",
+          "kind": "skip",
+          "step": 2
+        },
+        {
+          "id": "block-write:2",
+          "kind": "block-write",
+          "step": 2
+        }
+      ],
+      "pairs": [
+        {
+          "site": "step:2",
+          "mutation": "skip:2"
+        },
+        {
+          "site": "step-request:2:0",
+          "mutation": "skip:2"
+        },
+        {
+          "site": "step:2",
+          "mutation": "block-write:2"
+        },
+        {
+          "site": "step-request:2:0",
+          "mutation": "block-write:2"
+        }
+      ],
+      "sites": [
+        {
+          "site": "step:1",
+          "check": "page visible"
+        },
+        {
+          "site": "step:2",
+          "check": "page textIncludes"
+        },
+        {
+          "site": "step-request:2:0",
+          "check": "responseStatus POST",
+          "required": true
+        }
+      ]
+    },
+    "replays": [
+      {
+        "ordinal": 0,
+        "role": "base",
+        "outcome": "passed",
+        "failedSites": [],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 0
+          },
+          "shapes": []
+        }
+      },
+      {
+        "ordinal": 1,
+        "role": "independence",
+        "outcome": "passed",
+        "failedSites": [],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 0
+          },
+          "shapes": []
+        }
+      },
+      {
+        "ordinal": 2,
+        "role": "mutated",
+        "mutation": "skip:2",
+        "outcome": "failed",
+        "failedSites": [
+          {
+            "where": "step-request",
+            "step": 2,
+            "checkIndex": 0,
+            "evaluated": true
+          },
+          {
+            "where": "step",
+            "step": 2,
+            "postcondition": true
+          }
+        ],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 0
+          },
+          "shapes": []
+        }
+      },
+      {
+        "ordinal": 3,
+        "role": "control",
+        "mutation": "skip:2",
+        "outcome": "passed",
+        "failedSites": [],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 0
+          },
+          "shapes": []
+        }
+      },
+      {
+        "ordinal": 4,
+        "role": "mutated",
+        "mutation": "block-write:2",
+        "outcome": "failed",
+        "failedSites": [
+          {
+            "where": "step-request",
+            "step": 2,
+            "checkIndex": 0,
+            "evaluated": true
+          }
+        ],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 0
+          },
+          "shapes": []
+        }
+      },
+      {
+        "ordinal": 5,
+        "role": "targeted",
+        "mutation": "block-write:2",
+        "site": "step:2",
+        "relaxedSites": [],
+        "outcome": "failed",
+        "failedSites": [
+          {
+            "where": "step-request",
+            "step": 2,
+            "checkIndex": 0,
+            "evaluated": true
+          }
+        ],
+        "refused": "step-request:2:0 is not before the target step:2: both are step 2, and its postcondition fails before the request check is judged; move the request check to a later step or the end state",
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 0
+          },
+          "shapes": []
+        }
+      },
+      {
+        "ordinal": 6,
+        "role": "control",
+        "mutation": "block-write:2",
+        "outcome": "passed",
+        "failedSites": [],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": true,
+            "value": 0
+          },
+          "shapes": []
+        }
+      },
+      {
+        "ordinal": 7,
+        "role": "closing",
+        "outcome": "passed",
+        "failedSites": [],
+        "writes": {
+          "sent": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "answered": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "aborted": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "openAtClose": {
+            "known": false,
+            "reason": "not-gathered"
+          },
+          "shapes": []
+        }
+      }
+    ],
+    "restore": "none",
+    "isolation": {
+      "known": true,
+      "value": "isolated"
+    }
+  },
+  "judgments": [],
+  "notes": []
+}

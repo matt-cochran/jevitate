@@ -52,7 +52,7 @@ export type JourneyRunResult = (
   | { outcome: "ok"; output: unknown }
   | { outcome: "healed-pending-review"; output: unknown; revision: ProposedRevisionDraft }
   | { outcome: "heal-exhausted"; reason: string; at: number }
-  | { outcome: "quarantined"; reason: string; at?: number }
+  | { outcome: "quarantined"; reason: string; at?: number; failurePhase?: "action" | "postcondition" }
 ) & {
   /**
    * #409: the actual outcome wait of each step that declared `waitFor` (in run order; a resumed or
@@ -68,14 +68,30 @@ export type JourneyRunResult = (
   heal?: HealReport;
 };
 
+/**
+ * A `visible-handback` run's person. `present` returns once the person has acted in the headed
+ * browser (the runner then checks the step's `resume` assertion), or throws to stop the run there:
+ * 0.30.0 §5.3, an unattended surface holds the run durably (`E_RUN_HELD`) instead of waiting.
+ * `at` is the handback step's 0-based flat index. The runner never sees what the person typed.
+ */
 export interface HandbackHandler {
-  present(prompt: string): Promise<void>;
+  present(prompt: string, at?: { readonly index: number }): Promise<void>;
 }
 
 export interface JourneyRunRequest {
   journey: Journey;
   params: Record<string, string>;
   policy: RunPolicy;
+  /**
+   * 0.30.0 §5.4: resume a held run at this 0-based flat step index. The steps before it are not run
+   * again (the page is already where the hold left it); the run continues there as `resumeFrom`.
+   */
+  resumeAt?: number;
+  /**
+   * 0.30.0 §5.3: the vault-autofill bindings for this run, when an operator's configuration (not the
+   * Journey) supplies them. Default: the Journey's own `metadata.secretRefs`. Each stays origin-bound.
+   */
+  secretRefs?: readonly SecretRef[];
 }
 
 /** A mutating request the write blocker aborted during a guarded probe. */
@@ -233,15 +249,23 @@ export class JourneyRunner {
     assertCompletePolicy(req?.policy); // #1 — fires before ANY interpreter call
     validateParams(journeyParamSchema(req.journey), req.params); // #5 — before any step
 
+    if (req.resumeAt !== undefined && (!Number.isInteger(req.resumeAt) || req.resumeAt < 0)) {
+      throw new PolicyEnforcementError(`JourneyRunner: resumeAt must be a step index >= 0, got ${String(req.resumeAt)}`);
+    }
     if (req.policy.secret.secretMode === "vault-autofill") {
-      await this.preflightSecretRefs(req.journey.metadata.secretRefs ?? []);
+      await this.preflightSecretRefs([...secretRefsOf(req)]);
     }
 
     // The recording is mutable across the run: an accepted heal retargets one step of it
     // one-for-one (see #healStep). It starts as the Journey's own recording; a clean run never
     // mutates it, and the stored Journey is never written here.
     let recording: Recording = req.journey.recording;
-    let result = collect(await this.interpreter.run(this.actor, recording, req.params));
+    // A resumed hold continues where it was held; nothing before it runs again.
+    let result = collect(
+      req.resumeAt === undefined
+        ? await this.interpreter.run(this.actor, recording, req.params)
+        : await this.interpreter.resumeFrom(this.actor, recording, req.resumeAt, req.params),
+    );
     const mode = req.policy.selfHeal.mode;
     const session: HealSession | undefined =
       mode === "fail-closed"
@@ -278,7 +302,7 @@ export class JourneyRunner {
             at: result.at,
           });
         }
-        await this.handback.present(result.prompt); // human enters the secret in the headed browser; we never hold it
+        await this.handback.present(result.prompt, { index: result.at }); // human enters the secret in the headed browser; we never hold it
         const ok = await checkAssertion(this.actor, result.resume); // verify BEFORE resuming — never assume-success
         if (!ok) {
           return finish({
@@ -293,10 +317,10 @@ export class JourneyRunner {
 
       if (result.outcome === "failed") {
         // Invariant #4: fail-closed never heals — quarantine, never mask.
-        if (session === undefined) return { outcome: "quarantined", reason: `step ${result.at + 1} failed: ${result.error}`, at: result.at };
+        if (session === undefined) return { outcome: "quarantined", reason: `step ${result.at + 1} failed: ${result.error}`, at: result.at, ...(result.failurePhase === undefined ? {} : { failurePhase: result.failurePhase }) };
         // Nothing secret-bound goes to a model: the step fails as it would without a heal, and says so.
         const noHeal = this.heal?.noHealBecause?.();
-        if (noHeal !== undefined) return { outcome: "quarantined", reason: `step ${result.at + 1} failed: ${result.error} — self-heal skipped: ${noHeal}`, at: result.at };
+        if (noHeal !== undefined) return { outcome: "quarantined", reason: `step ${result.at + 1} failed: ${result.error} — self-heal skipped: ${noHeal}`, at: result.at, ...(result.failurePhase === undefined ? {} : { failurePhase: result.failurePhase }) };
         session.touched = true;
         const healed = await this.#healStep(session, req, recording, result);
         if (healed.kind === "stop") {
@@ -358,7 +382,7 @@ export class JourneyRunner {
       kind: "stop",
       verdict,
       reason: why,
-      result: { outcome: "quarantined", reason: `${failed} — ${why}`, at: i },
+      result: { outcome: "quarantined", reason: `${failed} — ${why}`, at: i, ...(failure.failurePhase === undefined ? {} : { failurePhase: failure.failurePhase }) },
     });
     const entry = flattenRecording(recording)[i];
     if (entry === undefined) return quarantine("refused-proof", "the failed step is not in the recording");
@@ -663,7 +687,7 @@ export class JourneyRunner {
     const currentUrl = page.url();
     // #399: messages name the ORIGIN only — the full URL may carry a secret navigate parameter.
     const shownOrigin = originOnly(currentUrl);
-    const refs = req.journey.metadata.secretRefs ?? [];
+    const refs = secretRefsOf(req);
     const matching = refs.filter((ref) => {
       try {
         assertOriginBound(ref, currentUrl);
@@ -702,6 +726,11 @@ export class JourneyRunner {
     await EnterSecret.theSecret(secret).into(target).performAs(this.actor);
     return undefined;
   }
+}
+
+/** The vault-autofill bindings of a run: the caller's, else the Journey's own. */
+function secretRefsOf(req: JourneyRunRequest): readonly SecretRef[] {
+  return req.secretRefs ?? req.journey.metadata.secretRefs ?? [];
 }
 
 /** A URL's origin, or a fixed marker when it has none — never the path or query (#399). */

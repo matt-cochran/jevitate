@@ -1,0 +1,27 @@
+{
+  "metadata": {
+    "id": "jz-triager-files-issue",
+    "name": "jz-triager-files-issue (synthetic lab copy, #802)",
+    "promoted": true,
+    "params": [],
+    "job": "triager-files-issue",
+    "createdAtIso": "2026-11-09T00:00:00.000Z"
+  },
+  "recording": {
+    "version": "1",
+    "site": "http://127.0.0.1:28190",
+    "pages": [
+      {
+        "url": "/triage",
+        "steps": [
+          { "step": { "kind": "navigate", "url": "/triage", "expect": { "kind": "visible", "target": { "testId": "cluster-cl_checkout" } } } },
+          { "step": { "kind": "click", "target": { "testId": "cluster-cl_checkout" }, "expect": { "kind": "visible", "target": { "testId": "file-issue" } } } },
+          {
+            "step": { "kind": "click", "target": { "testId": "file-issue" }, "expect": { "kind": "textIncludes", "target": { "testId": "issue-status" }, "text": "Issue #" } },
+            "delta": { "verdict": "relevant-change", "why": "lab annotation: the FileIssue write", "changes": ["issue-status text"], "requests": ["POST /journeeze.v1.TriageService/FileIssue → 200"], "overheadMs": 0 }
+          }
+        ]
+      }
+    ]
+  }
+}

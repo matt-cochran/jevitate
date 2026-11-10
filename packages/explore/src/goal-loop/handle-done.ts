@@ -7,7 +7,7 @@ import { GOAL_CHECK_TRIGGER, type DoneVerdict, type RunOutcome } from "../conver
 import type { RunContext } from "./context.js";
 import { MAX_DONE_REJECTIONS } from "./limits.js";
 import { deferEnding } from "./min-effort.js";
-import { readBackProbe, unreadShown } from "./read-back.js";
+import { readBackProbe, settleDoneCheck, unreadShown, withJob } from "./read-back.js";
 import type { Flow, Step } from "./step.js";
 
 /**
@@ -54,7 +54,10 @@ export async function handleDone(ctx: RunContext, step: Step): Promise<Flow> {
     !(cfg.successCheck === undefined && ctx.minEffort !== null && ctx.depth.report(ctx.tracker.actions, ctx.tracker.decisions, ctx.minEffort).minimum?.met === false)
   ) {
     ctx.goalChecked.add(snap.signature);
-    const { verdict, judgments } = await groundGoal();
+    const grounded0 = await groundGoal();
+    const { judgments } = grounded0;
+    // 0.30.0: the fresh-context done check decides attainment (and may reject).
+    const verdict = await settleDoneCheck(ctx, grounded0.verdict);
     // #647: never "already met" on what the run sent before it is read back.
     if (verdict.accept && (await unreadWriteHold(ctx, step, verdict.outcome)) === null) {
       record(
@@ -72,7 +75,7 @@ export async function handleDone(ctx: RunContext, step: Step): Promise<Flow> {
           },
         },
       );
-      ctx.outcome = verdict.outcome;
+      ctx.outcome = withJob(ctx, verdict);
       ctx.stop = "done";
       return "stop";
     }
@@ -119,11 +122,13 @@ export async function handleDone(ctx: RunContext, step: Step): Promise<Flow> {
       }
       verdict = { accept: false, reason: hold };
     }
+    // 0.30.0: after the read-back hold, the fresh-context done check decides attainment.
+    verdict = await settleDoneCheck(ctx, verdict);
     if (verdict.accept) {
       record(true, `done accepted${pendingNote(verdict.outcome) === null ? "" : " provisionally"}: ${acceptedBy(verdict.outcome)}`, {
         ...(judgments === undefined ? {} : { judgments }),
       });
-      ctx.outcome = verdict.outcome;
+      ctx.outcome = withJob(ctx, verdict);
       ctx.stop = "done";
       return "stop";
     }

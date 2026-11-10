@@ -1,0 +1,27 @@
+# #802 mock-harness lab secret scan (2026-11-09T12:42:04.930Z)
+scanner: scripts/mock-harness-lab/mockdata.mjs scan() — 15 rules: lab-session-cookie, bearer-token, jwt, github-token, aws-access-key, private-key, long-hex-secret, email-not-synthetic, plus 7 exact values issued during the recorded run (4 session cookies, 1 CSRF token, 2 reporter e-mails); reads paths, headers, raw bodies and decoded protobuf fields
+positive control: raw recording (11 exchanges, never committed): 58 matches
+  3 x lab-session-cookie in response.headers
+  1 x exact-issued-secret-2 in response.headers
+  3 x long-hex-secret in response.body
+  3 x exact-issued-secret-1 in response.body
+  8 x lab-session-cookie in request.headers
+  2 x exact-issued-secret-2 in request.headers
+  5 x long-hex-secret in request.headers
+  5 x exact-issued-secret-1 in request.headers
+  5 x email-not-synthetic in response.body
+  4 x exact-issued-secret-6 in response.body
+  5 x email-not-synthetic in response.body (decoded protobuf)
+  4 x exact-issued-secret-6 in response.body (decoded protobuf)
+  1 x exact-issued-secret-3 in response.headers
+  4 x exact-issued-secret-3 in request.headers
+  1 x exact-issued-secret-7 in response.body
+  1 x exact-issued-secret-7 in response.body (decoded protobuf)
+  1 x exact-issued-secret-4 in response.headers
+  2 x exact-issued-secret-4 in request.headers
+recorded mock data: scripts/mock-harness-lab/mock-data/expectations.json (7 expectations): 0 matches
+gitleaks zricethezav/gitleaks:v8.21.2:
+  mock-data/ (committed): 0 findings
+  mock-data decoded: 0 findings
+  raw recording as stored (positive control): 5 findings (generic-api-key)
+  raw recording decoded (positive control): 5 findings (generic-api-key)

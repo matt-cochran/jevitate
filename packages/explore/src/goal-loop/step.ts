@@ -152,7 +152,9 @@ export function newStep(ctx: RunContext, input: StepInput) {
   // page (the run's own messages removed) and its status text, which must clear the threshold.
   // A run that typed sign-in credentials also carries what code observed about the sign-in
   // (#188): shown to the judgment as a trusted fact, and weighed by `groundDone`.
-  const signIn = ctx.auth.signal(snap, ctx.isBound);
+  // The page's status and text too: an error banner where the Sign-in link was ("Incorrect email or
+  // password") means the sign-in failed, however the link went.
+  const signIn = ctx.auth.signal(snap, ctx.isBound, { status: ctx.status, text: input.visibleText });
   /**
    * #209: what an accepted verdict may claim. The in-run success condition is only a proposal's
    * grounding — when part of it is still pending (a `reloadThen` check judged after the run, a

@@ -137,7 +137,7 @@ const relaxedSites = (r: Report, id: string): unknown[] => r.mutations.find((m) 
 
 describe("journey verify --mutate proves parameter-relative checks (#565, served)", () => {
   it("on a page that echoes the reply, the proof is proven", () => {
-    expect(echo.report.verdict).toBe("proven");
+    expect(echo.report.verdict).toBe("sensitive");
   });
 
   it("on a page that echoes the reply, a swapped reply breaks the preview check", () => {

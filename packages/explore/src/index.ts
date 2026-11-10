@@ -77,3 +77,4 @@ export * from "./demo-overlay.js";
 export { stateFingerprint as coverageStateFingerprint } from "./coverage/fingerprint.js";
 export * from "./action-delta.js";
 export * from "./replay-deltas.js";
+export type { BoundaryEvidence, BoundarySignal } from "./goal-loop/boundary.js";

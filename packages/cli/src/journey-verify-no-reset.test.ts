@@ -89,8 +89,10 @@ describe("a proof with no reset hook or fixture", () => {
   });
 
   it("the JSON report says so", async () => {
-    const body = JSON.parse(await verify(["--mutate", "--json"])) as { data: { noReset?: string } };
+    const body = JSON.parse(await verify(["--mutate", "--json"])) as { data: { noReset?: string; countsForGate?: unknown } };
     expect(body.data.noReset).toBe(LINE.trim());
+    // GAPS 21 (mock-harness finding): the JSON report says whether the proof counts for a strict gate.
+    expect(typeof body.data.countsForGate).toBe("boolean");
   });
 
   it.each([

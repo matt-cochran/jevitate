@@ -9,7 +9,9 @@ import {
   PlaywrightBrowserPort,
   explainLaunchFailure,
   resolveLaunchArgs,
+  singletonSocketPathRefusal,
 } from "./playwright-browser-port.js";
+import { ExtensionLoadError } from "./extensions.js";
 
 type LaunchOptions = NonNullable<Parameters<typeof chromium.launch>[0]>;
 type PersistentOptions = NonNullable<Parameters<typeof chromium.launchPersistentContext>[1]>;
@@ -128,7 +130,7 @@ describe("PlaywrightBrowserPort.open persistentProfile (explicit opt-in)", () =>
       calls.push({ dir, options: options ?? {} });
       throw new Error("persistent launch intercepted");
     };
-    const port = new PlaywrightBrowserPort({ launchPersistentContext, platform: "linux", pool: calmPool() });
+    const port = new PlaywrightBrowserPort({ launchPersistentContext, platform: "linux", env: { TMPDIR: "/tmp" }, pool: calmPool() });
     await expect(port.open({ ...base, persistentProfile: "/tmp/profile", args: ["--lang=de"] })).rejects.toThrow(
       "persistent launch intercepted",
     );
@@ -202,7 +204,7 @@ describe("PlaywrightBrowserPort.open extensions (#256)", () => {
 
   test("a throwaway persistent profile that loads exactly the extensions; headless uses the full Chromium build", async () => {
     const { calls, launchPersistentContext } = capture();
-    const port = new PlaywrightBrowserPort({ launchPersistentContext, platform: "linux", pool: calmPool() });
+    const port = new PlaywrightBrowserPort({ launchPersistentContext, platform: "linux", env: { TMPDIR: "/tmp" }, pool: calmPool() });
     await expect(port.open({ ...base, extensions: [ext], args: ["--lang=de"] })).rejects.toThrow("persistent launch intercepted");
     expect(calls[0]!.dir).toMatch(/jevitate-ext-profile-/);
     expect(calls[0]!.options).toMatchObject({
@@ -215,7 +217,7 @@ describe("PlaywrightBrowserPort.open extensions (#256)", () => {
 
   test("an explicit channel or executable is kept; a headed run needs no channel", async () => {
     const { calls, launchPersistentContext } = capture();
-    const port = new PlaywrightBrowserPort({ launchPersistentContext, platform: "linux", pool: calmPool() });
+    const port = new PlaywrightBrowserPort({ launchPersistentContext, platform: "linux", env: { TMPDIR: "/tmp" }, pool: calmPool() });
     await expect(port.open({ ...base, extensions: [ext], channel: "chrome" })).rejects.toThrow();
     await expect(port.open({ ...base, extensions: [ext], executablePath: "/opt/chromium" })).rejects.toThrow();
     await expect(port.open({ ...base, extensions: [ext], headless: false })).rejects.toThrow();
@@ -224,8 +226,50 @@ describe("PlaywrightBrowserPort.open extensions (#256)", () => {
 
   test("no extensions: the pooled path, never a persistent context", async () => {
     const { calls, launchPersistentContext } = capture();
-    const port = new PlaywrightBrowserPort({ launch: capturingLauncher().launch, launchPersistentContext, platform: "linux", pool: calmPool() });
+    const port = new PlaywrightBrowserPort({ launch: capturingLauncher().launch, launchPersistentContext, platform: "linux", env: { TMPDIR: "/tmp" }, pool: calmPool() });
     await expect(port.open({ ...base, extensions: [] })).rejects.toThrow("launch intercepted by test");
     expect(calls).toEqual([]);
+  });
+});
+
+/**
+ * The 0.29.0 gate's extension failures: a 95-character TMPDIR put Chromium's
+ * `$TMPDIR/org.chromium.Chromium.XXXXXX/SingletonSocket` past Linux's 107-character Unix socket limit,
+ * so the persistent context died at launch ("Socket path too long") and Playwright said only
+ * "Target page, context or browser has been closed". The port now refuses before any browser starts.
+ */
+describe("a persistent profile with a TMPDIR too long for Chromium's singleton socket", () => {
+  const ext = { dir: "/ext/a", id: "a".repeat(32), name: "A", version: "1", manifestVersion: 3 };
+  const longTmp = `/home/u/${"x".repeat(80)}`;
+  const neverLaunch: typeof chromium.launchPersistentContext = async () => {
+    throw new Error("must not launch");
+  };
+
+  test("the limit is exact: a 62-character TMPDIR fits, 63 does not; a trailing slash and an unset TMPDIR (/tmp) count as Chromium counts them", () => {
+    expect(singletonSocketPathRefusal({ TMPDIR: `/${"a".repeat(61)}` }, "linux")).toBeUndefined();
+    expect(singletonSocketPathRefusal({ TMPDIR: `/${"a".repeat(61)}/` }, "linux")).toBeUndefined();
+    expect(singletonSocketPathRefusal({ TMPDIR: `/${"a".repeat(62)}` }, "linux")).toMatch(/\(63 characters\).* would be 108 characters/);
+    expect(singletonSocketPathRefusal({}, "linux")).toBeUndefined();
+    expect(singletonSocketPathRefusal({ TMPDIR: "" }, "linux")).toBeUndefined();
+  });
+
+  test("only Linux: macOS and Windows place it elsewhere", () => {
+    expect(singletonSocketPathRefusal({ TMPDIR: longTmp }, "darwin")).toBeUndefined();
+    expect(singletonSocketPathRefusal({ TMPDIR: longTmp }, "win32")).toBeUndefined();
+  });
+
+  test("an extension session fails with ExtensionLoadError naming TMPDIR and its length, before any browser starts", async () => {
+    const port = new PlaywrightBrowserPort({ launchPersistentContext: neverLaunch, platform: "linux", env: { TMPDIR: longTmp }, pool: calmPool() });
+    const err = await port.open({ ...base, extensions: [ext] }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ExtensionLoadError);
+    expect((err as Error).message).toContain(`TMPDIR=${longTmp} (${longTmp.length} characters)`);
+    expect((err as Error).message).toContain("SingletonSocket");
+  });
+
+  test("a persistentProfile session is refused the same way; a short TMPDIR launches", async () => {
+    const port = new PlaywrightBrowserPort({ launchPersistentContext: neverLaunch, platform: "linux", env: { TMPDIR: longTmp }, pool: calmPool() });
+    await expect(port.open({ ...base, persistentProfile: "/tmp/profile" })).rejects.toThrow(/Unix socket limit/);
+    const short = new PlaywrightBrowserPort({ launchPersistentContext: neverLaunch, platform: "linux", env: { TMPDIR: "/tmp" }, pool: calmPool() });
+    await expect(short.open({ ...base, persistentProfile: "/tmp/profile" })).rejects.toThrow("must not launch");
   });
 });

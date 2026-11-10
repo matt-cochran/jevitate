@@ -370,3 +370,53 @@ describe("#399: a fixture output used as a secret param never comes back in the 
     expect(JSON.stringify(result)).not.toContain(token);
   });
 });
+
+describe("#800 lintJourneyById done-check rules", () => {
+  async function seed(done?: unknown, promoted = true): Promise<{ root: string; journeysDir: string }> {
+    const root = await mkdtemp(join(tmpdir(), "jev-done-lint-"));
+    const journeysDir = join(root, "journeys");
+    await mkdir(journeysDir, { recursive: true });
+    await writeFile(join(root, "jobs.json"), JSON.stringify([{ id: "pay-invoice", trigger: "an invoice arrives", motivation: "pay it", outcome: "it is paid", ...(done === undefined ? {} : { done }) }]));
+    await new FsJourneyStore(journeysDir).put({
+      metadata: { id: "pay", name: "Pay", promoted, params: ["invoiceNo"], createdAtIso: "2026-11-01T00:00:00Z", job: "pay-invoice" },
+      recording: {
+        version: "1",
+        site: "http://localhost:3000",
+        pages: [
+          {
+            url: "/invoices",
+            steps: [{ step: { kind: "click", target: { testId: "save" }, expect: { kind: "textIncludes", target: { role: "status" }, text: "Saved" } }, delta: { verdict: "relevant-change", why: "saved", changes: ["row"], requests: ["POST /api/invoices → 201"], overheadMs: 1 } }],
+          },
+        ],
+      },
+    });
+    return { root, journeysDir };
+  }
+  const rules = (r: { findings: Array<{ rule: string }> }): string[] => r.findings.map((f) => f.rule);
+  const fine = { version: 1, at: "/invoices", check: "textIncludes:testId=row|${invoiceNo}", distinguishedBy: ["invoiceNo"] };
+
+  it("warns missing-done-check on a promoted Journey whose job has no done", async () => {
+    const { root, journeysDir } = await seed();
+    const r = await lintJourneyById(journeysDir, "pay", { catalogDir: root, baseDir: root });
+    const f = r.findings.find((x) => x.rule === "missing-done-check");
+    expect(f?.level).toBe("warning");
+  });
+
+  it("is quiet for a job with a fine done check", async () => {
+    const { root, journeysDir } = await seed(fine);
+    const r = await lintJourneyById(journeysDir, "pay", { catalogDir: root, baseDir: root });
+    expect(rules(r).filter((x) => x.includes("done-check"))).toEqual([]);
+  });
+
+  it("warns done-check-cannot-be-false on a write Journey without distinguishedBy", async () => {
+    const { root, journeysDir } = await seed({ ...fine, distinguishedBy: undefined });
+    const r = await lintJourneyById(journeysDir, "pay", { catalogDir: root, baseDir: root });
+    expect(r.findings.find((x) => x.rule === "done-check-cannot-be-false")?.level).toBe("warning");
+  });
+
+  it("errors done-check-invalid on an unparseable done", async () => {
+    const { root, journeysDir } = await seed({ version: 1, at: "/x", check: "garbage" });
+    const r = await lintJourneyById(journeysDir, "pay", { catalogDir: root, baseDir: root });
+    expect(r.findings.find((x) => x.rule === "done-check-invalid")?.level).toBe("error");
+  });
+});

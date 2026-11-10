@@ -22,7 +22,7 @@ useSkippingTime({ per: "all" });
  * defenses, and fills the exact multiline reply without ever clicking Send. The server counts every
  * write; no approval is granted or faked. Before the declared plan the layered thread defenses exhaust
  * the automatic proof bound; after a human-reviewed `metadata.targetedProofs` is declared, readiness
- * prove reaches technically-ready with the late end state proven sensitive.
+ * prove reaches technically-ready with the late end state sensitive.
  */
 
 const THREADS: Record<string, { commentId: string; postId: string; text: string }> = {
@@ -364,6 +364,9 @@ beforeAll(async () => {
   catalogDir = join(dir, ".jevitate");
   journeysDir = join(catalogDir, "journeys");
   await mkdir(catalogDir, { recursive: true });
+  // Owner decision "Proof role": readiness gates on the job's done check. This job declares none and this
+  // suite is about the pair's proofs, so an unverified job is advisory here (doneCheckPolicy advisory).
+  await writeFile(join(catalogDir, "project.json"), JSON.stringify({ doneCheckPolicy: "advisory" }));
   // Draft (unapproved) catalog entries: approval stays a person's call.
   await writeFile(join(catalogDir, "personas.json"), JSON.stringify([{ name: "community-manager", description: "answers comments for the brand accounts", role: "community-manager" }]));
   await writeFile(
@@ -454,7 +457,7 @@ describe("two-journey discover → prepare-only reply, end to end (#608, #609, #
   });
 
   it("journey verify --mutate proves the producer conclusively", () => {
-    expect(verifyProducer.data?.verdict).toBe("proven");
+    expect(verifyProducer.data?.verdict).toBe("sensitive");
   });
 
   it("before the declaration, the consumer proof is inconclusive", () => {
@@ -477,7 +480,7 @@ describe("two-journey discover → prepare-only reply, end to end (#608, #609, #
   });
 
   it("after the declaration, journey verify --mutate proves the consumer conclusively with its bound params", () => {
-    expect(verifyConsumerAfter.data?.verdict).toBe("proven");
+    expect(verifyConsumerAfter.data?.verdict).toBe("sensitive");
   });
 
   it("after the declaration, the consumer's end-state thread assertion is sensitive", () => {

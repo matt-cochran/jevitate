@@ -1,3 +1,4 @@
+import { makeApprovalConfirm } from "./approval-provenance.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -93,6 +94,7 @@ async function approve(name: string, synthetic: boolean, path = "/"): Promise<{ 
   drafted(journeysDir, name, path);
   const environment: ResolvedJourneyEnvironment = { name, baseUrl: origin, allowedOrigins: [origin], source: "test", ...(synthetic ? { synthetic: true as const } : {}) };
   const result = await approveDemo({
+    confirm: makeApprovalConfirm({ env: {}, stdinIsTTY: () => true, stdoutIsTTY: () => true, prompt: async () => ID, user: () => "offline-fixture" }),
     journeysDir,
     id: ID,
     outDir: join(root, name, "final"),

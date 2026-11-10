@@ -56,7 +56,7 @@ exports[`#432 rendering > markdown snapshot of the fixture Journey 1`] = `
 
 ## Clear
 
-mutation proof proven ✓
+checks strength: sensitive ✓ (does not count for a strict gate: the target cannot be reset)
 
 ## Approve
 

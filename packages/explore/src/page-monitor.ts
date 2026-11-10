@@ -425,7 +425,10 @@ export class RequestCapture {
     // #617: only a request this capture saw begin counts as sent; a late completion from a request
     // that began before the capture started is added to the history but not to `sent()`.
     if (finished !== null) this.add(finished, sent !== undefined);
-    else if (sent !== undefined && this.#unfinished.length < MAX_CAPTURED) this.#unfinished.push(sent);
+    else if (sent !== undefined) {
+      if (this.#unfinished.length < MAX_CAPTURED) this.#unfinished.push(sent);
+      else this.#truncated = true;
+    }
   }
 
   /** The requests captured so far, in the order they finished, including ones the capture never saw begin. */
@@ -448,7 +451,7 @@ export class RequestCapture {
     ];
   }
 
-  /** True when more requests finished than the capture keeps (the oldest were dropped). */
+  /** True when completed or abandoned requests were dropped beyond the capture's bounds. */
   get truncated(): boolean {
     return this.#truncated;
   }
@@ -523,6 +526,7 @@ export class PageMonitor {
   #lastNavigation: number;
   /** Long-lived requests that are not in-flight work, and why. */
   readonly #background = new Map<Request, "stream" | "ignored" | "long-poll">();
+  #lastAppRequest: CompletedRequest | null = null;
   #ignore: (url: string) => boolean = () => false;
   #longPollMs = DEFAULT_LONG_POLL_MS;
   /** #745: the target opted into the dev-server (Vite/HMR) settle policy. */
@@ -631,7 +635,7 @@ export class PageMonitor {
         const endedAt = this.#now();
         const contentType = this.#contentTypes.get(r) ?? null;
         const rpcStatus = this.#rpcStatuses.get(r);
-        this.#completed.push({
+        const done: CompletedRequest = {
           ...started,
           status,
           contentType,
@@ -640,7 +644,9 @@ export class PageMonitor {
           endedAt,
           durationMs: Math.max(0, endedAt - started.startedAt),
           ...(ignored ? { ignored: true as const } : {}),
-        });
+        };
+        this.#completed.push(done);
+        if (done.resourceType !== "document" && !ignored) this.#lastAppRequest = done;
         for (const c of this.#captures) {
           c.ended(r, {
             method: started.method.toUpperCase(),
@@ -779,7 +785,9 @@ export class PageMonitor {
     const now = this.#now();
     const recent = this.#completed.filter((c) => c.endedAt >= now - RECURRING_WINDOW_MS);
     const since = this.#lastActionAt;
-    return this.pending().filter((r) => !isRecurringRead(r, recent) && !(isRead(r) && since !== null && r.startedAt > since + ACTION_CAUSED_MS));
+    // #241: once the action was found to have started nothing, it owns no read that starts after that.
+    const ownsUntil = since === null ? null : Math.min(since + ACTION_CAUSED_MS, this.#inertAt ?? Infinity);
+    return this.pending().filter((r) => !isRecurringRead(r, recent) && !(isRead(r) && ownsUntil !== null && r.startedAt > ownsUntil));
   }
 
   /** Requests that are pending WORK: long-lived connections and background requests excluded. */
@@ -881,6 +889,15 @@ export class PageMonitor {
     return this.#writeBodies.filter((w) => w.startedAt >= sinceMs && keep(w.url)).flatMap((w) => w.values);
   }
 
+  /**
+   * #689: the app's most recent completed request (not a document, not ignored background traffic),
+   * kept apart from the recent history `closeWindow` prunes at RECENT_REQUESTS_MS: a hang that stands
+   * a minute into a job wait still says when the app last answered.
+   */
+  lastAppRequest(): CompletedRequest | null {
+    return this.#lastAppRequest;
+  }
+
   /** Requests that ended since `sinceMs` (wall clock). */
   completedSince(sinceMs: number): CompletedRequest[] {
     return this.#completed.filter((r) => r.endedAt >= sinceMs);
@@ -891,6 +908,8 @@ export class PageMonitor {
   #actionAt: number | null = null;
   /** #383: the run's most recent action, kept across windows (what "caused by the run" is measured from). */
   #lastActionAt: number | null = null;
+  /** #241: when the last action was found to have started nothing (null: not found so). */
+  #inertAt: number | null = null;
   #lastDocId: string | null = null;
   /** #368: time spent since the action inside a wait the run chose (a reply wait, a job wait). */
   #waitedMs = 0;
@@ -900,7 +919,18 @@ export class PageMonitor {
   markAction(): void {
     this.#actionAt = this.#now();
     this.#lastActionAt = this.#actionAt;
+    this.#inertAt = null;
     this.#waitedMs = 0;
+  }
+
+  /**
+   * #241: the run's last action was checked and found to have started nothing (a send whose Enter
+   * did nothing). A read the page starts after this is its own background activity (a first poll),
+   * never that action's work — so it cannot make a later quiet `wait` look busy. Writes still count;
+   * the next {@link markAction} opens a fresh window.
+   */
+  markActionInert(): void {
+    if (this.#lastActionAt !== null) this.#inertAt = this.#now();
   }
 
   /**

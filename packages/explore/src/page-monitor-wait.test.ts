@@ -82,3 +82,43 @@ describe("isRecurringRead — #383: the page's own poll is not pending work", ()
     expect(isRecurringRead({ method: "POST", url: "https://a.test/api/apply" }, posts)).toBe(false);
   });
 });
+
+describe("PageMonitor.pendingWork — #241: an action found to have started nothing owns no later read", () => {
+  /** A page whose `request` events the test fires by hand (a first background poll). */
+  function pollingPage() {
+    const handlers: Array<(r: unknown) => void> = [];
+    const page = { on: (ev: string, h: (r: unknown) => void) => void (ev === "request" && handlers.push(h)), mainFrame: () => null } as unknown as Page;
+    const fire = (method: string, url: string) => {
+      const req = { url: () => url, method: () => method, resourceType: () => "fetch", isNavigationRequest: () => false, frame: () => null, headers: () => ({}), postData: () => null };
+      for (const h of handlers) h(req);
+    };
+    const t = { now: 1_000 };
+    return { t, fire, monitor: new PageMonitor(page, () => t.now) };
+  }
+
+  it("a first poll that starts just after an action is the action's work (it may have caused it)", () => {
+    const { t, fire, monitor } = pollingPage();
+    monitor.markAction();
+    t.now = 1_800;
+    fire("GET", "http://a.test/api/balance");
+    expect(monitor.pendingWork().map((r) => r.url)).toEqual(["http://a.test/api/balance"]);
+  });
+
+  it("once the action is found to have started nothing, a read that starts after that is background, not pending work", () => {
+    const { t, fire, monitor } = pollingPage();
+    monitor.markAction();
+    t.now = 1_300;
+    monitor.markActionInert();
+    t.now = 1_800;
+    fire("GET", "http://a.test/api/balance");
+    expect(monitor.pendingWork()).toEqual([]);
+    // A write still counts, and a new action owns its own window again.
+    fire("POST", "http://a.test/api/apply");
+    expect(monitor.pendingWork().map((r) => r.method)).toEqual(["POST"]);
+    t.now = 2_000;
+    monitor.markAction();
+    t.now = 2_200;
+    fire("GET", "http://a.test/api/apply/status");
+    expect(monitor.pendingWork().map((r) => r.url)).toContain("http://a.test/api/apply/status");
+  });
+});

@@ -23,6 +23,7 @@ import { refusalOf } from "./demo-aspect-cli.js";
 import { OpenRouterGenerationGateway, envCredentialStore, type GenerationPort } from "@jevitate/ai-core";
 import { readJourneyChangeScope } from "./journey-heal.js";
 import { MissionFixtures } from "./mission-fixtures.js";
+import { advisoryCatalogDir } from "./done-check-policy.testkit.js";
 
 /**
  * The boundary: a secret parameter's value never travels through an MCP request (it would pass
@@ -72,7 +73,7 @@ function journey(id: string, secretName = "secret1", extra: Array<{ name: string
       ],
     },
   } as unknown as Journey;
-  j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z" } as never;
+  j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z", provenance: { channel: "tty", agentSignals: [] } } as never;
   return j;
 }
 
@@ -84,7 +85,7 @@ function plainJourney(id: string): Journey {
     { step: { kind: "navigate", url: "/", expect: { kind: "visible", target: { testId: "who" } } } },
     { step: { kind: "fill", target: { testId: "who" }, value: { var: "who" }, expect: { kind: "visible", target: { testId: "who" } } } },
   ] as never;
-  j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z" } as never;
+  j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z", provenance: { channel: "tty", agentSignals: [] } } as never;
   return j;
 }
 
@@ -106,10 +107,14 @@ function filesHoldingValue(value = VALUE): string[] {
   return allFiles(root).filter((f) => readFileSync(f).includes(value));
 }
 
+/** A describe about something other than exits sets this (`advisoryCatalogDir`): a passing run then exits 0 with no done check. */
+let catalogDir: string | undefined;
+
 const cliDeps = (): CliDeps =>
   ({
     profiles: new ProfileManager(join(root, "profiles")),
     journeysDir,
+    ...(catalogDir === undefined ? {} : { catalogDir }),
     dbPath: join(root, "site.sqlite"),
     environmentsFile: join(root, "environments.json"),
     logs: { logsRoot: logs },
@@ -215,7 +220,7 @@ beforeAll(async () => {
   // Not declared secret, but its name reads as a credential: the repo treats it as secret everywhere.
   const named = journey("named", "password");
   named.metadata.parameters = [{ name: "password" }];
-  named.metadata.approval = { contentHash: journeyReviewHash(named), at: "2026-11-05T00:00:00.000Z" } as never;
+  named.metadata.approval = { contentHash: journeyReviewHash(named), at: "2026-11-05T00:00:00.000Z", provenance: { channel: "tty", agentSignals: [] } } as never;
   write(named);
   writeFileSync(join(root, "environments.json"), JSON.stringify({ local: { baseUrl: origin } }));
   writeFileSync(join(root, "targets.json"), JSON.stringify({ [origin]: { secretFields: [`label=Password=env:${VAR}`] } }));
@@ -287,8 +292,19 @@ describe("MCP: a secret parameter's value is refused on every served path", { ti
     expect(r.body["outcome"]).toBe("ok");
   });
 
-  it.each([[{ env: "local" }], [{}]])("a Journey that needs a secret doesn't run, even with none in the request and targets.json binding it (%j)", async (extra) => {
+  // 0.30.0 §5.3 (owner decision 6), changed by design: on an automation-mode target, a Journey a person
+  // approved takes the secret from the operator's targets.json binding; the value goes to the browser only.
+  it.each([[{ env: "local" }], [{}]])("a person-approved Journey that needs a secret runs with targets.json binding it, the value nowhere but the browser (%j)", async (extra) => {
     const r = await call("run_journey", { id: "login", ...extra });
+    expect(r.body["outcome"], r.text).toBe("ok");
+    expect(pageLoads).toBe(1);
+    expect(r.text).not.toContain(VALUE);
+    expect(filesHoldingValue()).toEqual([]);
+  });
+
+  it.each([[{ env: "local" }], [{}]])("a Journey an agent approved that needs a secret doesn't run, even with targets.json binding it (%j)", async (extra) => {
+    writeFileSync(join(journeysDir, "login-agent.json"), JSON.stringify(approved(journey("login-agent"), "mcp")));
+    const r = await call("run_journey", { id: "login-agent", ...extra });
     expect(r.body).toMatchObject({ code: SECRET_PARAM_OVER_MCP, params: ["secret1"] });
     expect(String(r.body["message"])).toContain("--secret-field");
     expect(pageLoads).toBe(0);
@@ -391,7 +407,8 @@ describe("which names count (H3, R5, M3)", { timeout: 120_000 }, () => {
   });
 
   it.each(["author", "authorName", "shipping_method", "sku", "orderId"])("%s runs without declaring anything", async (name) => {
-    fillNamed(name);
+    // 0.30.0: approved at a terminal, as an automation-mode run over MCP needs (§5.1).
+    fillNamed(name, undefined, "tty");
     const r = await call("run_journey", { id: `named-${name}`, params: { [name]: "3" } });
     expect(r.body["outcome"], r.text).toBe("ok");
   });
@@ -516,7 +533,7 @@ describe("a bound secret is typed only on its own origin (M1)", { timeout: 120_0
     redirectTo = `${otherOrigin}/login`;
     const j = journey("redirected");
     (j.recording.pages[0]!.steps[0] as { step: { url: string } }).step.url = "/go";
-    j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z" } as never;
+    j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z", provenance: { channel: "tty", agentSignals: [] } } as never;
     writeFileSync(join(journeysDir, "redirected.json"), JSON.stringify(j));
   });
   afterAll(() => {
@@ -682,7 +699,7 @@ describe("one label, two secret parameters (M2)", { timeout: 120_000 }, () => {
     j.metadata.parameters = [{ name: "secret1", secret: true }, { name: "secret2", secret: true }];
     const steps = j.recording.pages[0]!.steps as unknown as Array<{ step: Record<string, unknown> }>;
     steps.splice(2, 0, { step: { kind: "fill", target: { label: "Password" }, value: { var: "secret2" }, expect: { kind: "visible", target: { testId: "pw" } } } });
-    j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z" } as never;
+    j.metadata.approval = { contentHash: journeyReviewHash(j), at: "2026-11-05T00:00:00.000Z", provenance: { channel: "tty", agentSignals: [] } } as never;
     writeFileSync(join(journeysDir, "two-on-one.json"), JSON.stringify(j));
   });
 
@@ -766,8 +783,8 @@ describe("nothing secret-bound goes to a model: self-heal", { timeout: 120_000 }
     const sent: unknown[] = [];
     const gen = gatewayRecording(sent, () => ({ order: [], control: null }));
     const scope = await readJourneyChangeScope({ selfHeal: "hybrid", changeNotes: ["renamed Nowhere to Elsewhere"] } as never, journeysDir);
-    const { marked = "", ...runExtra } = extra as { marked?: string };
-    showsSecrets = `<button id=minted data-v="ExtractVal5Rt1">Minted</button>${marked}`;
+    const { marked = "", extractValue = "ExtractVal5Rt1", ...runExtra } = extra as { marked?: string; extractValue?: string };
+    showsSecrets = `<button id=minted data-v="${extractValue}">Minted</button>${marked}`;
     const result = await runJourneyProgrammatically({ dir: journeysDir, id, params, policy: { ...safeRunPolicy(), selfHeal: { mode: "hybrid" } } as never, selfHealer: makeEvidenceSelfHealer(gen), heal: { scope }, ...runExtra } as never).finally(() => {
       showsSecrets = "";
     });
@@ -822,7 +839,7 @@ describe("nothing secret-bound goes to a model: self-heal", { timeout: 120_000 }
 
   it.each([
     ["a parameter", { passengers: "2" }, [{ step: { kind: "fill", target: { testId: "who" }, value: { var: "passengers" }, expect: { kind: "visible", target: { testId: "who" } } } }], "passengers"],
-    ["an extract", {}, [{ step: { ...extractKey.step, as: "token_count" } }], "token_count"],
+    ["an extract", {}, [{ step: { ...extractKey.step, as: "issueKey" } }], "issueKey"],
   ] as const)("a name that only looks like a credential, on %s: refused, naming the way out, and a person's secret: false heals", async (what, params, extra, name) => {
     const id = `heal-broad-${what.replace(/\W+/g, "-")}`;
     const make = (): Journey => {
@@ -848,6 +865,42 @@ describe("nothing secret-bound goes to a model: self-heal", { timeout: 120_000 }
     const byPerson = await heal(id, lifted("tty"), params, { keepApproval: true });
     expect(byPerson.sent.length).toBeGreaterThan(0);
     expect(byPerson.text).not.toContain("self-heal skipped");
+  });
+
+  // Extract naming (0.29.0 accepted limit): an extract's name decides by the narrower credential rule.
+  it.each(["passengers", "footprint", "bypass_cache"])("an extract named %s only contains a credential fragment: heals, the model is asked", async (name) => {
+    const id = `heal-extract-${name.replace(/\W+/g, "-")}`;
+    const r = await heal(id, noSecretJourney(id, [{ step: { ...extractKey.step, as: name } }]), {});
+    expect(r.sent.length).toBeGreaterThan(0);
+    expect(r.text).not.toContain("self-heal skipped");
+  });
+
+  // masksExtractedValue (0.30.0): a name that names a credential and ends in a describing word is not
+  // secret-bound by name, so a short value heals; a credential-length value behind it is masked as it
+  // binds, the run then holds an extracted credential, and nothing secret-bound goes to a model.
+  it.each(["token_count", "tokenCount", "session_name", "cookie_banner"])("an extract named %s describes a credential: a short value heals, the model is asked", async (name) => {
+    const id = `heal-extract-short-${name.replace(/\W+/g, "-")}`;
+    const r = await heal(id, noSecretJourney(id, [{ step: { ...extractKey.step, as: name } }]), {}, { extractValue: "42" });
+    expect(r.sent.length).toBeGreaterThan(0);
+    expect(r.text).not.toContain("self-heal skipped");
+  });
+
+  it.each(["token_count", "tokenCount", "session_name", "cookie_banner"])("an extract named %s describes a credential: a credential-length value is held, no model call", async (name) => {
+    const id = `heal-extract-long-${name.replace(/\W+/g, "-")}`;
+    const r = await heal(id, noSecretJourney(id, [{ step: { ...extractKey.step, as: name } }]), {});
+    expect(r.sent).toEqual([]);
+    expect(r.text).toContain("self-heal skipped");
+    expect(r.text).toContain("this run holds a secret");
+    expect(r.text).not.toContain("ExtractVal5Rt1");
+  });
+
+  it.each(["authToken", "password", "session_id", "csrfToken", "pwd", "otp", "access_key", "authorization", "user_pass", "secretary"])("an extract named %s, a credential name: skipped, no model call", async (name) => {
+    const id = `heal-extract-cred-${name.replace(/\W+/g, "-")}`;
+    const r = await heal(id, noSecretJourney(id, [{ step: { ...extractKey.step, as: name } }]), {});
+    expect(r.sent).toEqual([]);
+    expect(r.text).toContain("self-heal skipped");
+    expect(r.text).toContain(`extracted credential ${name}`);
+    expect(r.text).not.toContain("ExtractVal5Rt1");
   });
 
   it("a run holding none still heals: the model is asked", async () => {
@@ -927,6 +980,25 @@ describe("nothing secret-bound goes to a model: annotate", { timeout: 120_000 },
     const byPerson = await annotate(lifted(), { passengers: "2" }, {}, "tty");
     expect(byPerson.err).toBeUndefined();
     expect(byPerson.sent.length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ["passengers", true],
+    ["token_count", true],
+    ["otp_channel", true],
+    ["authToken", false],
+    ["session_id", false],
+    ["apiKey", false],
+  ] as const)("an extract named %s: annotated only when the name is not a credential name", async (name, annotates) => {
+    const r = await annotate(plain(`an-extract-${name.replace(/\W+/g, "-")}`, [{ step: { kind: "extract", target: { testId: "pw" }, as: name, attr: "id", expect: { kind: "visible", target: { testId: "pw" } } } }]), {});
+    if (annotates) {
+      expect(r.err).toBeUndefined();
+      expect(r.sent.length).toBeGreaterThan(0);
+    } else {
+      expect(r.err).toBeInstanceOf(SecretBoundJourneyError);
+      expect((r.err as Error).message).toContain(`extracted credential ${name}`);
+      expect(r.sent).toEqual([]);
+    }
   });
 
   it("annotate_journey says so over MCP, by name", async () => {
@@ -1013,8 +1085,14 @@ describe("masked text never goes into a field (D5)", { timeout: 120_000 }, () =>
     for (const j of [approved(producer), approved(consumer)]) writeFileSync(join(journeysDir, `${j.metadata.id}.json`), JSON.stringify(j));
     writeFileSync(join(root, "chain-requests.jsonl"), `${JSON.stringify({ recordId: "r1" })}\n`);
   };
+  // These are about masking, not exits: 0.30.0 decision 3 (#800) exits 2 for a passing run with no done
+  // check under the default `doneCheckPolicy: "require"`, so the chain's project reads advisory here.
+  beforeAll(() => {
+    catalogDir = advisoryCatalogDir(root);
+  });
   afterAll(() => {
     showsSecrets = "";
+    catalogDir = undefined;
   });
 
   it("issueKey: the consumer's field gets the value as extracted, as in 0.28", async () => {

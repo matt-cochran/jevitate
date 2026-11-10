@@ -372,3 +372,9 @@ export async function documentOf(page: Page): Promise<number | undefined> {
   }
   return loads.count;
 }
+
+/**
+ * The identity of a forward step — the action (`label`) taken from page state `before` — that
+ * `RunContext.enteredBy` remembers for the state it first reached.
+ */
+export const forwardStepKey = (before: string, label: string): string => `${before}\u0000${label}`;

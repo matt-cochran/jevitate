@@ -26,7 +26,7 @@ type Run = NonNullable<JourneyVerifySeams["run"]>;
 type RunResult = Awaited<ReturnType<Run>>;
 const passed = { outcome: "ok", output: {} } as RunResult;
 /** A mutated replay that broke the step: a result, not an error. */
-const failed = { outcome: "quarantined", reason: "step 2 postcondition failed", at: 1 } as RunResult;
+const failed = { outcome: "quarantined", reason: "step 2 postcondition failed", at: 1, failurePhase: "postcondition" } as RunResult;
 
 const journey: Journey = {
   metadata: { id: ID, name: "Save text", promoted: false, params: [], createdAtIso: "2026-10-07T00:00:00.000Z" },
@@ -117,7 +117,11 @@ describe("an errored mutated replay", () => {
 
   it("leaves the proof proven when its retry succeeds", async () => {
     const report = await prove(proofErroringAt(2).run);
-    expect(report.verdict).toBe("proven");
+    // #812: this double reports no step of the base, so no independence replay runs, and the adjudicator
+    // never counts a proof whose replays were not shown independent. The retry itself leaves no gap.
+    expect(report.verdict).toBe("inconclusive");
+    expect(report.reason).toBe("the proof could not establish that the replays stayed independent (not-gathered); retry it");
+    expect(report.assertions.every((a) => a.verdict === "sensitive" || a.verdict === "unpaired")).toBe(true);
   });
 
   it("records the retry and the error it followed on the mutation", async () => {
@@ -243,7 +247,7 @@ describe("a replay that is not retried", () => {
 describe("a targeted proof's replay", () => {
   it("is retried through the same path", async () => {
     // Every mutated replay stops at step 1's postcondition, leaving later sites a cascade: a targeted proof runs.
-    const stopped = { outcome: "quarantined", reason: "step 1 postcondition failed", at: 0 } as RunResult;
+    const stopped = { outcome: "quarantined", reason: "step 1 postcondition failed", at: 0, failurePhase: "postcondition" } as RunResult;
     const replays: JourneyVerifyProgress[] = [];
     const targetedError = 3; // after the base and the first mutation's first (and relaxed) replay
     let errored = false;

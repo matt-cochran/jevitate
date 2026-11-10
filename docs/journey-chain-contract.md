@@ -100,7 +100,11 @@ only from the records and requests (section 3).
    run was `ok` (#624). A request whose matching record was rejected is reported in `rejected`
    with its field-specific errors and is **not run**; that fails the chain. Zero runs never pass
    on their own: only an intentionally empty request batch (`requests.total` is 0) succeeds with no
-   runs.
+   runs. 0.30.0: every run (the producer and each consumer) reads its job's done check as `journey run`
+   does, and the result carries `job` on `from` and on each run (with `failure.kind:
+   "done-check-failed"` when the steps passed but the job did not happen). A job not achieved fails
+   the chain (exit 1); otherwise a pass whose job is `unverified` exits 2 under `doneCheckPolicy:
+   "require"` (0 under `advisory`, or on a `trust: "harness"` target).
 
 `--json` result (names and outcomes only; no record or reply text is ever echoed):
 

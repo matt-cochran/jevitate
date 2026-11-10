@@ -7,8 +7,6 @@ import { clock } from "@jevitate/domain";
 import {
   assertionSiteKey,
   MAX_TARGETED_RELAXATIONS,
-  classifyMutation,
-  mutationErrored,
   needsRelaxedReplay,
   sitesReachedEarly,
   thinSites,
@@ -17,11 +15,12 @@ import {
   type JourneyMutation,
   type MutationFailedSite,
   type MutationPlan,
-  type MutationProofVerdict,
   type MutationRunResult,
   type ReplayPace,
   type TargetedProof,
 } from "@jevitate/journey";
+import { classifyMutation, mutationErrored } from "@jevitate/adjudicator";
+import { LEGACY_SENSITIVE_WORD, MUTATION_PROOF_VERDICTS, readProofVerdict, type MutationProofVerdict } from "./journey-verify-report.js";
 import { systemProcessTable } from "@jevitate/playwright";
 import { homeDataRoot } from "./project-dir.js";
 
@@ -155,7 +154,8 @@ const bodySchema = z.strictObject({
   startedAt: iso,
   updatedAt: iso,
   state: z.enum(["running", "interrupted", "finished"]),
-  verdict: z.enum(["proven", "insensitive", "inconclusive"]).optional(),
+  /** Written in today's word; a 0.29.0 receipt's legacy word still parses (its mac covers it as written) and reads as `sensitive`. */
+  verdict: z.union([z.enum(MUTATION_PROOF_VERDICTS), z.literal(LEGACY_SENSITIVE_WORD)]).optional(),
   /** It finished `inconclusive` on errored replays and nothing else, the independence replay's included, so a resume can run those again. */
   errorGap: z.literal(true).optional(),
   reusedPairs: count,
@@ -290,7 +290,7 @@ function ownerUid(): number | undefined {
 }
 
 /** The key, or why it cannot be trusted. A key anyone else can read or write binds nothing. */
-function readCheckpointKey(keyFile: string): { readonly key: Buffer } | { readonly missing: true } | { readonly problem: string } {
+export function readCheckpointKey(keyFile: string): { readonly key: Buffer } | { readonly missing: true } | { readonly problem: string } {
   let fd: number | undefined;
   try {
     if (!lstatSync(keyFile).isFile()) return { problem: "it is not a regular file" };
@@ -313,7 +313,7 @@ function readCheckpointKey(keyFile: string): { readonly key: Buffer } | { readon
 }
 
 /** Publishes a new key whole, by a hard link that fails if another process got there first. */
-function createCheckpointKey(keyFile: string): void {
+export function createCheckpointKey(keyFile: string): void {
   mkdirSync(dirname(keyFile), { recursive: true, mode: 0o700 });
   const tmp = `${keyFile}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   const fd = openSync(tmp, WRITE_FLAGS, 0o600);
@@ -557,7 +557,7 @@ const finishedForGood = (body: Pick<CheckpointBody, "state" | "verdict" | "error
 
 /** Why a finished proof takes no resume. One a replay may have decided has nothing a resume could stand on, and it says what will help. */
 function finishedDetail(body: CheckpointBody): string {
-  const ended = `this proof already finished (${body.verdict ?? "no verdict"})`;
+  const ended = `this proof already finished (${body.verdict === undefined ? "no verdict" : readProofVerdict(body.verdict)})`;
   const tainted = body.taint.restoreFailed || body.taint.notIsolatedBy !== null || body.taint.isolation !== null;
   return tainted ? `${ended}, and a replay may have decided another, so no result of it can be reused; fix that cause, then rerun with plain --mutate` : `${ended}; its receipt stands`;
 }
@@ -863,7 +863,7 @@ export function checkpointReplayOf(kind: string, run: { readonly outcome: Mutati
   return { kind, outcome: run.outcome, failedSites: structuredSites(run.failedSites), reachedMs: Array.from(run.reachedMs ?? [], (ms) => ms ?? null), ...optional("endStateReachedMs", run.endStateReachedMs), writesInFlightAtClose };
 }
 
-/** The result `classifyMutation` and `mutationProofVerdict` read, as the uninterrupted proof gave them. */
+/** The result the adjudicator's rules read (`classifyMutation`, the proof's verdict), as the uninterrupted proof gave them. */
 export function reusedProofFields(pair: CheckpointPair): Pick<MutationRunResult, "outcome" | "failedSites"> & Partial<Pick<MutationRunResult, "waitsCut" | "relaxed" | "targeted" | "control" | "atBaseTime">> {
   return {
     outcome: pair.outcome,
@@ -993,7 +993,7 @@ export function readVerifyProgress(path: string, keyFile: string, journeyId: str
     resume: refusal === undefined ? { possible: true } : { possible: false, refusal },
     progress: {
       state: body.state,
-      ...optional("verdict", body.verdict),
+      ...optional("verdict", body.verdict === undefined ? undefined : readProofVerdict(body.verdict)),
       phase: body.phase,
       completed: finishedForGood(body) ? body.completed.length : body.completed.filter(reusableOnResume).length,
       toRunAgain: finishedForGood(body) ? 0 : body.completed.filter((p) => !reusableOnResume(p)).length,

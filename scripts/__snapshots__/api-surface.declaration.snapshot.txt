@@ -1,6 +1,81 @@
 === DECLARATION (src/index.ts, TS compiler API) ===
 
-# @jevitate/ai-core (181 exports)
+# @jevitate/adjudicator (73 exports)
+  adjudicate: other
+  AdvisoryJudgment: type-alias
+  AdvisoryJudgmentSchema: variable
+  AssertionProof: other
+  AssertionResult: interface
+  AssertionSite: other
+  assertionSiteKey: other
+  AssertionVerdict: type-alias
+  BoundaryEvidence: type-alias
+  BoundaryEvidenceSchema: variable
+  BoundaryVerdict: interface
+  ChecksVerdict: interface
+  classifyMutation: other
+  classifyMutationPlain: other
+  countsForGate: other
+  DoneCheckEvidence: type-alias
+  DoneCheckEvidenceSchema: variable
+  DoneCheckSpec: type-alias
+  DoneCheckSpecSchema: variable
+  DoneReading: type-alias
+  DoneReadingSchema: variable
+  evaluatedOwnRequestFailure: other
+  EvidenceApprovalChannelSchema: variable
+  EvidenceSubject: type-alias
+  EvidenceSubjectSchema: variable
+  IsolationNote: type-alias
+  isolationNoteReason: other
+  IsolationNoteSchema: variable
+  JobVerdict: interface
+  judgeAssertions: other
+  judgeDoneCheck: other
+  Known: type-alias
+  KnownSchema: function
+  MovedField: type-alias
+  mutationErrored: other
+  MutationEvidence: type-alias
+  MutationEvidenceSchema: variable
+  MutationFailedSite: other
+  MutationKindSchema: variable
+  MutationPlan: other
+  mutationProofVerdict: other
+  MutationProofVerdict: other
+  mutationResults: other
+  MutationRunResult: other
+  MutationVerdict: type-alias
+  parseSiteKey: other
+  PlannedMutation: other
+  PlanSiteInfo: other
+  provenSensitive: other
+  RefusalCodeSchema: variable
+  rejudge: other
+  Rejudgement: interface
+  ReplayEvidence: type-alias
+  ReplayEvidenceSchema: variable
+  RULES_VERSIONS: variable
+  RulesVersion: type-alias
+  RunContext: type-alias
+  RunContextSchema: variable
+  RunEvidence: type-alias
+  RunEvidenceSchema: variable
+  RunOutcome: other
+  StepEvidence: type-alias
+  StepEvidenceSchema: variable
+  TargetedProof: other
+  TargetTrustSchema: variable
+  UnknownReason: type-alias
+  UnknownReasonSchema: variable
+  Verdict: interface
+  WriteMethodSchema: variable
+  WritesEvidence: type-alias
+  WritesEvidenceSchema: variable
+  WriteShape: type-alias
+  WriteShapeSchema: variable
+
+# @jevitate/ai-core (182 exports)
   aggregateOf: function
   AI_CORE: variable
   ALL_CREDENTIAL_KEYS: variable
@@ -124,6 +199,7 @@
   redactModelPayload: function
   redactText: function
   redactUrl: function
+  registerDeclaredSecrets: function
   requireKeys: function
   resolveJevRoute: function
   RetryDeps: interface
@@ -194,7 +270,7 @@
   ProfileManager: class
   ProfileStatus: interface
 
-# @jevitate/domain (161 exports)
+# @jevitate/domain (184 exports)
   assertInsideRoot: function
   assertRunTag: function
   assertSafeName: function
@@ -202,6 +278,7 @@
   Attribution: type-alias
   AttributionResult: interface
   canonicalJson: function
+  CapabilityScope: interface
   clock: variable
   ClockImpl: interface
   combineOutcomes: function
@@ -209,6 +286,7 @@
   contentHash: function
   CrashEvidence: interface
   currentClock: function
+  DEFAULT_DONE_CHECK_POLICY: variable
   DEFAULT_HEAP_GROWTH_RULE: variable
   DEFAULT_JEVITATE_REPO: variable
   DEFECT_OUTCOME_STATUSES: variable
@@ -220,9 +298,12 @@
   DegradedFindingKind: type-alias
   Direction: type-alias
   DistParams: type-alias
+  DONE_CHECK_POLICIES: variable
+  DoneCheckPolicy: type-alias
   EnvironmentDegraded: type-alias
   EnvironmentDegradedSchema: variable
   evaluateGate: function
+  expandBraces: function
   EXPLORE_MISSION_OUTCOMES: variable
   ExploreMissionOutcome: type-alias
   externalSchemeOf: function
@@ -256,8 +337,11 @@
   installClock: function
   InteractionPolicy: type-alias
   isBrokenRun: function
+  isDoneCheckPolicy: function
   isExternalSchemeUrl: function
   isGoalOutcome: function
+  isInScope: function
+  isJobAttainment: function
   isNodeError: function
   isPlainObject: function
   isRecord: function
@@ -267,18 +351,31 @@
   IssueTarget: type-alias
   isUnboundedHeapGrowth: function
   isWithinQuietHours: function
+  JOB_ATTAINMENTS: variable
+  JOB_BASES: variable
+  JOB_UNKNOWN_REASONS: variable
+  JobAttainment: type-alias
+  JobBasis: type-alias
+  JobUnknownReason: type-alias
+  JobVerdict: interface
   journeezeFingerprintMarker: function
   JOURNEY_MISSION_OUTCOME: variable
   JOURNEY_RUN_OUTCOMES: variable
   journeyExitCode: function
+  JourneyJobInput: interface
+  journeyMissionOutcome: function
   JourneyRunOutcome: type-alias
   legacyCanonicalJson: function
   legacyContentHash: function
+  LegacyMutationProofVerdict: type-alias
+  legacyProofVerdict: function
   LogClassCauseRecord: type-alias
   LogClassCauseSchema: variable
   looksLikeRendererOom: function
   makeRng: function
   matchesRunTags: function
+  matchGlob: function
+  MAX_GLOB_ALTERNATIVES: variable
   MAX_RUN_TAG_VALUE: variable
   MAX_RUN_TAGS: variable
   MAX_SAFE_NAME_LENGTH: variable
@@ -291,6 +388,8 @@
   MissionResult: type-alias
   MissionResultCore: interface
   MissionResultSchema: variable
+  MUTATION_PROOF_VERDICTS: variable
+  MutationProofVerdict: type-alias
   NewIssue: interface
   nextOpenAfter: function
   occurrenceComment: function
@@ -357,7 +456,7 @@
   validateRunTags: function
   worstOutcome: function
 
-# @jevitate/explore (720 exports)
+# @jevitate/explore (722 exports)
   absenceCoverage: function
   AbsenceCoverage: interface
   act: function
@@ -425,6 +524,8 @@
   BlockedWrite: interface
   BlockedWriteCause: interface
   blockedWriteCauses: function
+  BoundaryEvidence: other
+  BoundarySignal: other
   boundaryValueCandidates: function
   Bounds: interface
   boundSecretField: function
@@ -1132,7 +1233,7 @@
   stampToIso: function
   xmlEscape: function
 
-# @jevitate/inbox (35 exports)
+# @jevitate/inbox (38 exports)
   Action: type-alias
   asSecret: variable
   assertSafeInboxId: function
@@ -1143,6 +1244,8 @@
   FindingSchema: variable
   flushIfDurable: function
   FsInboxStore: class
+  HoldKind: type-alias
+  HoldKindSchema: variable
   HumanApprovalRequiredError: class
   IllegalTransitionError: class
   InboxHealth: interface
@@ -1158,6 +1261,7 @@
   InboxStore: interface
   InboxSummary: interface
   LockTimeoutError: class
+  QUEUEABLE_INBOX_KINDS: variable
   resolveTransition: function
   revealSecret: variable
   SAFE_INBOX_ID_RE: variable
@@ -1232,7 +1336,7 @@
   VisualVerdict: other
   waitForOutcome: other
 
-# @jevitate/journey (308 exports)
+# @jevitate/journey (341 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1304,7 +1408,6 @@
   checkPersona: function
   checkStatement: function
   classifyHandback: function
-  classifyMutation: function
   classifyReplay: function
   controlCanChangeVerdict: function
   declaredNonSecretParams: function
@@ -1313,7 +1416,26 @@
   describeStep: function
   DesiredOutcome: type-alias
   DesiredOutcomeSchema: variable
+  DONE_CHECK_KINDS: variable
+  DoneCheckIssue: interface
+  DoneCheckIssueCode: type-alias
+  DoneCheckKind: type-alias
+  DoneCheckLintFinding: interface
+  DoneCheckLintRule: type-alias
+  doneCheckPlaceholders: function
+  doneCheckScope: function
+  DoneCheckScope: interface
+  DoneCheckSpec: type-alias
+  DoneCheckSpecSchema: variable
   DURATION_STATS: variable
+  E_DONE_CHECK_AT: variable
+  E_DONE_CHECK_KIND: variable
+  E_DONE_CHECK_PATH_BOUND: variable
+  E_DONE_CHECK_REF_UNBOUND: variable
+  E_DONE_CHECK_SECRET_REF: variable
+  E_DONE_CHECK_SHAPE: variable
+  E_DONE_CHECK_SYNTAX: variable
+  endStateIsolationNotes: function
   EXTENSION_NAMESPACE_RE: variable
   Extensions: type-alias
   ExtensionsSchema: variable
@@ -1354,6 +1476,7 @@
   heldSites: function
   intentCoverage: function
   IntentCoverage: interface
+  isDoneCheckIssues: function
   isLoadRefusedName: other
   isNoClaimExpect: function
   isOwnTargetVisible: function
@@ -1395,6 +1518,8 @@
   JourneyMetadata: interface
   JourneyMutation: interface
   JourneyMutationPair: interface
+  JourneyMutationStep: interface
+  journeyMutationSteps: function
   JourneyNetworkCheck: type-alias
   JourneyOutputsSchema: variable
   JourneyParameter: interface
@@ -1427,34 +1552,37 @@
   JourneyTargetedProofPlan: interface
   JourneyWriteStep: interface
   journeyWriteSteps: function
-  judgeAssertions: function
   JudgmentUsageSchema: variable
+  lintDoneCheck: function
   lintJourney: function
+  lintJourneyDoneCheck: function
   lintUploadFixtures: function
   listJourneyAnchors: function
   loadRefusedParamNames: function
+  matchesParameterType: function
   MAX_DECLARED_RELAXATIONS: variable
   MAX_TARGETED_RELAXATIONS: variable
   Metric: type-alias
   METRIC_KINDS: variable
   MetricKind: type-alias
   MetricSchema: variable
-  mutationErrored: function
   MutationFailedSite: type-alias
   MutationKind: type-alias
   MutationPair: interface
   mutationPairIssues: function
   MutationPlan: interface
+  mutationPlanSites: function
   MutationProofPolicyResult: type-alias
   MutationProofPolicyResultSchema: variable
-  mutationProofVerdict: function
-  MutationProofVerdict: type-alias
+  MutationProofVerdict: other
   mutationReplay: function
   MutationReplay: interface
   MutationReplayOptions: type-alias
   MutationRunResult: interface
   MutationVerdict: type-alias
   mutationWait: function
+  mutationWriteMatches: function
+  needsFinalNetworkObservation: function
   needsRelaxedReplay: function
   nextTargetedRelaxation: function
   OUTCOME_DIRECTIONS: variable
@@ -1473,8 +1601,15 @@
   paceTailMs: function
   PAIR_RELATIONS: variable
   PairRelation: type-alias
+  PARAMETER_TYPES: variable
+  ParameterEnumSchema: variable
+  ParameterType: type-alias
+  parameterTypeIssues: function
+  ParameterTypeSchema: variable
+  ParamIssue: interface
   ParamSchema: interface
   ParamValidationError: class
+  parseDoneCheck: function
   PersonaReview: type-alias
   PersonaReviewSchema: variable
   planJourneyMutations: function
@@ -1496,6 +1631,7 @@
   ReplayHolds: interface
   ReplayPace: interface
   resolveAnchorStep: function
+  resolveDoneCheck: function
   resolveJourneyStep: function
   ReviewAnchorWarningSchema: variable
   ReviewAttentionSchema: variable
@@ -1539,6 +1675,7 @@
   thinSites: function
   validateFieldValue: function
   validateParams: function
+  validateParamTypes: function
   validateRecords: function
   validateRequests: function
 
@@ -1560,7 +1697,7 @@
   RunModeledCapacityConfig: interface
   UnauthorizedLoadTargetError: class
 
-# @jevitate/mcp-facade (38 exports)
+# @jevitate/mcp-facade (45 exports)
   aiGenerateText: function
   AiGenerateTextArgs: interface
   AiGenerateTextResult: interface
@@ -1582,6 +1719,7 @@
   InternalError: interface
   InvalidArgsError: interface
   isMissionResultId: function
+  isQueuedJourneyCallId: function
   isQueuedMissionId: function
   JourneyApprovalState: type-alias
   JourneyRunRefusalCode: type-alias
@@ -1594,21 +1732,30 @@
   NamedJourneyTool: interface
   NotFoundError: interface
   parseMissionOutcome: function
+  parseQueueJourneyArgs: function
   parseResultOutcome: function
+  QUEUE_JOURNEY_SECRET_CODE: variable
   QueuedResult: interface
   queueExploration: function
   QueueExplorationResult: interface
+  queueJourney: function
+  QueueJourneyArgs: interface
+  QueueJourneyRefusedError: class
+  QueueJourneyResult: interface
   runJourney: function
 
-# @jevitate/missions (27 exports)
+# @jevitate/missions (36 exports)
   Budget: type-alias
   BudgetExceedsCeilingError: class
   ClaimOwner: interface
   DrainableMissionQueueStore: interface
   enqueueMission: function
+  FsJourneyCallQueueStore: class
   FsMissionQueueStore: class
   FsMissionTargetStore: class
   isHttpOrigin: function
+  JOURNEY_CALLS_SUBDIR: variable
+  JourneyCallQueueStore: interface
   MISSION_BOUNDS_CEILING: variable
   MISSION_STRATEGIES: variable
   MissionQueueStore: interface
@@ -1621,6 +1768,12 @@
   MissionTargetStore: interface
   QUEUED_MISSION_STATUSES: variable
   QUEUED_SCREENSHOT_MODES: variable
+  QueuedEntry: type-alias
+  QueuedEntrySchema: variable
+  QueuedJourneyCall: interface
+  QueuedJourneyCallSchema: variable
+  QueuedJourneyRecord: interface
+  QueuedJourneyRecordSchema: variable
   QueuedMission: interface
   QueuedMissionSchema: variable
   QueuedMissionStatus: type-alias
@@ -1629,7 +1782,7 @@
   targetAllowlist: function
   UnknownOrUnpromotedMissionTargetError: class
 
-# @jevitate/playwright (164 exports)
+# @jevitate/playwright (165 exports)
   AdmissionRecord: interface
   AdmissionTimeoutError: class
   admissionViolation: function
@@ -1779,6 +1932,7 @@
   sameExtensionBuild: function
   sharedBrowserPool: function
   sharedResourceGovernor: function
+  singletonSocketPathRefusal: function
   SlotHolder: interface
   SlotState: interface
   SpawnFn: type-alias
@@ -2052,9 +2206,10 @@
   WriteClassifier: type-alias
   WriteClassifierOptions: interface
 
-# @jevitate/regression (27 exports)
+# @jevitate/regression (37 exports)
   appendOracleStep: function
   commitRegression: function
+  DEFAULT_SHORTEN_BUDGET: variable
   DerivedOracle: interface
   deriveOracleFromTranscript: function
   FailureFingerprint: interface
@@ -2062,6 +2217,8 @@
   fixtureOptions: function
   FlakyNotCommittableError: class
   flattenWithUrls: function
+  isConfirmationStep: function
+  keepSteps: function
   loadRegressions: function
   makeSingleShotReproduces: function
   matchesFingerprint: function
@@ -2071,6 +2228,7 @@
   NetworkStatusSpec: type-alias
   NeverFailedError: class
   oracleFromAssertion: function
+  refuseShortening: function
   RegressionCase: interface
   RegressionMeta: interface
   RegressionOracle: type-alias
@@ -2080,8 +2238,14 @@
   reproduceFailureAt: function
   Reproduces: type-alias
   ReproductionReport: interface
+  ShortenCandidate: interface
+  ShortenOptions: interface
+  shortenRecording: function
+  ShortenRefusal: type-alias
+  ShortenReport: interface
+  ShortenVerdict: type-alias
 
-# @jevitate/runtime (63 exports)
+# @jevitate/runtime (74 exports)
   anchorValues: function
   assertProofUntouched: function
   assertRecordedProofUntouched: function
@@ -2134,7 +2298,17 @@
   RetargetCandidate: interface
   retargetRecording: function
   sanitizeStep: function
+  Secret: other
+  SecretManagerPort: other
+  SecretOriginMismatchError: other
+  SecretUnresolvableError: other
   SelfHealer: interface
+  SENTINEL_NOTE_UNAVAILABLE: variable
+  SENTINEL_TASKS: variable
+  SentinelGateway: interface
+  SentinelInput: interface
+  SentinelJudgment: interface
+  SentinelResult: interface
   SiteGateDeps: interface
   SiteGateRefusal: type-alias
   SiteGateRefusedError: class
@@ -2145,6 +2319,7 @@
   summarizeChangeScope: function
   ThrottleClass: type-alias
   throttleClassOf: function
+  WriteSentinel: class
 
 # @jevitate/screenplay (21 exports)
   Ability: interface

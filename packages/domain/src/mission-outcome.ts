@@ -100,11 +100,16 @@ export function combineOutcomes<O extends MissionOutcome>(outcomes: readonly O[]
  *                  (exit 2), and `goalReason` says why. Defects found passively (console, server log)
  *                  are still listed but do not make the run "exercised".
  *
+ *  - `boundary`  → `inconclusive` (2): (0.30.0, #807) the run stopped at a boundary it may not or
+ *                  cannot cross — a wall (401/403, a paid control), session loss, an off-allowlist origin
+ *                  or a new tab (`boundary.kind`). It proves nothing about the app (it used to read as
+ *                  `blocked` → `defects-found`, exit 1).
+ *
  * A vacuous check (#202) — satisfied before the run's first action — proves nothing either way: a
  * run whose only failing checks are vacuous is `inconclusive` (`failure.kind: "vacuous-check"`),
  * never one of these.
  */
-export const GOAL_ONLY_OUTCOMES = ["succeeded", "exhausted", "blocked", "failed", "not-started"] as const;
+export const GOAL_ONLY_OUTCOMES = ["succeeded", "exhausted", "blocked", "failed", "not-started", "boundary"] as const;
 export type GoalOnlyOutcome = (typeof GOAL_ONLY_OUTCOMES)[number];
 
 export const GOAL_OUTCOME_FOLD: Readonly<Record<GoalOnlyOutcome, MissionOutcome>> = {
@@ -113,6 +118,7 @@ export const GOAL_OUTCOME_FOLD: Readonly<Record<GoalOnlyOutcome, MissionOutcome>
   exhausted: "defects-found",
   blocked: "defects-found",
   "not-started": "inconclusive",
+  boundary: "inconclusive",
 };
 
 /**
@@ -208,8 +214,19 @@ export type MissionFailureKind =
   | "resource-limit"
   /** Goal (#209): the model said `done`, but an independent success check did not hold. Outcome `failed`. */
   | "success-check-failed"
+  /**
+   * 0.30.0 (#800): a Journey's steps passed but the job's done check read false after the run
+   * (`job.attainment: "not-achieved"`). `defects-found` (exit 1): of the app or of the Journey, never `ok`.
+   */
+  | "done-check-failed"
   /** Goal (#209): the only failing checks were vacuous (#202) — satisfied before any action. Outcome `inconclusive`. */
   | "vacuous-check"
+  /**
+   * Goal, 0.30.0 (#807): the run covered every control it could reach, up to the code-decided coverage
+   * floor, and none led toward the goal. Outcome `inconclusive` (exit 2), `goalReason: "no-route-found"`;
+   * the message lists what was searched. Never a defect, and never a wall or a permission boundary.
+   */
+  | "no-route-found"
   /** Usability (#209): the job under review was never completed — the review proves nothing about the rest. */
   | "job-incomplete"
   /**
@@ -298,6 +315,8 @@ export function goalMissionOutcome(goalOutcome: GoalOnlyOutcome | MissionOutcome
  * `succeeded`), decided by code from the run's own state, never parsed from `reason`:
  *
  *  - `success-check-failed` — the model said done, but an independent success check did not hold.
+ *  - `done-check-failed` — (`failed`, rc-030b) the goal passed, but its job's done check read false in a
+ *                         fresh session (`failure.kind: "done-check-failed"`, exit 1).
  *  - `not-found`        — a find-out goal's report found no answer on the pages it searched.
  *  - `ungrounded`       — the model's answer was rejected as not grounded until the run gave up.
  *  - `blocked-by-policy` — the model gave up after the safety policy refused a control it chose.
@@ -313,9 +332,13 @@ export function goalMissionOutcome(goalOutcome: GoalOnlyOutcome | MissionOutcome
  *  - `preflight-failed` — (`not-started`) the operator's configuration/pre-flight failed before the app was exercised.
  *  - `no-actions`       — (`not-started`) the run ended with zero executed actions for another reason.
  *  - `defects`          — only for `goalOutcome: "defects-found"` with no other known cause.
+ *  - `no-route-found`   — (`inconclusive`, 0.30.0 #807) the run covered every control it could reach, up to
+ *                         the coverage floor, and none led toward the goal (`failure.kind: "no-route-found"`).
  */
 export const GOAL_REASONS = [
   "success-check-failed",
+  // rc-030b: a pass whose job's done check read false (`failure.kind: "done-check-failed"`).
+  "done-check-failed",
   "not-found",
   "ungrounded",
   "blocked-by-policy",
@@ -330,6 +353,15 @@ export const GOAL_REASONS = [
   "preflight-failed",
   "no-actions",
   "defects",
+  // 0.30.0 (#807): the signal of a `boundary` ending.
+  "http-401",
+  "http-403",
+  "paid-control",
+  "login-url",
+  "write-refused",
+  "tab-opened",
+  // 0.30.0 (#807): an `inconclusive` goal run that met its coverage floor and found no route.
+  "no-route-found",
 ] as const;
 export type GoalReason = (typeof GOAL_REASONS)[number];
 
@@ -355,7 +387,7 @@ export function goalReasonOf(i: GoalReasonInput): GoalReason | undefined {
     case "clean":
       return undefined;
     case "failed":
-      return "success-check-failed";
+      return i.failureKind === "done-check-failed" ? "done-check-failed" : "success-check-failed";
     case "exhausted":
       return "budget";
     case "blocked":
@@ -365,10 +397,14 @@ export function goalReasonOf(i: GoalReasonInput): GoalReason | undefined {
       return "hang";
     case "inconclusive":
       if (i.failureKind === "vacuous-check") return "vacuous-check";
+      if (i.failureKind === "no-route-found") return "no-route-found";
       if (i.stop === "budget") return "budget";
       return "broken-run";
     case "crashed":
       return "broken-run";
+    case "boundary":
+      // 0.30.0: the boundary itself (`boundary.kind`, its signal and origin) is carried beside it.
+      return cause ?? "gave-up";
     case "not-started":
       if (i.failureKind === "auth-expired") return "auth-failed";
       if (i.failureKind === "configuration") return "preflight-failed";
@@ -426,4 +462,23 @@ export function startupAttemptsOf(result: unknown): StartupAttempt[] {
   if (result === null || typeof result !== "object") return [];
   const parsed = StartupAttemptsSchema.safeParse((result as { attempts?: unknown }).attempts);
   return parsed.success ? parsed.data : [];
+}
+
+/**
+ * 0.30.0 (design §6.1) — a mutation proof's run-level verdict (`journey verify --mutate --json`,
+ * readiness, review). `sensitive` replaces 0.29.0's `proven`: the checks were shown sensitive to the
+ * mutations that ran, under the conditions they ran in — no more.
+ */
+export const MUTATION_PROOF_VERDICTS = ["sensitive", "insensitive", "inconclusive"] as const;
+export type MutationProofVerdict = (typeof MUTATION_PROOF_VERDICTS)[number];
+
+/** The 0.29.0 spelling of a mutation proof verdict: `proven` for `sensitive`, otherwise the same word. */
+export type LegacyMutationProofVerdict = "proven" | Exclude<MutationProofVerdict, "sensitive">;
+
+/**
+ * `verdictLegacy` (owner decision 4): carried beside `verdict` through 0.31.0, removed in 0.32.0, so a
+ * reader keyed on `verdict === "proven"` can move to `verdictLegacy` first.
+ */
+export function legacyProofVerdict(v: MutationProofVerdict): LegacyMutationProofVerdict {
+  return v === "sensitive" ? "proven" : v;
 }

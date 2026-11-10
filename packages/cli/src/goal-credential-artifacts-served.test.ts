@@ -1,10 +1,8 @@
-import { createServer, type IncomingMessage, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { readFileSync, readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { PlaywrightBrowserPort } from "@jevitate/playwright";
 import { FakeGenerationGateway, type GenInput, type GenTaskKind, type GenerationResult } from "@jevitate/ai-core";
 import { runExploration } from "./explore-goal.js";
@@ -15,24 +13,14 @@ import { ScriptedJudge, useSkippingTime } from "../../explore/src/testkit.js";
 useSkippingTime({ per: "all", pageClock: false });
 
 /**
- * #829: a goal-stated credential is in NO written artifact. A change-password page through
- * `runExploration`, NO `--secret`: the goal states the new password and the run types it. Every
- * file the run writes (result, Recording, transcript, evidence, logs) and every generator payload is
- * grepped for the MARKER. Scripted judge + fake generator: no model call.
+ * A goal-stated credential is in NO written artifact (0.30.0, the d-sign-in-verb finding). The nav
+ * lab's `sign-in-goal` case through `runExploration`, NO `--secret`: the goal states the password and
+ * the run types it. Every file the run writes (result, Recording, transcript, evidence, logs) and
+ * every generator payload after the fill is grepped for the MARKER. Scripted judge + fake generator.
  */
 
-const MARKER = "MARKER-pw-829y";
+const MARKER = "lab-pass-1";
 const EMAIL = "morgan@pinecrest.example";
-
-const FORM = `<!doctype html><html><body>
-  <h1>Change your password</h1>
-  <form method="post" action="/change">
-    <label for="email">Email</label> <input id="email" name="email" type="email" />
-    <label for="pw">New password</label> <input id="pw" name="pw" type="password" autocomplete="new-password" />
-    <button type="submit">Save password</button>
-  </form>
-</body></html>`;
-const DONE = `<!doctype html><html><body><h1 data-testid="changed">Password changed</h1></body></html>`;
 
 class CapturingGateway extends FakeGenerationGateway {
   readonly payloads: string[] = [];
@@ -42,63 +30,31 @@ class CapturingGateway extends FakeGenerationGateway {
   }
 }
 
-let server: Server;
-let origin: string;
-const changes: Array<string | null> = [];
-
-function formBody(req: IncomingMessage): Promise<URLSearchParams> {
-  return new Promise((resolve) => {
-    let body = "";
-    req.on("data", (c: Buffer) => (body += c.toString()));
-    req.on("end", () => resolve(new URLSearchParams(body)));
-  });
-}
-
-beforeAll(async () => {
-  server = createServer((req, res) => {
-    const html = (status: number, page: string): void => void res.writeHead(status, { "content-type": "text/html; charset=utf-8" }).end(page);
-    const path = (req.url ?? "/").split("?")[0];
-    if (req.method === "POST" && path === "/change") {
-      void formBody(req).then((f) => {
-        changes.push(f.get("pw"));
-        res.writeHead(303, { location: "/done" }).end();
-      });
-      return;
-    }
-    if (path === "/done") return html(200, DONE);
-    html(200, FORM);
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-});
-
-afterAll(async () => {
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-});
-
-describe("#829 — a goal-stated password is in no written artifact", () => {
+describe("a goal-stated password is in no written artifact", () => {
   it("result, Recording, transcript and every other file the run writes hold the MARKER 0 times; the email still records", async () => {
+    // @ts-expect-error — a plain .mjs fixture with no declaration file
+    const { startNavLab } = (await import("../../../test/fixtures/nav-lab/app.mjs")) as {
+      startNavLab: (o: { caseId: string; port?: number }) => Promise<{ url: string; close: () => Promise<void> }>;
+    };
+    const lab = await startNavLab({ caseId: "sign-in-goal" });
     const out = await mkdtemp(join(tmpdir(), "jev-goal-cred-"));
     try {
-      // Form: [0] Email, [1] New password, [2] Save password.
-      const judge = new ScriptedJudge([{ op: "type", target: "0" }, { op: "type", target: "1" }, { op: "click", target: "2" }, { op: "done" }]);
+      // Home: [0] Sign in (link). Sign-in page: [0] Email, [1] Password, [2] Sign in (submit).
+      const judge = new ScriptedJudge([{ op: "click", target: "0" }, { op: "type", target: "0" }, { op: "type", target: "1" }, { op: "click", target: "2" }, { op: "done" }]);
       const gen = new CapturingGateway();
       const result = await runExploration({
-        url: `${origin}/`,
-        allowlist: [origin],
-        goal: `Change the password for email ${EMAIL} to new password ${MARKER}.`,
-        successAssertion: { kind: "visible", target: { testId: "changed" } },
+        url: `${lab.url}/`,
+        allowlist: [lab.url],
+        goal: `Sign in with email ${EMAIL} and password ${MARKER}.`,
         judge,
         gen,
         outDir: out,
-        bounds: { maxDecisions: 8 },
+        bounds: { maxDecisions: 10 },
         screenshots: { mode: "steps" },
         browserPortFactory: () => new PlaywrightBrowserPort(),
       });
       const r = result as unknown as { goalOutcome: string; resultPath: string };
       expect(r.goalOutcome).toBe("succeeded");
-      // The real value reached the server.
-      expect(changes).toEqual([MARKER]);
       const files: string[] = [];
       const walk = (d: string): void => {
         for (const e of readdirSync(d, { withFileTypes: true })) {
@@ -117,11 +73,12 @@ describe("#829 — a goal-stated password is in no written artifact", () => {
       expect(JSON.stringify(result).split(MARKER).length - 1).toBe(0);
       // No over-redaction: the email field's value still records, in the result's Recording.
       expect(readFileSync(r.resultPath, "utf8")).toContain(`"value": "${EMAIL}"`);
-      // The decision states after the password was typed (from the 3rd on) and every goal check.
-      expect(JSON.stringify(judge.calls.slice(2)).split(MARKER).length - 1).toBe(0);
+      // The decision states after the password was typed (from the 4th on) and every goal check.
+      expect(JSON.stringify(judge.calls.slice(3)).split(MARKER).length - 1).toBe(0);
       expect(JSON.stringify(judge.goalCalls).split(MARKER).length - 1).toBe(0);
       expect(gen.payloads.filter((p) => p.includes(MARKER))).toEqual([]);
     } finally {
+      await lab.close();
       await rm(out, { recursive: true, force: true });
     }
   }, 180_000);

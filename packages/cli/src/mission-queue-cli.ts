@@ -8,7 +8,8 @@ import { emitJsonOrRefusal } from "./cli-refusal.js";
 import { EXIT_CODES } from "./exit-codes.js";
 import { positiveIntArg } from "./cli-args.js";
 import { parseAssertionSpec } from "./explore-specs.js";
-import { type CliDeps, type EmulationFlags, emulationFromFlags, resolveMissionTargetsDir, withEmulationFlags } from "./cli-shared.js";
+import { type CliDeps, type EmulationFlags, collectParam, emulationFromFlags, resolveMissionTargetsDir, withEmulationFlags } from "./cli-shared.js";
+import { withEnvironmentFlags, type EnvironmentFlags } from "./environments.js";
 import { callMcpTool, mcpErrorOf, mcpToolDeps, refusalFor } from "./mcp-cli-bridge.js";
 
 /**
@@ -41,6 +42,12 @@ export function formatMissionResultHuman(data: unknown): string {
   const id = String(data.missionId ?? data.id);
   if (data.pending === true) {
     return `${String(data.status).toUpperCase()}  ${id}  (enqueued ${String(data.enqueuedAtIso)})\nnext: jevitate mission run — then jevitate mission result ${id}\n`;
+  }
+  if (data.kind === "journey") {
+    // GAPS 19 (#797): a queued Journey call's stored record.
+    const journey = isRecord(data.journey) ? String(data.journey.id) : "?";
+    if (data.status === "failed") return `FAILED  ${id} (journey '${journey}')${typeof data.code === "string" ? ` ${data.code}` : ""}: ${String(data.error)} — the call could not run\n`;
+    return `${String(data.outcome).toUpperCase()}  ${id} (journey '${journey}')${typeof data.runId === "string" ? ` → run ${data.runId}` : ""}  (exit ${String(data.exitCode)})${typeof data.code === "string" ? `\n  code: ${data.code}` : ""}\n`;
   }
   if (data.status === "failed") return `FAILED  ${id}: ${String(data.error)} — the mission could not run\n`;
   const lines = [`${String(data.status).toUpperCase()}  ${id}${data.resultId === undefined ? "" : ` → ${String(data.resultId)}`}  (exit ${String(data.exitCode)})`];
@@ -76,7 +83,10 @@ export function registerMissionQueueCommands(program: Command, mission: Command,
       .option("--record-video", "record a video of the run (headless too), written next to its result; listed as videoPaths")
       .option("--screenshots [mode]", "masked screenshots + index.md next to the result: screens (default, one per distinct screen) | steps (one per step)")
       .option("--evidence-video", "per defect: a captioned evidence clip of its minimal repro + before/at screenshots (defects[].evidence)")
-      .option("--persona <name>", "run as this persona: its session in ~/.jevitate/targets.json (personas) for the target's origin — a name, never a path"),
+      .option("--persona <name>", "run as this persona: its session in ~/.jevitate/targets.json (personas) for the target's origin — a name, never a path")
+      // #800 (GAPS 12): the `explore --job` / `run_exploration {job}` done check, for a queued goal mission.
+      .option("--job <id>", "goal-based with --goal (#800): the catalog job (.jevitate/jobs.json) whose done check verifies the run, read in fresh contexts before the run and after each proposed done (`explore --job`)")
+      .option("--require-done-check", "goal-based with --goal (#800): an unverified job (no done check, or one already true) exits 2 even when project.json doneCheckPolicy is advisory"),
     // #329: a queued mission persists only viewport/device; --geolocation is not offered here.
     { geolocation: false },
   )
@@ -101,6 +111,8 @@ export function registerMissionQueueCommands(program: Command, mission: Command,
           screenshots?: boolean | string;
           evidenceVideo?: boolean;
           persona?: string;
+          job?: string;
+          requireDoneCheck?: boolean;
           dir?: string;
           targetsDir?: string;
           json?: boolean;
@@ -170,6 +182,8 @@ export function registerMissionQueueCommands(program: Command, mission: Command,
         ...(screenshots === undefined ? {} : { screenshots }),
         ...(o.evidenceVideo === true ? { evidenceVideo: true } : {}),
         ...(o.persona === undefined ? {} : { persona: o.persona }),
+        ...(o.job === undefined ? {} : { job: o.job }),
+        ...(o.requireDoneCheck === true ? { requireDoneCheck: true } : {}),
       };
       let envelope: JsonEnvelope<unknown>;
       try {
@@ -201,7 +215,7 @@ export function registerMissionQueueCommands(program: Command, mission: Command,
 
   mission
     .command("result <id>")
-    .description("a mission's status and typed result, by result id or queued missionId (MCP get_mission_result); exits with its contract code")
+    .description("a mission's status and typed result, by result id or queued missionId, or a queued Journey call's record by callId (MCP get_mission_result); exits with its contract code")
     .option("--dir <path>", QUEUE_DIR_HELP)
     .option("--results-dir <path>", "read the result file from this directory only (default: where `mission run` writes — .jevitate/logs/<date>, then ~/.jevitate)")
     .option("--json", "emit a JSON envelope")
@@ -230,5 +244,66 @@ export function registerMissionQueueCommands(program: Command, mission: Command,
         return;
       }
       emitEnvelope(program, envelope, { json: o.json === true, command: "mission result", human: formatMissionResultHuman, ...(exitCode === undefined ? {} : { exitCode }) });
+    });
+}
+
+/** `--param k=v` as `journey run` takes it. */
+type ParamFlags = Record<string, string>;
+
+/**
+ * 0.30.0 #797 `jevitate journey queue <id> [--param k=v] [--env e | --base-url u]` — MCP `queue_journey`
+ * from the CLI, through the SAME served handler over the SAME queue (`jevitate mission run` drains it,
+ * exactly as run_journey runs a Journey). A secret-named param (or one the Journey declares secret) is
+ * refused by name before anything is written: `E_SECRET_PARAM_IN_QUEUE`, exit 64. A queued call never
+ * stores a secret value; the run meets a secret the Journey needs with its secret mode.
+ */
+export function registerJourneyQueueCommand(journey: Command, program: Command, deps: CliDeps): void {
+  withEnvironmentFlags(
+    journey
+      .command("queue <id>")
+      .description("queue a call of a PROMOTED Journey for `jevitate mission run` to run (MCP queue_journey) — id, its content hash, non-secret params, env; never a secret value"),
+  )
+    .option("--param <kv>", "a non-secret param as key=value (repeatable); a secret-named one is refused (E_SECRET_PARAM_IN_QUEUE): the run meets a secret with its secret mode", collectParam, {} as ParamFlags)
+    .option("--no-done-check", "#800: the queued run skips the linked job's done check (as journey run --no-done-check); stored on the call")
+    .option("--require-done-check", "#800: the queued run exits 2 on an unverified job even under the advisory policy (as journey run --require-done-check); stored on the call")
+    .option("--dir <path>", QUEUE_DIR_HELP)
+    .option("--json", "emit a JSON envelope")
+    .action(async function (this: Command, id: string) {
+      const o = this.opts<{ param: ParamFlags; dir?: string; json?: boolean; doneCheck: boolean; requireDoneCheck?: boolean } & EnvironmentFlags>();
+      const args: Record<string, unknown> = {
+        id,
+        ...(Object.keys(o.param).length === 0 ? {} : { params: o.param }),
+        ...(o.env === undefined ? {} : { env: o.env }),
+        ...(o.baseUrl === undefined ? {} : { baseUrl: o.baseUrl }),
+        ...(o.doneCheck === false ? { noDoneCheck: true } : {}),
+        ...(o.requireDoneCheck === true ? { requireDoneCheck: true } : {}),
+      };
+      let envelope: JsonEnvelope<unknown>;
+      try {
+        const apiDeps = mcpToolDeps(deps, o.dir === undefined ? {} : { missionQueueDir: o.dir });
+        const { body } = await callMcpTool(apiDeps, "queue_journey", args);
+        const err = mcpErrorOf(body);
+        const code = isRecord(body) && typeof body.code === "string" ? body.code : undefined;
+        if (err === undefined) envelope = ok(body);
+        // Nothing was written: the param is named, never its value (64, like any unusable input).
+        else if (code === "E_SECRET_PARAM_OVER_MCP") {
+          emitJsonOrRefusal(program, fail("E_SECRET_PARAM_IN_QUEUE", err.message ?? "a secret param is never queued"), EXIT_CODES.usage);
+          return;
+        } else envelope = code !== undefined ? fail(code, err.message ?? "refused") : refusalFor(this, "JOURNEY_QUEUE", err, "refused");
+      } catch (e) {
+        envelope = fail("E_JOURNEY_QUEUE", e instanceof Error ? e.message : String(e));
+      }
+      if (!envelope.ok) {
+        emitJsonOrRefusal(program, envelope);
+        return;
+      }
+      emitEnvelope(program, envelope, {
+        json: o.json === true,
+        command: "journey queue",
+        human: (data) => {
+          const callId = isRecord(data) ? String(data.callId) : "?";
+          return `queued journey '${id}' as ${callId}\nnext: jevitate mission run — then jevitate mission result ${callId}\n`;
+        },
+      });
     });
 }

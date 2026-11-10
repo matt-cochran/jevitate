@@ -117,6 +117,14 @@ describe("UsageTracker — #163 full cost by default", () => {
     expect(jevTable).toContain("2026-09-24");
   });
 
+  it("GAPS 18: prices jev-1.14.0 (the TypeSafe route's model) and its OpenRouter ids from the table", () => {
+    for (const model of ["jev-1.14.0", "typesafe/jev-1.14", "typesafe/jev-1.14-20261014"]) {
+      const usage = new UsageTracker();
+      usage.recordJudgment({ inputTokens: 1_000_000, outputTokens: 500, model });
+      expect(usage.snapshot()).toMatchObject({ jevUsd: 0.042, priced: "full", priceSource: [jevTable] });
+    }
+  });
+
   it("falls back to the generation table when OpenRouter reports no cost; a reported cost wins", () => {
     const usage = new UsageTracker();
     usage.recordGeneration({ inputTokens: 1_000_000, outputTokens: 1_000_000, model: "openai/gpt-4o-mini", task: "form.value" });

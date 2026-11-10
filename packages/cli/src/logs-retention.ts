@@ -92,7 +92,9 @@ function runsIn(root: string): { runs: Run[]; dateDirs: string[] } {
   for (const date of dates) {
     for (const name of readdirSync(join(root, date))) {
       const path = join(root, date, name);
-      const key = `${date}/${RUN_KEY.exec(name)?.[1] ?? name}`;
+      // 0.30.0: a run's evidence folder (`journey-evidence-<stamp>`) belongs to its `journey-run-<stamp>` record.
+      const stem = (RUN_KEY.exec(name)?.[1] ?? name).replace(/^journey-evidence-/, "journey-run-");
+      const key = `${date}/${stem}`;
       const run = byKey.get(key) ?? { paths: [], mtimeMs: 0 };
       run.paths.push(path);
       run.mtimeMs = Math.max(run.mtimeMs, statSync(path).mtimeMs);

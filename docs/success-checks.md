@@ -25,6 +25,29 @@ decides it. `--success` can be repeated, and every check must hold:
 | `responseStatus:<METHOD> <path-glob>=<2xx\|4xx\|code>[\|count=…][\|body=…]` | there was at least one matching request, and every matching response had that status (requests still awaiting a response are not judged; the check fails if none has answered). `count=` bounds how many matched; `body=` declares the JSON fields they must carry (#743) |
 | `http:GET <url>\|<assertion>[\|…]` | a GET to an allow-listed origin (a dev mail outbox, an audit endpoint) answers so that every assertion holds — polled, judged after the run. See [HTTP end-state checks](#http-end-state-checks) |
 
+### `--success` beside the job's done check (0.30.0)
+
+`--success` ends a goal run at a state: it is checked on the run's own page, at the end of this run. A
+job's done check ([contract](./contracts/done-check.md)) says whether the user's job got done: it is read
+in a fresh browser context once before the run and again after it, so it also catches a page that says
+"Saved" when nothing was stored. It uses the same syntax, limited to the kinds that name state
+(`textIncludes`, `count`, `attr`, `valueEquals`, `http`), and it lives on the job in
+`.jevitate/jobs.json`, not on the command line. Pass `--job <id>` (MCP `job`) to read it on a goal run.
+
+| Goal run | `job.attainment` | Exit under `doneCheckPolicy: "require"` (the default) |
+|---|---|---|
+| `--success` held | `unverified`, `no-check` | `0`: the independent check verified the pass |
+| `--job <id>`: the check read false before, true after | `achieved` | `0` |
+| `--job <id>`: the check still read false when the run ended | `not-achieved` | `1` |
+| `--job <id>`: the check already read true before the run | `unverified`, `already-true` | `2`, unless `--success` also held |
+| neither `--success` nor `--job`: a find-out goal's grounded answer accepted the pass | `unverified`, `no-check` | `0`: the grounded answer is the run's own verification (it claims no end state) |
+| neither `--success` nor `--job`: the model's grounded judgment alone accepted the pass | `unverified`, `no-check` | `2` |
+| any of the above on a target declared `trust: "harness"` ([harness](./harness.md)) | `unverified`, `harness` (when the job's check was read) | `0`: a harness shows feasibility, never a job verdict |
+
+`--require-done-check` makes a pass that only `--success` or a find-out goal's grounded answer verified exit `2` as well; `"doneCheckPolicy":
+"advisory"` in `.jevitate/project.json` keeps every unverified pass at `0`. The run warns on stderr when a
+pass was judged by the model alone. See [did the job get done?](./outcomes.md#did-the-job-get-done).
+
 ## HTTP end-state checks
 
 Some writes have no effect on the app's own UI: a password reset sends an email. When a dev
@@ -279,7 +302,9 @@ contacts are overdue and report the count") has no page state to assert on, so
 text the run actually observed on a page — before accepting it. An ungrounded report
 is rejected and the model keeps looking; the run is `succeeded` only once a report is
 accepted, and the accepted answer (with its grounding evidence) is returned as
-`answer`. Never Jev's self-report: the same independent-grounding rule the page/network
+`answer`. From 0.30.0 such a pass reads `job.attainment: "unverified"` (no job's check was read), and it
+still exits `0`: the grounded answer is the run's own verification, and a find-out claims no end state, so
+`doneCheckPolicy: "require"` does not fold it to `2`. `--require-done-check` does (see [`--success` beside the job's done check](#--success-beside-the-jobs-done-check-0300)). Never Jev's self-report: the same independent-grounding rule the page/network
 checks get. A figure counts as a stated figure only when it stands free (`$25`, `25%`,
 `1,234`, `5GB`, `24h`); digits inside a word (`2FA`, `v2`, `S3`) do not, figures the goal
 itself states need no page, and a rejection quotes the offending token.

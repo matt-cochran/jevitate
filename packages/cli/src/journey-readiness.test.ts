@@ -23,6 +23,7 @@ interface ReviewOverrides {
   catalog?: JourneyReview["catalog"];
   verify?: unknown;
   change?: unknown;
+  job?: unknown;
 }
 
 const GOOD_CATALOG = {
@@ -33,7 +34,7 @@ const GOOD_CATALOG = {
   needsReReview: [],
 };
 
-const PROVEN = { status: "recorded", verdict: "proven", at: "2026-01-01T00:00:00Z", stale: false, summary: { mutation: 1 } };
+const PROVEN = { status: "recorded", verdict: "sensitive", at: "2026-01-01T00:00:00Z", stale: false, summary: { mutation: 1 } };
 
 function recording(url = "/editor"): Journey["recording"] {
   return { version: "1.0.0", site: "https://example.test", pages: [{ url, steps: [] }] };
@@ -101,6 +102,8 @@ function reviewEx(overrides: ReviewOverrides = {}): JourneyReview {
     contentHash: "a".repeat(64),
     attention: overrides.attention ?? [],
     catalog: overrides.catalog ?? GOOD_CATALOG,
+    // Owner decision "Proof role": the job gates (the latest run's verdict); achieved unless a test says otherwise.
+    job: overrides.job ?? { attainment: "achieved", basis: "done-check", doneCheckPolicy: "require", outcome: "ok" },
   } as unknown as JourneyReview;
 }
 
@@ -158,10 +161,18 @@ describe("journey readiness", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("report is incomplete without a mutation proof", async () => {
+  it("report shows a missing mutation proof without gating on it under the advisory default (owner decision: proof advisory)", async () => {
     await store.put(journey("publish"));
     const r = await receipt({ id: "publish", journeysDir }, { review: reviewDep() });
+    expect(r.checks.find((c) => c.check === "proof")).toMatchObject({ state: "not-run", advisory: true });
+    expect(r.verdict).toBe("technically-ready");
+  });
+
+  it("report is incomplete without a run that says the job happened (doneCheckPolicy require)", async () => {
+    await store.put(journey("publish"));
+    const r = await receipt({ id: "publish", journeysDir }, { review: reviewDep({ verify: PROVEN, job: { attainment: "unverified", basis: "no-run", doneCheckPolicy: "require" } }) });
     expect(r.verdict).toBe("incomplete");
+    expect(r.blockers.map((b) => b.check)).toEqual(["job"]);
   });
 
   it("report is technically-ready with a fresh proof and a current approval", async () => {
@@ -220,14 +231,15 @@ describe("journey readiness", () => {
     expect(checkOf(r, "replay", "publish")?.state).toBe("fail");
   });
 
-  it("an inconclusive proof makes the verdict inconclusive", async () => {
+  it("an inconclusive proof warns on its checks-strength line but does not gate under the advisory default (owner clarification 2026-11-09)", async () => {
     await store.put(journey("publish"));
-    const run = vi.fn(async () => ({ outcome: "ok" }));
+    const run = vi.fn(async () => ({ outcome: "ok", job: { attainment: "achieved", basis: "done-check" } }));
     const r = await receipt(
       { id: "publish", mode: "replay", baseUrl: "https://example.test", journeysDir },
       { review: reviewDep({ verify: { status: "recorded", verdict: "inconclusive", at: "2026-01-01T00:00:00Z", stale: false, reason: "flaky", summary: {} } }), run: run as unknown as Run },
     );
-    expect(r.verdict).toBe("inconclusive");
+    expect(r.checks.find((c) => c.check === "proof")).toMatchObject({ state: "inconclusive", advisory: true });
+    expect(r.verdict).toBe("technically-ready");
   });
 
   // #708: non-mutation-testable is classified explicitly; it is never a proven check.
@@ -410,7 +422,8 @@ describe("journey readiness", () => {
       { id: "producer", with: "consumer", mode: "prove", baseUrl: "https://example.test", requests: "x", params: { threadId: "t", replyIdentity: "r" }, journeysDir },
       { review: reviewDep(() => ({ verify: PROVEN })), run: run as unknown as Run, chain: chainBinding(), verify: verify as unknown as Verify },
     );
-    expect(checkOf(r, "proof", "consumer")).toMatchObject({ state: "not-run", detail: "the chain bound no request for 'consumer' — supply a --requests line that matches a discovered record" });
+    expect(checkOf(r, "proof", "consumer")).toMatchObject({ state: "not-run" });
+    expect(checkOf(r, "proof", "consumer")?.detail).toMatch(/^the chain bound no request for 'consumer' — supply a --requests line that matches a discovered record/);
   });
 
   // #624 — a chain that rejected a record names the rejection in replay's fail detail and prove's hint.

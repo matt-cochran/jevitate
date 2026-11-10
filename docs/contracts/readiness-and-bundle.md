@@ -14,6 +14,7 @@ catalog review and link resolution). Neither adds a proof, an approval or an aut
 | `--env <name>` / `--base-url <url>` | the target; **required** for `replay` and `prove` |
 | `--param k=v`, `--requests <file>` | inputs for `replay`/`prove` (`--requests` for a pair, as `journey chain`) |
 | `--storage-state`, `--fixtures` | as `journey run` |
+| `--secret-field <binding>` | `replay`/`prove`: a secret parameter from the environment, as `journey verify` (#827); the target's `targets.json` `secretFields` apply too. Over MCP, `journey_readiness` reads only `targets.json` |
 | `--project`, `--journeys-dir` | locations (#585) |
 | `--json` | the receipt (§3) as the envelope's data |
 
@@ -50,12 +51,16 @@ Each check is reported per Journey with one state:
 | `schema` | the Journey loads, including #582 `outputs`/`inputs` and #583 `boundary` | yes |
 | `handoff` | pair only: #582 compatibility (`E_HANDOFF_INCOMPATIBLE` fails) | yes |
 | `boundary` | the Journey declares a prepare-only boundary (absent: `not-run` with a note; never a fail) | yes |
-| `review-strict` | `journey review --strict` attention items (each one is a blocker) | yes |
+| `review-strict` | `journey review --strict` attention items (each one is a blocker), except an item only a person's approval settles ("Changed since approval", "Catalog links need re-review"): that one is `awaiting-human`, listed under `awaitingHuman` with `jevitate journey promote <id> --reviewed-hash <hash>` or `jevitate job\|persona review <id>`, never a blocker pointing back to strict review (#808). `journey review --strict` itself still exits 1 | yes |
 | `annotations` | every step has an objective; a pending draft is `awaiting-human` | yes |
 | `catalog` | the job/persona links resolve; `draft`/`stale` approvals are `awaiting-human` | yes |
-| `proof` | `.verify/<id>.json`: `proven` passes, `insensitive` fails, `inconclusive` stays inconclusive, a hash mismatch is `stale`, none is `not-run`. One exception: a read-only Journey that takes no input, whose proof paired nothing (only unpaired checks), passes — nothing a mutation could break | reads |
+| `job` | in `report`, the review sheet's `job` (the latest `journey-run-*.json` of this Journey's executable content); in `replay` and `prove`, the job verdict of the replay this receipt just ran, never an earlier run's (none read: `unverified`, basis `replay-no-verdict`). `achieved` passes only when that same run's steps passed (`outcome: ok`); otherwise it reads `unverified`, basis `run-not-passed`; `not-achieved` fails; `unverified` is `not-run` (no run of this version: `no-run`, `earlier-version`) or `inconclusive` (any other basis) under `doneCheckPolicy: require`, with a blocker naming the reason and the fix. Under `advisory`, or on a `harness` target, it is `not-run` with `advisory: true` | reads |
+| `proof` | `.verify/<id>.json`: `sensitive` passes, `insensitive` fails, `inconclusive` stays inconclusive, a hash mismatch is `stale`, none is `not-run`. One exception: a read-only Journey that takes no input, whose proof paired nothing (only unpaired checks), passes — nothing a mutation could break. Under `mutationProofPolicy: advisory` (the default) every state, `inconclusive` included, carries `advisory: true` and no blocker. A stale detail names its cause (`staleCause`, #816) | reads |
 | `replay` | the run (or chain) outcome, plus the #583 handback state when declared (`prepared` passes; `submitted` fails) | `replay`/`prove` only |
 | `promotion` | promoted with a current approval passes; a draft or stale approval is `awaiting-human` | yes |
+
+A check object may carry `advisory: true`: the check is shown but not counted by the verdict. A `job` blocker's
+fix comes first in `next`, whatever the verdict.
 
 Evidence reuse: a proof record is reused only while its bound hash equals the Journey's current
 review hash (the existing rule). A changed step, assertion, contract or boundary makes it `stale`.
@@ -79,17 +84,35 @@ review hash (the existing rule). A changed step, assertion, contract or boundary
 
 `verdict` is computed by code, in this order:
 
-1. Any `fail` gives `blocked`.
-2. Otherwise, any `inconclusive` gives `inconclusive`. A passing replay never hides an inconclusive
-   proof.
-3. Otherwise, any required `stale` or `not-run` gives `incomplete`. The required checks are `proof` in
-   every mode, and `replay` in `replay`/`prove`.
-4. Otherwise the verdict is `technically-ready`.
+1. Advisory checks are skipped.
+2. Any `fail` gives `blocked`.
+3. Otherwise, any `inconclusive` gives `inconclusive`. A passing replay never hides an inconclusive
+   proof that gates.
+4. Otherwise, any required `stale` or `not-run` gives `incomplete`. The required checks are `job` and
+   `proof` (unless advisory) in every mode, and `replay` in `replay`/`prove`.
+5. Otherwise the verdict is `technically-ready`.
 
 `awaiting-human` never changes `verdict`; it is listed separately. A receipt never contains a param
 value, page text, a secret or a full URL (origins only).
 
 Exit codes: `technically-ready` 0, `blocked` 1, `inconclusive` / `incomplete` 2.
+
+Changes in 0.30.0 (`journey readiness`, `journey review --strict`):
+
+| Case | 0.29.0 | 0.30.0 |
+|---|---|---|
+| readiness, no proof, advisory | 2 incomplete | 0 (if the job passes) |
+| readiness, stale proof, advisory | 2 incomplete | 0 |
+| readiness, insensitive proof, advisory | 1 blocked | 0 |
+| readiness, unwaived inconclusive proof, advisory | 2 | 0 |
+| readiness, latest run job not-achieved | — | 1 blocked |
+| readiness, job unverified, `doneCheckPolicy: require` | — | 2 (incomplete / inconclusive) |
+| readiness, stale approval only (#808) | 1 blocked | 0, `awaitingHuman` |
+| review --strict, stale or insensitive proof, advisory | 1 | 0 (○ line) |
+| review --strict, latest run job not-achieved | — | 1 |
+
+Unchanged: the `require-*` policies, except that a receipt with no engine no longer satisfies
+`require-sensitive`, and `review --strict` on a stale approval (still 1).
 
 ## 4. `jevitate journey bundle <id> [--with <toId>] --out <dir>`
 

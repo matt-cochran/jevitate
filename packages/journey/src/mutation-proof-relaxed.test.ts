@@ -1,21 +1,25 @@
 import { describe, it, expect } from "vitest";
-import type { RecordedStep } from "@jevitate/recording";
+import type { RecordedStep, Step } from "@jevitate/recording";
 import { RecordingSchema } from "@jevitate/recording";
 import {
   journeyAssertions,
   relaxedMutationReplay,
-  classifyMutation,
-  judgeAssertions,
-  mutationProofVerdict,
+  targetedMutationReplay,
+  targetedControlReplay,
   assertionSiteKey,
   type Journey,
   type MutationRunResult,
+  mutationPlanSites,
+  type MutationPlan,
 } from "./index.js";
+import { classifyMutation, judgeAssertions as judgeSites, mutationProofVerdict } from "@jevitate/adjudicator";
+/** #812: the adjudicator's judging of a Journey's own assertion sites, as `journey verify` gathers them. */
+const judgeAssertions = (j: Journey, plan: MutationPlan, results: ReadonlyMap<string, MutationRunResult>) =>
+  judgeSites(journeyAssertions(j), plan, results, new Map(mutationPlanSites(j).map((s) => [s.site, s])));
 
 // #567 — a relaxed mutated step must stay schema-valid: `expect` is REQUIRED by the Recording schema
 // for fill/click/etc, so instead of deleting it the relaxed step gets a weak postcondition that does
-// not depend on the mutated value — `visible` on the step's own target, or the no-claim
-// `urlIncludes ""` when the step kind has no target.
+// makes no new assertion about the value or target survival: the explicit no-claim `urlIncludes ""`.
 
 const meta = { id: "issue567", name: "Issue 567", promoted: false, params: ["text"], createdAtIso: "2026-10-07T00:00:00Z" };
 const fillValueEquals = { kind: "valueEquals" as const, target: { label: "Text" }, value: "hello" };
@@ -36,14 +40,68 @@ const staleFill = { kind: "stale-value" as const, step: 2, id: "stale-value:2" }
 const blockClick = { kind: "block-write" as const, step: 3, id: "block-write:3" };
 
 describe("#567 relaxed replay keeps the mutated step schema-valid", () => {
+  const postcondition = { kind: "textIncludes" as const, target: { testId: "result" }, text: "Applied" };
+  const actions: Step[] = [
+    { kind: "fill", target: { label: "Text" }, value: { redacted: false, value: "hello" }, expect: postcondition },
+    { kind: "click", target: { role: "button", name: "Apply" }, expect: postcondition },
+    { kind: "select", target: { label: "Option" }, value: { redacted: false, value: "one" }, expect: postcondition },
+    { kind: "upload", target: { label: "File" }, file: { redacted: false, value: "fixture.txt" }, expect: postcondition },
+    { kind: "press", key: "Enter", expect: postcondition },
+    { kind: "navigate", url: "/editor", expect: postcondition },
+    { kind: "reload", expect: postcondition },
+  ];
+  it.each(actions)("waives $kind without inventing target survival or changing the action", (action) => {
+    const journey = issueJourney();
+    journey.recording.pages[0]!.steps[2]!.step = { ...action, waitFor: { maxMs: 30_000 } } as Step;
+    const before = structuredClone(journey);
+    const relaxed = relaxedMutationReplay(journey, blockClick);
+    expect(RecordingSchema.safeParse(relaxed.journey.recording).success).toBe(true);
+    expect(relaxed.journey.recording.pages[0]!.steps[2]!.step).toEqual({ ...action, expect: { kind: "urlIncludes", text: "" } });
+    expect(journey).toEqual(before);
+  });
+
+  it("uses identical waived DOM checks in targeted/control clones while retaining requests and the final exact oracle", () => {
+    const journey = issueJourney();
+    const steps = journey.recording.pages[0]!.steps;
+    steps[0]!.step = { ...steps[0]!.step, waitFor: { maxMs: 4_000 } } as Step;
+    steps[1]!.step = { ...steps[1]!.step, waitFor: { maxMs: 5_000 } } as Step;
+    steps[2]!.step = { ...steps[2]!.step, waitFor: { maxMs: 6_000 } } as Step;
+    steps[2]!.expectRequests = [
+      { kind: "responseStatus", method: "POST", pathGlob: "/api/save", status: { class: 2 } },
+      { kind: "requestMade", method: "GET", pathGlob: "/api/status" },
+    ];
+    const before = structuredClone(journey);
+    for (const replay of [
+      targetedMutationReplay(journey, staleFill, "end-state:0", ["step:3"], { params: { text: "hello" } }),
+      targetedControlReplay(journey, staleFill, ["step:3"]),
+    ]) {
+      const copied = replay.journey.recording.pages[0]!.steps;
+      expect(RecordingSchema.safeParse(replay.journey.recording).success).toBe(true);
+      expect(copied[0]).toEqual(before.recording.pages[0]!.steps[0]);
+      for (const index of [1, 2]) {
+        const original = before.recording.pages[0]!.steps[index]!.step;
+        const generated = copied[index]!.step;
+        expect("expect" in generated && generated.expect).toEqual({ kind: "urlIncludes", text: "" });
+        expect("waitFor" in generated).toBe(false);
+        expect(generated.kind).toBe(original.kind);
+        if ("target" in original) expect("target" in generated && generated.target).toEqual(original.target);
+      }
+      expect(copied[2]!.expectRequests).toEqual(steps[2]!.expectRequests);
+      expect(journeyAssertions(replay.journey).filter((site) => site.where === "step-request").map(assertionSiteKey)).toEqual(["step-request:3:0", "step-request:3:1"]);
+      expect(replay.relaxedStepRequests).toBeUndefined();
+      expect(replay.journey.metadata.endState).toEqual(before.metadata.endState);
+    }
+    expect(journey).toEqual(before);
+  });
+
   it("a stale-value relaxed replay of a fill passes Recording schema validation", () => {
     const relaxed = relaxedMutationReplay(issueJourney(), staleFill);
     expect(() => RecordingSchema.parse(relaxed.journey.recording)).not.toThrow();
   });
 
-  it("a stale-value relaxed fill's expect is visible on the step's own target", () => {
+  it("a stale-value relaxed fill's expect makes no replacement claim", () => {
     const relaxed = relaxedMutationReplay(issueJourney(), staleFill);
-    expect(relaxed.journey.recording.pages[0]!.steps[1]!.step).toMatchObject({ expect: { kind: "visible", target: { label: "Text" } } });
+    expect(relaxed.journey.recording.pages[0]!.steps[1]!.step).toMatchObject({ expect: { kind: "urlIncludes", text: "" } });
   });
 
   it("a block-write relaxed replay of a click passes Recording schema validation", () => {
@@ -51,7 +109,7 @@ describe("#567 relaxed replay keeps the mutated step schema-valid", () => {
     expect(() => RecordingSchema.parse(relaxed.journey.recording)).not.toThrow();
   });
 
-  it("a block-write relaxed replay of a target-less navigate uses the no-claim urlIncludes fallback", () => {
+  it("a block-write relaxed replay of a target-less navigate uses the same no-claim urlIncludes", () => {
     const relaxed = relaxedMutationReplay(issueJourney(), { kind: "block-write", step: 1, id: "block-write:1" });
     expect(relaxed.journey.recording.pages[0]!.steps[0]!.step).toMatchObject({ expect: { kind: "urlIncludes", text: "" } });
   });
@@ -74,6 +132,6 @@ describe("#567 the issue shape is judged on the relaxed replay", () => {
 
   it("the issue shape's proof verdict is proven", () => {
     const assertions = judgeAssertions(issueJourney(), { mutations: [staleFill], pairs: [{ site: "end-state:0", mutation: staleFill.id }] }, new Map([[staleFill.id, relaxedFailsAtEndState]]));
-    expect(mutationProofVerdict({ basePassed: true, mutations: [relaxedFailsAtEndState], assertions }).verdict).toBe("proven");
+    expect(mutationProofVerdict({ basePassed: true, mutations: [relaxedFailsAtEndState], assertions }).verdict).toBe("sensitive");
   });
 });

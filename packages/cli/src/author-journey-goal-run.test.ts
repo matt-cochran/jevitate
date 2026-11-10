@@ -85,7 +85,11 @@ async function cli(args: string[]): Promise<{ out: string; err: string; exitCode
     explore: { judge: new FakeJudgmentGateway({}), gen: new FakeGenerationGateway(), targetsConfigPath: join(dir, "no-targets.json") },
   });
   program.configureOutput({ writeOut: (s) => out.push(s), writeErr: (s) => err.push(s) });
-  program.exitOverride();
+  const overrideExit = (command: ReturnType<typeof buildProgram>): void => {
+    command.exitOverride();
+    for (const child of command.commands) overrideExit(child);
+  };
+  overrideExit(program);
   process.exitCode = undefined;
   await program.parseAsync(args, { from: "user" });
   const exitCode = process.exitCode;
@@ -98,6 +102,34 @@ const BASE = ["explore-author-journey", "--url", URL, "--goal", "sign in", "--su
 const PW = "author-pw-canary-41c9";
 
 describe("explore-author-journey runs explore's goal run (#369)", () => {
+  it("forwards the bounded render wait for native goal exploration (#837)", async () => {
+    const result = await cli(["explore", "--url", URL, "--goal", "read the page", "--render-wait-ms", "60000", "--fake-ai", "--json"]);
+    expect(result.exitCode ?? 0).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ renderWaitMs: 60000 });
+  });
+
+  it.each(["0", "-1", "1.5", "NaN", "Infinity", "300001"])("refuses render wait %s before a browser or take (#837)", async (value) => {
+    for (const command of [BASE, ["explore", "--url", URL, "--goal", "read", "--fake-ai"]]) {
+      await expect(cli([...command, "--render-wait-ms", value])).rejects.toMatchObject({ code: "commander.invalidArgument" });
+      expect(calls).toHaveLength(0);
+    }
+  });
+
+  it("leaves the core default unchanged when no render wait is supplied (#837)", async () => {
+    await cli([...BASE, "--json"]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).not.toHaveProperty("renderWaitMs");
+  });
+
+  it("refuses an unsupported strategy instead of silently ignoring render wait (#837)", async () => {
+    const result = await cli(["explore", "--url", URL, "--strategy", "coverage", "--render-wait-ms", "60000", "--fake-ai", "--json"]);
+    expect(result.exitCode).toBe(64);
+    expect(JSON.parse(result.out)).toMatchObject({ ok: false, error: { code: "E_EXPLORE_ARGS" } });
+    expect(result.out).toContain("--strategy goal");
+    expect(calls).toHaveLength(0);
+  });
+
   it("every newly accepted run-shaping flag reaches the discovery run", async () => {
     process.env.JEV_AUTHOR_PW = PW;
     process.env.JEV_AUTHOR_SEED = "JBSWY3DPEHPK3PXP";
@@ -123,6 +155,7 @@ describe("explore-author-journey runs explore's goal run (#369)", () => {
       "--reply-ceiling-ms", "9000",
       "--reply-max-chars", "120",
       "--job-wait-ms", "7000",
+      "--render-wait-ms", "45000",
       "--deny", "Archive",
       "--paid", "/^Analyze/i",
       "--allow-control", "^Generate Your First Key$",
@@ -154,6 +187,7 @@ describe("explore-author-journey runs explore's goal run (#369)", () => {
       saveStorageState: join(dir, "session-out.json"),
       conversation: { replyWaitMs: 5000, replyQuietMs: 1500, replyCeilingMs: 9000, replyMaxChars: 120, jobWaitMs: 7000 },
       hangReplays: 0,
+      renderWaitMs: 45000,
       emulation: { viewport: { width: 375, height: 812 }, geolocation: { latitude: 41.6, longitude: -70.9 } },
       screenshots: { mode: "steps" },
     });

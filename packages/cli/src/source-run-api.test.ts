@@ -14,7 +14,10 @@ import {
   type SharedJourneyFile,
 } from "@jevitate/sources";
 import type { JourneyRunResult } from "@jevitate/runtime";
-import { safeRunPolicy } from "@jevitate/domain";
+import { journeyExitCode, safeRunPolicy, type JourneyRunOutcome } from "@jevitate/domain";
+import { DoneCheckRun } from "./journey-done-check-hook.js";
+import { currentDoneCheckScope } from "./journey-done-check-scope.js";
+import { doneCheckExitInput } from "./journey-done-check.js";
 import { addSource, trustJourney, type SourceApiDeps } from "./source-api.js";
 import { runSourceJourney, realResolvedJourneyRunner, type RunResolvedJourney } from "./source-run-api.js";
 import { JourneyRequiresAuthError } from "./journey-api.js";
@@ -109,6 +112,46 @@ describe("#26 runSourceJourney (run-gate wired)", () => {
     // The gate handed the runner the resolved SharedJourneyFile itself.
     expect(spy.calls[0].file.metadata.id).toBe("checkout");
     expect(spy.calls[0].file.declaredOrigins).toEqual([ORIGIN]);
+  });
+
+  test("0.30.0 §5: decides the run mode of the Journey's site, hands it to the runner and records run.mode / run.target.trust", async () => {
+    const s = await makeStores();
+    const { git } = makeFakeGit((d) => seedRemote(d, [sharedJourney("checkout")]));
+    const modes: unknown[] = [];
+    const runJourney: RunResolvedJourney = async (_file, _params, _policy, _storageState, _emulation, _browser, _siteGate, runMode) => {
+      modes.push(runMode?.mode);
+      return { outcome: "ok", output: {} } satisfies JourneyRunResult;
+    };
+    const deps: SourceApiDeps & { runJourney: RunResolvedJourney } = { sourcesDir: s.sourcesDir, lockPath: s.lockPath, trust: s.trust, ack: s.ack, git, runJourney };
+    await addSource(deps, { name: "shop", gitUrl: "https://git.test/shop.git", acceptTou: true, ackedBy: "matthew" });
+
+    // Over MCP too: a source Journey runs once a person trusted it (`source trust`), so no approval-channel refusal.
+    const result = await runAsMcpInvocation(() => runSourceJourney(deps, { sourceName: "shop", journeyId: "checkout", params: {} }));
+
+    expect(modes).toEqual(["automation"]);
+    expect((result as { run?: unknown }).run).toMatchObject({ mode: "automation", target: { origin: ORIGIN } });
+  });
+
+  test("H5: the run reads its job's done check inside a done-check scope; the result carries the job and the policy to fold it with", async () => {
+    const s = await makeStores();
+    const { git } = makeFakeGit((d) => seedRemote(d, [sharedJourney("checkout")]));
+    let scoped = false;
+    const runJourney: RunResolvedJourney = async () => {
+      // As the done-check hooks do inside `realResolvedJourneyRunner`: decide in the scope the surface opened.
+      const scope = currentDoneCheckScope();
+      scoped = scope instanceof DoneCheckRun;
+      if (scope instanceof DoneCheckRun) scope.decide({ attainment: "not-achieved", basis: "done-check" });
+      return { outcome: "ok", output: {} } satisfies JourneyRunResult;
+    };
+    const deps: SourceApiDeps & { runJourney: RunResolvedJourney } = { sourcesDir: s.sourcesDir, lockPath: s.lockPath, trust: s.trust, ack: s.ack, git, runJourney };
+    await addSource(deps, { name: "shop", gitUrl: "https://git.test/shop.git", acceptTou: true, ackedBy: "matthew" });
+
+    const result = await runSourceJourney(deps, { sourceName: "shop", journeyId: "checkout", params: {}, catalogDir: null, journeysDir: s.root });
+
+    expect(scoped).toBe(true);
+    expect(result).toMatchObject({ outcome: "ok", job: { attainment: "not-achieved", basis: "done-check" }, doneCheckPolicy: "require" });
+    // Owner decision 2: the CLI folds it to exit 1, as `journey run` does.
+    expect(journeyExitCode(result.outcome as JourneyRunOutcome, doneCheckExitInput(result.job, result.doneCheckPolicy))).toBe(1);
   });
 
   test("#118: passes an optional storageState PATH through to the runner seam", async () => {

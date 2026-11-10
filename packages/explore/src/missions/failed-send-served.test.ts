@@ -78,7 +78,11 @@ describe("#241 — a send that started nothing is a failed send, not a pending r
       expect(judge.states.some((s) => s.history.some((h) => /message was not sent: .*look for a send \/ continue control/.test(h)))).toBe(true);
       expect(result.transcript.some((e) => /the reply is still on its way/.test(e.reason ?? ""))).toBe(false);
       expect(result.run.stop).toBe("no-progress");
-      expect(result.transcript.filter((e) => e.op === "wait").length).toBeLessThanOrEqual(4);
+      // The page's first balance poll, landing in a wait after the failed send, is not the send's
+      // work: no wait reads as "still working", so the quiet-wait cap ends the run after exactly 3.
+      const waits = result.transcript.filter((e) => e.op === "wait");
+      expect(waits.filter((e) => /the app is still working/.test(e.reason ?? ""))).toEqual([]);
+      expect(waits.length).toBe(3);
       // Never the reply ceiling per wait: bounded well below the old listen-on loop (generous under load).
       expect(ms).toBeLessThan(120_000);
     },

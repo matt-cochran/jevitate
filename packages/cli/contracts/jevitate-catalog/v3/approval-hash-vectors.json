@@ -1,0 +1,75 @@
+{
+  "algorithm": "jevitate-content-hash-v2",
+  "canonicalization": "UTF-8 JSON; arrays retain order; object keys sort lexicographically by unsigned UTF-16 code units; no whitespace",
+  "vectors": [
+    {
+      "kind": "persona",
+      "input": {
+        "id": "owner",
+        "description": "Owns the product",
+        "role": "owner",
+        "extensions": {
+          "journeeze": {
+            "tier": "private"
+          }
+        }
+      },
+      "canonical": "{\"description\":\"Owns the product\",\"extensions\":{\"journeeze\":{\"tier\":\"private\"}},\"id\":\"owner\",\"role\":\"owner\"}",
+      "sha256": "601ca6c440f5d6d9c4a3bad5cab5b2c4a03e7ae170b49d28333e0a2762ba019e"
+    },
+    {
+      "kind": "job",
+      "input": {
+        "id": "review-work",
+        "trigger": "work is ready",
+        "motivation": "review it",
+        "outcome": "ship with confidence",
+        "personas": [
+          "owner"
+        ]
+      },
+      "canonical": "{\"id\":\"review-work\",\"motivation\":\"review it\",\"outcome\":\"ship with confidence\",\"personas\":[\"owner\"],\"trigger\":\"work is ready\"}",
+      "sha256": "2d15af87ec10aa0aad33dbc79a20ae761f35eff0ba4db3f099b43c91303463a6"
+    },
+    {
+      "kind": "unicode-order",
+      "input": {
+        "z": 1,
+        "ä": 2,
+        "a": 3,
+        "Å": 4
+      },
+      "canonical": "{\"a\":3,\"z\":1,\"Å\":4,\"ä\":2}",
+      "sha256": "3db95dddd935182a5f842fc08fd53436fbaeac1cfb62e933441643c1920312be"
+    },
+    {
+      "kind": "unicode-code-unit-order",
+      "input": {
+        "": 1,
+        "𐀀": 2,
+        "é": 3,
+        "é": 4
+      },
+      "canonical": "{\"é\":3,\"é\":4,\"𐀀\":2,\"\":1}",
+      "sha256": "e41f068bae10d342a86d2a4354424df7bd5c5b2b216f2a8742a6a02928f5acd2"
+    },
+    {
+      "kind": "journey-review",
+      "input": {
+        "metadata": {
+          "id": "review-work",
+          "name": "Review work",
+          "params": [],
+          "createdAtIso": "2026-10-24T00:00:00.000Z"
+        },
+        "recording": {
+          "version": "1.0.0",
+          "site": "http://localhost",
+          "pages": []
+        }
+      },
+      "canonical": "{\"metadata\":{\"createdAtIso\":\"2026-10-24T00:00:00.000Z\",\"id\":\"review-work\",\"name\":\"Review work\",\"params\":[]},\"recording\":{\"pages\":[],\"site\":\"http://localhost\",\"version\":\"1.0.0\"}}",
+      "sha256": "9eeb671979a5ab132877b7a8a4724f62432cac92174e017bcc0cc65870c0388e"
+    }
+  ]
+}

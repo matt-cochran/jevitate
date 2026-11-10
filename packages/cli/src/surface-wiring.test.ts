@@ -91,11 +91,23 @@ const STORED_ALLOWLIST = { allow: "#484: replays with the result's stored allow 
 /** #542: the extra-origins override is `journey run|verify --allow`; elsewhere a replay uses the Journey's own `metadata.allowedOrigins`. */
 const REPLAY_ALLOW = "#542: replays with the recorded site and the Journey's metadata.allowedOrigins; the per-run override is `journey run|verify --allow` (not an MCP/campaign argument, #484)";
 
+/** 0.30.0 §5.3/§5.4 (journey-secret-mode.ts, journey-hold.ts): only a hold's resume sets these; only `journey run` takes --secret-mode. */
+const HOLD_RESUME = {
+  resumeAtStep: "set only by `jevitate inbox resume` (journey-hold.ts resumeHold), continuing a held run",
+  heldSecretParams: "set only by `jevitate inbox resume` for a secret hold (journey-hold.ts resumeHold)",
+} as const;
+const SECRET_MODE_AUTO = "the secret mode is `auto` (journey-secret-mode.ts); only `journey run --secret-mode` narrows it";
+const QUEUED_JOURNEY_CALL = "#797: a queued Journey call carries only id, hash, non-secret params and env (QueuedJourneyCall, a closed schema): no emulation, fixtures or self-heal; run_journey takes those directly";
+const SECRET_ENV_PROCESS = "a target's secretFields `env:` sources are read from this process's environment (the default)";
+
+const TRUST_FROM_RUN_MODE = "#802: the target trust defaults to the run mode the surface decided (run-metadata `runMode`, `run.target.trust`); the option is a seam";
+
 const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // ── explore CLI: the reference surface ──────────────────────────────────────────────────────
-  "goal-strategy.ts runExploration": { hostHealth: SEAM, successAssertion: "the CLI passes --success as successChecks", nowIso: SEAM },
+  "goal-strategy.ts runExploration": { hostHealth: SEAM, successAssertion: "the CLI passes --success as successChecks", nowIso: SEAM, targetTrust: TRUST_FROM_RUN_MODE },
   // #369: every explore-author-journey take is explore's goal run — what authoring leaves out, and why.
   "explore-author.ts runExploration": {
+    targetTrust: TRUST_FROM_RUN_MODE,
     hostHealth: SEAM,
     nowIso: SEAM,
     successAssertion: "authorJourney hands every check (successAssertion included) to the take as successChecks",
@@ -107,6 +119,11 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     invariantAuthTokens: "authoring adjudicates by the goal's own checks; app invariants are `explore --invariants` on the authored path",
     journeyPrefix: NO_ANCHORED_HERE,
     minEffort: "#424: every take is checked by --success and stops at the first verified path; a minimum effort would only delay it (`explore --min-actions`)",
+    doneCheck: "#800: a take is adjudicated by the goal's --success checks; `explore --job` reads the job's done check",
+    doneCheckBasis: "#800: a take is adjudicated by the goal's --success checks; `explore --job` reads the job's done check",
+    doneCheckUnknownReason: "#800: a take is adjudicated by the goal's --success checks; `explore --job` reads the job's done check",
+    doneCheckPolicy: "#800: a take is adjudicated by the goal's --success checks; `explore --job` reads the job's done check",
+    requireDoneCheck: "#800: a take is adjudicated by the goal's --success checks; `explore --job` reads the job's done check",
     blockOffAllowlistNavigation: "#521: an authored Journey may cross to an IdP or checkout like any Journey; the navigation guard is `explore --block-off-allowlist-navigation`'s",
   },
   "coverage-strategy.ts runCoverageMission": { hostHealth: SEAM, nowIso: SEAM },
@@ -172,12 +189,13 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // #497: the labels backfill replays with its own label-reading observer, never a whole interpreter.
   "journey-labels-migrate-api.ts runJourneyProgrammatically": { interpreter: OBSERVER_NOT_INTERPRETER },
   "run.ts runJourneyProgrammatically": {
+    ...HOLD_RESUME,
     onRawOutput: "only `journey chain` hands a run's output on to a page",
     assertRunnable: MCP_RUN_GATE,
-    runGuardTargetsFile: GUARD_TARGETS_SEAM, fixtureBaseDir: FIXTURE_BASE_DIR, account: SITE_ACCOUNT, interpreter: ANNOTATE_OBSERVER, mask: MASK_INTERNAL, observer: OBSERVER_INTERNAL, session: WHOLE_JOURNEY, stopAfterStep: WHOLE_JOURNEY },
+    fixtureBaseDir: FIXTURE_BASE_DIR, account: SITE_ACCOUNT, interpreter: ANNOTATE_OBSERVER, mask: MASK_INTERNAL, observer: OBSERVER_INTERNAL, session: WHOLE_JOURNEY, stopAfterStep: WHOLE_JOURNEY },
   "journey-prefix.ts runJourneyProgrammatically": {
+    ...HOLD_RESUME, secretMode: SECRET_MODE_AUTO, secretEnv: SECRET_ENV_PROCESS,
     onRawOutput: "only `journey chain` hands a run's output on to a page",
-    boundSecretParams: "only `journey run` resolves a secret from an operator binding; this path takes values through params",
     assertRunnable: MCP_RUN_GATE,
     runGuardTargetsFile: GUARD_TARGETS_SEAM,
     runRecorder: RUN_RECORD_ELSEWHERE,
@@ -209,6 +227,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     selfHealer: "a demo never self-heals: a Journey that no longer replays is a stale demo (exit 1)",
   },
   "demo-aspect-api.ts runJourneyProgrammatically": {
+    ...HOLD_RESUME, secretMode: SECRET_MODE_AUTO, secretEnv: SECRET_ENV_PROCESS,
     onRawOutput: "only `journey chain` hands a run's output on to a page",
     boundSecretParams: "only `journey run` resolves a secret from an operator binding; this path takes values through params",
     assertRunnable: MCP_RUN_GATE,
@@ -229,23 +248,60 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     session: WHOLE_JOURNEY,
     stopAfterStep: WHOLE_JOURNEY,
   },
+  // #801: every shortest-path candidate is a full replay of the Journey as recorded, less the removed steps.
+  "journey-shorten.ts runJourneyProgrammatically": {
+    resumeAtStep: "#801: every candidate is a full replay from step 1; a hold's resume is `jevitate inbox resume`",
+    heldSecretParams: "#801: a candidate is a proof replay (asProof) and never holds for a person, so nothing resumes typing a secret",
+    stopAfterStep: "#801: every candidate is a full replay; a prefix is an anchored mission's (journey-prefix.ts)",
+    session: "#801: every candidate opens a fresh browser of its own; an already-open session would carry the last candidate's state into the next",
+    heal: "#801: a candidate must replay as recorded; a healed step would hide a dropped one, so it has no change context",
+    selfHealer: "#801: a candidate must replay as recorded; a healed step would hide a dropped one (policy is safeRunPolicy())",
+    assertRunnable: MCP_RUN_GATE,
+    runRecorder: "#801: a candidate is a search probe, not a run; the report (and the draft) is the record",
+    onRawOutput: "only `journey chain` hands a run's output on to a page",
+    screenshots: "#801: a candidate only needs its done-check verdict; capture is `journey run --screenshots` on the draft",
+    observer: OBSERVER_INTERNAL,
+    interpreter: ANNOTATE_OBSERVER,
+    mask: MASK_INTERNAL,
+    actionDeltas: NO_DELTAS_HERE,
+    fixtureBaseDir: FIXTURE_BASE_DIR,
+  },
   "load-cli.ts runJourneyLoadTest": { policy: "a load run replays with the fail-closed safeRunPolicy()" },
   "mcp-api.ts runJourneyProgrammatically": {
+    ...HOLD_RESUME, secretMode: SECRET_MODE_AUTO,
     onRawOutput: "only `journey chain` hands a run's output on to a page",
-    boundSecretParams: "a Journey that needs a secret doesn't run over MCP",
     allow: REPLAY_ALLOW,
     fixtureBaseDir: FIXTURE_BASE_DIR,
     mask: MASK_INTERNAL,
     observer: OBSERVER_INTERNAL,
     account: SITE_ACCOUNT,
-    browserPortFactory: SEAM,
     interpreter: ANNOTATE_OBSERVER,
     session: WHOLE_JOURNEY,
     stopAfterStep: WHOLE_JOURNEY,
   },
-  "check-execute.ts runJourneyProgrammatically": {
+  // #797: a queued Journey call (queue_journey / `journey queue`), drained by `mission run` as run_journey runs it.
+  "mission-queue-runner.ts runJourneyProgrammatically": {
+    ...HOLD_RESUME, secretMode: SECRET_MODE_AUTO,
     onRawOutput: "only `journey chain` hands a run's output on to a page",
-    boundSecretParams: "only `journey run` resolves a secret from an operator binding; this path takes values through params",
+    allow: REPLAY_ALLOW,
+    fixtureBaseDir: FIXTURE_BASE_DIR,
+    mask: MASK_INTERNAL,
+    observer: OBSERVER_INTERNAL,
+    account: SITE_ACCOUNT,
+    interpreter: ANNOTATE_OBSERVER,
+    session: WHOLE_JOURNEY,
+    stopAfterStep: WHOLE_JOURNEY,
+    stepResponseTimeoutMs: STEP_RESPONSE_DEFAULT,
+    actionDeltas: NO_DELTAS_HERE,
+    screenshots: NO_SCREENSHOTS_HERE,
+    emulation: QUEUED_JOURNEY_CALL,
+    fixtures: QUEUED_JOURNEY_CALL,
+    heal: QUEUED_JOURNEY_CALL,
+    selfHealer: QUEUED_JOURNEY_CALL,
+  },
+  "check-execute.ts runJourneyProgrammatically": {
+    ...HOLD_RESUME, secretMode: SECRET_MODE_AUTO, secretEnv: SECRET_ENV_PROCESS,
+    onRawOutput: "only `journey chain` hands a run's output on to a page",
     assertRunnable: MCP_RUN_GATE,
     runGuardTargetsFile: GUARD_TARGETS_SEAM,
     runRecorder: RUN_RECORD_ELSEWHERE,
@@ -263,6 +319,8 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
 
   // ── mission run queue (MCP queue_exploration) ───────────────────────────────────────────────
   "mission-queue-runner.ts runExploration": {
+    targetTrust: TRUST_FROM_RUN_MODE,
+    renderWaitMs: "#837: queued MissionRequest has no per-run render bound; queued goals keep the engine default, while direct explore/author and suite goal items accept the bounded override",
     blockOffAllowlistNavigation: QUEUE_NARROW,
     secretCommand: "#324: a cmd: secret source runs an operator command — explore --allow-secret-cmd only, never a queued or suite mission",
     secretCommandAttempts: "#359: the bound on a cmd: secret source's command runs — goes with secretCommand (explore --allow-secret-cmd only)",
@@ -323,6 +381,12 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
 
   // ── check suites ────────────────────────────────────────────────────────────────────────────
   "check-execute.ts runExploration": {
+    targetTrust: TRUST_FROM_RUN_MODE,
+    doneCheck: "#800: a suite item takes no --job (suite-explore-options excludes it); a suite gates on its items' --success checks",
+    doneCheckBasis: "#800: a suite item takes no --job (suite-explore-options excludes it); a suite gates on its items' --success checks",
+    doneCheckUnknownReason: "#800: a suite item takes no --job (suite-explore-options excludes it); a suite gates on its items' --success checks",
+    doneCheckPolicy: "#800: a suite item takes no --job (suite-explore-options excludes it); a suite gates on its items' --success checks",
+    requireDoneCheck: "#800: a suite item takes no --job (suite-explore-options excludes it); a suite gates on its items' --success checks",
     secretCommand: "#324: a cmd: secret source runs an operator command — explore --allow-secret-cmd only, never a queued or suite mission",
     secretCommandAttempts: "#359: the bound on a cmd: secret source's command runs — goes with secretCommand (explore --allow-secret-cmd only)",
     hostHealth: SEAM,
@@ -414,6 +478,8 @@ const ENVELOPES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     partialReport: "#424: a usability review is judged by its UX findings and the job's checks, never by a reported answer",
     missCause: "not surfaced: a usability review carries no goalReason (its job outcome is advisory; reason names the miss)",
     actionableControl: "not surfaced: actionable-control recovery is a goal-run handoff; a usability review stays advisory and does not offer a resume path",
+    boundary: "not surfaced: a usability review is advisory and carries no goalOutcome; its reason line names the boundary signal",
+    noRouteShortfall: "not surfaced: a goal-run diagnostic for the no-route-found floor; a usability review carries no goalReason",
   },
 };
 

@@ -139,7 +139,7 @@ export interface ApprovalDeps {
 
 /** What a person confirms: the item, the content hash its sheet shows, and the waivers given with it. */
 export interface ApprovalRequest {
-  readonly kind: "journey" | "demo" | "persona" | "job";
+  readonly kind: "journey" | "demo" | "persona" | "job" | "annotations";
   readonly id: string;
   readonly contentHash: string;
   readonly waivers: readonly { readonly flag: string; readonly reason: string; readonly detail?: string }[];
@@ -179,7 +179,7 @@ export function approvalRefusal(err: unknown): { code: string; message: string }
 }
 
 function approveCommand(r: ApprovalRequest): string {
-  return r.kind === "journey" ? `jevitate journey promote ${r.id}` : r.kind === "demo" ? `jevitate demo approve ${r.id}` : `jevitate ${r.kind} approve ${r.id}`;
+  return r.kind === "annotations" ? `jevitate journey annotate ${r.id} --approve` : r.kind === "journey" ? `jevitate journey promote ${r.id}` : r.kind === "demo" ? `jevitate demo approve ${r.id}` : `jevitate ${r.kind} approve ${r.id}`;
 }
 
 /** The refusal text: why, and how a person approves. */
@@ -188,7 +188,7 @@ export function needsHumanMessage(r: ApprovalRequest): string {
     `approving ${r.kind === "demo" ? "demo" : r.kind} '${r.id}' needs a person: there is no interactive terminal to confirm it on (stdin/stdout is not a TTY), so nothing was approved. ` +
     `A person approves by running \`${approveCommand(r)}\` in their own terminal and typing the ${r.kind === "demo" ? "Journey" : r.kind} id (or the first 8 characters of the content hash its review sheet shows) when asked. ` +
     `A coding agent hands this approval to a person — it never approves its own work. ` +
-    `A scripted setup may pass --non-interactive-approval "<reason>": it is recorded as a non-interactive approval, never as a person's, and \`jevitate check --require-approvals\` fails it.`
+    (r.kind === "annotations" ? "" : `A scripted setup may pass --non-interactive-approval "<reason>": it is recorded as a non-interactive approval, never as a person's, and \`jevitate check --require-approvals\` fails it.`)
   );
 }
 
@@ -276,6 +276,7 @@ async function prReviewAttempt(r: ApprovalRequest, deps: ApprovalDeps | undefine
  */
 export function makeApprovalConfirm(deps: ApprovalDeps | undefined, opts: ApprovalConfirmOptions = {}): ApprovalConfirm {
   return async (r) => {
+    if (r.kind === "annotations" && (inMcpInvocation() || opts.nonInteractiveReason !== undefined || !(deps?.stdinIsTTY?.() ?? process.stdin.isTTY === true) || !(deps?.stdoutIsTTY?.() ?? process.stdout.isTTY === true))) throw new ApprovalNeedsHumanError(needsHumanMessage(r));
     if (inMcpInvocation()) return provenanceOf("mcp", deps);
     const reason = opts.nonInteractiveReason?.trim();
     if (reason !== undefined) checkNonInteractiveReason(reason);

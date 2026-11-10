@@ -105,6 +105,18 @@ and `verify_fix` over MCP start from it, and so do Journey commands run with `--
 ([environments](./journeys.md#environments---env)). It is operator-only and never committed; the
 repo's `.jevitate/environments.json` refuses any session or secret key.
 
+**Secrets over MCP, and holds.** A secret value is never an MCP argument (`E_SECRET_PARAM_OVER_MCP`).
+On an automation-mode target (production or undeclared, see [run modes](./run-modes.md)), `run_journey` of a
+Journey a person approved (`tty` or `pr-review`) gets a secret it needs from the origin's `secretFields` in
+`~/.jevitate/targets.json`, typed by code on that origin only. With no binding, the run holds at the step:
+it ends `outcome: "held"` with a hold id, and a person finishes it with `jevitate inbox approve <id>` and
+`jevitate inbox resume <id>` at a terminal, which opens the held session headed. The agent never sees the
+value. A binding on another origin refuses with `E_SECRET_ORIGIN_REFUSED`. On a test-mode target a Journey
+with a human step is refused (`E_HUMAN_STEP_IN_TEST_MODE`), and a missing secret parameter over MCP is
+refused with `E_SECRET_PARAM_OVER_MCP`: the test-mode `secretFields` route is not built in 0.30.0. A hold
+stores no credential: it holds the Journey's hash, a keyed digest of the parameters, the origin and the
+pending step.
+
 **Replaying an authenticated Journey.** A Journey `explore-author-journey` authors
 with `--storage-state` needs the SAME authenticated pre-step to replay: pass
 `--storage-state <file>` to `jevitate journey run`, `jevitate load run` and

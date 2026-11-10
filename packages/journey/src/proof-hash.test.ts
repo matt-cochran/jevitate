@@ -100,3 +100,27 @@ it("an unknown (future) field is included by default", () => {
 it("a success criterion added in words only (annotate, no check) does not change the proof hash", () => {
   expect(edited((j) => { j.metadata.successCriteria!.push({ description: "A receipt is emailed" }); })).toBe(BASE);
 });
+
+// Captured from the built v6 planner before the reconciliation; the same executable Journey
+// must invalidate that receipt when ownership/horizon/unresolved-request semantics advance.
+it("does not reuse a v6 receipt under the reconciled planner", () => {
+  const legacy: Journey = {
+    metadata: { id: "legacy-v6", name: "Legacy v6", promoted: false, params: [], createdAtIso: "2026-11-06T00:00:00Z" },
+    recording: { version: "1", site: "http://fixture.test", pages: [{ url: "/", steps: [{ step: { kind: "navigate", url: "/", expect: { kind: "urlIncludes", text: "/" } } }] }] },
+  };
+  expect(journeyProofHash(legacy)).not.toBe("f81b21658e36a8765169ba6737bcaf16eceb3300eee8f356a458cfdb679e2b85");
+});
+
+it("versions only final-network observation semantics while retaining159 UI and step-only hashes", () => {
+  const page = journey();
+  expect(journeyProofHash(page)).toBe('fd1d9f04a4b08bd3748ab7a7313567abccc4d2c0ce5dc0866676b5885fe59cbe');
+  const stepOnly = journey(); delete stepOnly.metadata.endState;
+  stepOnly.recording.pages[0]!.steps[0]!.expectRequests = [{ kind: "requestMade", method: "POST", pathGlob: "/api/save" }];
+  expect(journeyProofHash(stepOnly)).toBe('79078bdca03794b12add30b1a582a2331fa18343834530050740b66817cbe0de');
+  const request = journey(); request.metadata.endState = [{ kind: "requestMade", method: "POST", pathGlob: "/api/save" }];
+  expect(journeyProofHash(request)).not.toBe('f15b82731e4e1151e4ebac08a6ff47bed66bba1ade4f1b964c788bdbfd0a2706');
+  const response = journey(); response.metadata.endState = [{ kind: "responseStatus", method: "POST", pathGlob: "/api/save", status: { class: 2 } }];
+  expect(journeyProofHash(response)).not.toBe('f41fc58ca0b7b55ccf45263c0c54337ac2732f12d3b293f7485e910a37b2efdb');
+  const legacy = journey(); delete legacy.metadata.endState; legacy.metadata.networkChecks = [{ kind: "requestMade", method: "POST", pathGlob: "/api/save" }];
+  expect(journeyProofHash(legacy)).not.toBe('81ee908aca4ab31b0447dfd5c630173327033023b1ae5bda21547dbb971d5e6a');
+});

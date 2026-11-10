@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -340,5 +340,49 @@ describe("a mission left `running` by a drain that died is recovered, never re-r
     expect((await queue.get(ids.otherHostOld))?.error).toMatch(/has not finished it after 12h/);
     expect((await queue.get(ids.alive))?.status).toBe("running");
     expect((await queue.get(ids.otherHostRecent))?.status).toBe("running");
+  });
+
+  describe("a claim left queued, and a reused PID (independent check)", () => {
+    const qid = { dead: "66666666-6666-4666-8666-666666666666", live: "77777777-7777-4777-8777-777777777777", reused: "88888888-8888-4888-8888-888888888888", sameStart: "99999999-9999-4999-8999-999999999999" };
+    const setup = async () => {
+      const root = mkdtempSync(join(tmpdir(), "jev-queue-claimed-"));
+      const queue = new FsMissionQueueStore(join(root, "queue"));
+      const store = new FsMissionTargetStore(join(root, "targets"));
+      await store.put(target);
+      return { root, queue, targets: new MissionTargetRegistry(store) };
+    };
+    const drain = (queue: FsMissionQueueStore, targets: MissionTargetRegistry, extra: Partial<Parameters<typeof drainMissionQueue>[0]>) =>
+      drainMissionQueue({ queue, targets, execute: async () => ({ resultPath: "/r/x.result.json", missionOutcome: "clean", exitCode: 0 }), nowIso: () => NOW, owner: { pid: 9999, host: "box", nonce: "me" }, ...extra });
+
+    it("queued + claimed by a dead drain is recorded failed (never started, never re-run); a live claimant's is left", async () => {
+      const { queue, targets } = await setup();
+      for (const id of [qid.dead, qid.live]) await queue.enqueue(mission({ id, strategy: "feature", feature: "billing", status: "queued" }));
+      await queue.claim(qid.dead, { pid: 4001, host: "box", claimedAtIso: "2026-09-25T11:59:00Z" });
+      await queue.claim(qid.live, { pid: 4002, host: "box", claimedAtIso: "2026-09-25T11:59:00Z" });
+      const report = await drain(queue, targets, { isAlive: (pid) => pid === 4002 });
+      expect(report.recovered.map((r) => r.missionId)).toEqual([qid.dead]);
+      expect((await queue.get(qid.dead))?.error).toMatch(/claimed it and stopped before starting it; nothing ran/);
+      expect((await queue.get(qid.live))?.status).toBe("queued");
+      expect(report.ran).toEqual([]);
+    });
+
+    it("a reused PID (alive, different start time) is not the claimant; the same start time is", async () => {
+      const { queue, targets } = await setup();
+      for (const id of [qid.reused, qid.sameStart]) await queue.enqueue(mission({ id, strategy: "feature", feature: "billing", status: "running", startedAtIso: "2026-09-25T11:59:00Z" }));
+      await queue.claim(qid.reused, { pid: 4003, host: "box", claimedAtIso: "2026-09-25T11:59:00Z", startKey: "100", nonce: "old" });
+      await queue.claim(qid.sameStart, { pid: 4004, host: "box", claimedAtIso: "2026-09-25T11:59:00Z", startKey: "200", nonce: "other" });
+      const report = await drain(queue, targets, { isAlive: () => true, processStart: (pid) => (pid === 4003 ? "999" : "200") });
+      expect(report.recovered.map((r) => r.missionId)).toEqual([qid.reused]);
+      expect((await queue.get(qid.sameStart))?.status).toBe("running");
+    });
+
+    it("the claim records its claimant whole (start key and nonce round-trip; no temp file left)", async () => {
+      const { root, queue } = await setup();
+      await queue.enqueue(mission({ id: qid.dead, strategy: "feature", feature: "billing" }));
+      expect(await queue.claim(qid.dead, { pid: 5, host: "box", claimedAtIso: NOW, startKey: "12", nonce: "n" })).toBe(true);
+      expect(await queue.claim(qid.dead, { pid: 6, host: "box", claimedAtIso: NOW })).toBe(false);
+      expect(await queue.claimOwner(qid.dead)).toEqual({ pid: 5, host: "box", claimedAtIso: NOW, startKey: "12", nonce: "n" });
+      expect(readdirSync(join(root, "queue")).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+    });
   });
 });

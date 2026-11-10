@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// Bundles the `jevitate` CLI binary into a single ESM file for npm publish.
+// Bundles the `jevitate` CLI binary, and the package's root export, each into a single ESM file for
+// npm publish.
 //
 // Everything internal — all `@jevitate/*` workspace packages plus pure-JS
-// deps (zod, nanoid, luxon, kysely, ...) — gets compiled INTO dist/bin.js.
+// deps (zod, nanoid, luxon, kysely, ...) — gets compiled INTO dist/bin.js and dist/index.js.
 // Native/heavy deps that can't (or shouldn't) be bundled stay external and
 // are declared as real "dependencies" in package.json so npm installs them
 // alongside the published package; at runtime they resolve normally from
@@ -39,22 +40,31 @@ const EXTERNAL = [
   "@modelcontextprotocol/sdk",
 ];
 
-await build({
-  entryPoints: [join(here, "src", "bin.ts")],
-  outfile: join(here, "dist", "bin.js"),
-  bundle: true,
-  platform: "node",
-  format: "esm",
-  target: "node20",
-  external: EXTERNAL,
-  logLevel: "info",
-  define: {
-    __JEVITATE_BUILD_COMMIT__: JSON.stringify(commit),
-    __JEVITATE_BUILD_TREE__: JSON.stringify(tree),
-    __JEVITATE_BUILT_AT__: JSON.stringify(builtAt),
-    __JEVITATE_RELEASE_BUILD__: JSON.stringify(releaseBuild),
-  },
-});
+// Two self-contained bundles from one set of options: the `jevitate` bin, and the package's root
+// export (#815). `main`/`exports` name dist/index.js, so `import("@jevitate/cli")` must resolve with
+// only the declared runtime dependencies: tsc's dist/index.js imports the private workspace packages,
+// which are never published. Each bundle carries its own copy of the internal code; nothing loads
+// both, so no module state is shared between them.
+const ENTRIES = ["bin", "index"];
+
+for (const entry of ENTRIES) {
+  await build({
+    entryPoints: [join(here, "src", `${entry}.ts`)],
+    outfile: join(here, "dist", `${entry}.js`),
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    target: "node20",
+    external: EXTERNAL,
+    logLevel: "info",
+    define: {
+      __JEVITATE_BUILD_COMMIT__: JSON.stringify(commit),
+      __JEVITATE_BUILD_TREE__: JSON.stringify(tree),
+      __JEVITATE_BUILT_AT__: JSON.stringify(builtAt),
+      __JEVITATE_RELEASE_BUILD__: JSON.stringify(releaseBuild),
+    },
+  });
+}
 
 // `@jevitate/skills` is `private: true` and cannot be published as an external
 // npm dependency, so its SKILL.md content is bundled WITH the CLI: its loader

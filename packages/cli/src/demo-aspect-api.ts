@@ -1,14 +1,17 @@
+import { AnnotationTransactionError, readAnnotationFile } from "./journey-annotation-approval-store.js";
 import { journeyCatalogGate, resolveCatalogDir } from "./catalog-api.js";
 import type { JevSetup } from "./jev-advisor.js";
-import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
+import { makeApprovalConfirm, type ApprovalConfirm } from "./approval-provenance.js";
 import { journeyReviewHash } from "./journey-review.js";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   FsJourneyStore,
   applyAnnotationDraft,
+  AnnotationDraftSchema,
+  lintJourney,
   deriveParamSchema,
   describeStep,
   flatJourneySteps,
@@ -25,11 +28,15 @@ import type { BrowserPort, EmulationSpec } from "@jevitate/playwright";
 import type { SiteGateDeps } from "@jevitate/runtime";
 import { runAuthorJourney, type AuthorViaBrowserArgs } from "./explore-author.js";
 import type { AuthorJourneyResult } from "@jevitate/explore";
-import { promoteJourney, runJourneyProgrammatically, UnknownJourneyError } from "./journey-api.js";
+import { promoteJourney, runJourneyProgrammatically } from "./journey-api.js";
 import {
   annotateJourney,
   annotationDraftPath,
   approveJourneyAnnotations,
+  confirmDemoAnnotations,
+  finalizeDemoAnnotations,
+  validateDemoAnnotations,
+  previewJourneyAnnotations,
   journeyContentHash,
   readAnnotationDraft,
   StaleAnnotationDraftError,
@@ -40,7 +47,7 @@ import type { CaptureLayer } from "./demo-capture.js";
 import type { BrowserRunOptions } from "./browser-run-options.js";
 import type { ResolvedJourneyEnvironment } from "./environments.js";
 import type { MissionFixtures } from "./mission-fixtures.js";
-import { clock } from "@jevitate/domain";
+import { clock, contentHash } from "@jevitate/domain";
 
 /**
  * #249 — `jevitate demo "<aspect>"`: one request → a reviewed, narrated demo of one aspect of an app.
@@ -156,15 +163,12 @@ function demoDraftProblem(v: unknown): string | null {
 }
 
 /** Reads and validates a demo draft record (missing / invalid are typed refusals). */
-export async function readDemoDraft(journeysDir: string, id: string): Promise<{ record: DemoDraft; path: string }> {
+export async function readDemoDraft(journeysDir: string, id: string): Promise<{ record: DemoDraft; path: string; digest: string; identity: string }> {
+  if (!DEMO_ID.test(id)) throw new InvalidDemoDraftError("Invalid native demo id.");
   const path = demoDraftPath(journeysDir, id);
-  let raw: string;
-  try {
-    raw = await readFile(path, "utf8");
-  } catch (err) {
-    if ((err as { code?: unknown }).code === "ENOENT") throw new DemoDraftNotFoundError(`no demo draft '${id}' (${path}) — make one with \`jevitate demo "<aspect>" --env <name>\``);
-    throw err;
-  }
+  const file = await readAnnotationFile(journeysDir, path);
+  if (file === null) throw new DemoDraftNotFoundError(`no demo draft '${id}' — make one with \`jevitate demo "<aspect>" --env <name>\``);
+  const raw = file.raw;
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -175,7 +179,7 @@ export async function readDemoDraft(journeysDir: string, id: string): Promise<{ 
   if (problem !== null) throw new InvalidDemoDraftError(`${path} is not a demo draft: ${problem}`);
   const record = parsed as DemoDraft;
   if (record.id !== id) throw new InvalidDemoDraftError(`${path} is the demo draft for '${record.id}', not '${id}'`);
-  return { record, path };
+  return { record, path, digest: contentHash({ domain: "jevitate.demo-approval-draft.v1", raw }), identity: file.identity };
 }
 
 /** The replay-side options every stage shares (as `journey run` takes them). */
@@ -451,7 +455,7 @@ function outputsOf(demo: DemoJourneyResult): { video?: string; subtitles?: strin
 }
 
 /** One demo render (#248) of `id` in `dir`, narrated with `annotations`, into `outDir`. */
-function renderDemo(dir: string, id: string, opts: DemoReplayOptions, annotations: AnnotationDraft, draft: boolean, outDir: string, jzMask = false): Promise<DemoJourneyResult> {
+function renderDemo(dir: string, id: string, opts: DemoReplayOptions, annotations: AnnotationDraft | undefined, draft: boolean, outDir: string, jzMask = false): Promise<DemoJourneyResult> {
   return demoJourney({
     ...(jzMask ? { jzMask: true } : {}),
     dir,
@@ -488,7 +492,7 @@ export interface ApproveDemoOptions extends DemoReplayOptions {
   readonly jev?: JevSetup;
   /**
    * #437: confirms the approval after the catalog gate and before the final render, returning its
-   * provenance (recorded on the Journey's approval). Omitted: recorded as `non-interactive`.
+   * provenance (recorded on the Journey's approval). Omitted: the native terminal confirmation is required.
    */
   readonly confirm?: ApprovalConfirm;
 }
@@ -520,16 +524,20 @@ export interface ApproveDemoResult {
 }
 
 /** Reads what `demo approve <id>` would approve (the Journey, its draft annotations, the record) — refusals are typed. */
-export async function loadDemoForApproval(journeysDir: string, id: string): Promise<{ record: DemoDraft; journey: Journey; annotations: AnnotationDraft }> {
+export async function loadDemoForApproval(journeysDir: string, id: string): Promise<{ record: DemoDraft; journey: Journey; annotations: AnnotationDraft | undefined }> {
   if (!DEMO_ID.test(id)) throw new DemoAspectArgsError(`not a demo id: ${JSON.stringify(id)}`);
-  const { record } = await readDemoDraft(journeysDir, id);
-  const journey = await new FsJourneyStore(journeysDir).get(id);
-  if (journey === null) throw new UnknownJourneyError(`unknown journey '${id}' (its demo draft is at ${demoDraftPath(journeysDir, id)})`);
-  const { draft: annotations, draftPath } = await readAnnotationDraft(journeysDir, id);
-  if (journeyContentHash(journey) !== annotations.journeyHash) {
-    throw new StaleAnnotationDraftError(`journey '${id}' changed after its demo was drafted (${draftPath}) — make the demo again`);
-  }
-  return { record, journey, annotations };
+  const demo = await readDemoDraft(journeysDir, id);
+  const preview = await previewJourneyAnnotations(journeysDir, id);
+  const transaction = preview.status.transaction;
+  const recovering = preview.status.state === "approved-pending-apply" || preview.status.state === "applied-current";
+  if (recovering) {
+    if (transaction === null || preview.record?.origin.kind !== "demo" || preview.record.origin.draftHash !== demo.digest || demo.record.journeyHash !== transaction.beforeContentHash) throw new AnnotationTransactionError();
+    if (preview.status.currentContentHash === transaction.afterContentHash || preview.status.state === "applied-current") return { record: demo.record, journey: preview.journey, annotations: undefined };
+  } else if (preview.status.state !== "pending-human") throw new StaleAnnotationDraftError("The demo annotation draft or transaction is not current.");
+  if (preview.draft === null) throw new StaleAnnotationDraftError("The matching demo annotation draft is missing.");
+  const annotations = AnnotationDraftSchema.parse(JSON.parse(preview.draft.raw));
+  if (journeyContentHash(preview.journey) !== annotations.journeyHash || demo.record.journeyHash !== annotations.journeyHash) throw new StaleAnnotationDraftError("The demo Journey changed since its draft.");
+  return { record: demo.record, journey: preview.journey, annotations };
 }
 
 /**
@@ -544,7 +552,7 @@ export async function approveDemo(opts: ApproveDemoOptions): Promise<ApproveDemo
   assertDemoEnvironment(opts.environment);
   const { journey, annotations } = await loadDemoForApproval(opts.journeysDir, opts.id);
   const environment = opts.environment.name ?? opts.environment.baseUrl;
-  const annotated = applyAnnotationDraft(journey, annotations);
+  const annotated = annotations === undefined ? { journey, changes: [] } : applyAnnotationDraft(journey, annotations);
   const steps = stepsOf(annotated.journey);
   // #433: the catalog gate and the pre-approval findings, BEFORE the final render — the same gate
   // `promoteJourney` applies again when it promotes (a refusal here renders and changes nothing).
@@ -557,18 +565,18 @@ export async function approveDemo(opts: ApproveDemoOptions): Promise<ApproveDemo
   };
   const gated = await journeyCatalogGate(annotated.journey, { ...gate, journeysDir: opts.journeysDir, action: "demo approve" });
   // #437: the person confirms (or it is refused) BEFORE the final render — nothing renders or changes otherwise.
-  const provenance =
-    opts.confirm === undefined
-      ? programmaticProvenance()
-      : await opts.confirm({
-          kind: "demo",
-          id: opts.id,
-          contentHash: journeyReviewHash(annotated.journey),
-          waivers: [
-            ...(gated.waivers ?? []).map((w) => ({ flag: "--accept-unvetted", reason: w.reason, detail: w.items.join(", ") })),
-            ...(gated.acceptedFindings === undefined ? [] : [{ flag: "--accept-findings", reason: gated.acceptedFindings.reason, detail: gated.acceptedFindings.findings.join(", ") }]),
-          ],
-        });
+  const confirmedId = journey.metadata.id;
+  const confirmedReviewHash = journeyReviewHash(annotated.journey);
+  const confirmedWaivers = [
+    ...(gated.waivers ?? []).map((w) => ({ flag: "--accept-unvetted", reason: w.reason, detail: w.items.join(", ") })),
+    ...(gated.acceptedFindings === undefined ? [] : [{ flag: "--accept-findings", reason: gated.acceptedFindings.reason, detail: gated.acceptedFindings.findings.join(", ") }]),
+  ];
+  const weakRules = [...new Set(lintJourney(annotated.journey).filter((f) => f.level === "error").map((f) => f.rule))];
+  const implicitWeak = weakRules.length === 0 ? [] : [{ flag: "--accept-weak", reason: DEMO_APPROVAL_WAIVER, detail: weakRules.join(", ") }];
+  const annotationAuthority = await confirmDemoAnnotations(opts.journeysDir, opts.id, {
+    kind: "demo", id: opts.id, contentHash: confirmedReviewHash, waivers: confirmedWaivers,
+  }, opts.confirm ?? makeApprovalConfirm(undefined));
+  const provenance = annotationAuthority.provenance;
   // #471: an environment that declares synthetic data renders the final demo under jz-mask-v1.
   const synthetic = opts.environment.synthetic === true;
   const demo = await renderDemo(opts.journeysDir, opts.id, opts, annotations, false, opts.outDir, synthetic);
@@ -583,10 +591,13 @@ export async function approveDemo(opts: ApproveDemoOptions): Promise<ApproveDemo
       promoted: false,
     };
   }
-  const applied = await approveJourneyAnnotations(opts.journeysDir, opts.id);
-  const promotedJourney = await promoteJourney(opts.journeysDir, opts.id, { acceptWeak: DEMO_APPROVAL_WAIVER, ...gate, action: "demo approve", confirm: () => Promise.resolve(provenance) });
+  const applied = await approveJourneyAnnotations(opts.journeysDir, opts.id, { demoAuthority: annotationAuthority });
+  const promotedJourney = await promoteJourney(opts.journeysDir, opts.id, { acceptWeak: DEMO_APPROVAL_WAIVER, ...gate, action: "demo approve", confirm: async (request) => {
+    await validateDemoAnnotations(annotationAuthority);
+    if (request.kind !== "demo" || request.id !== confirmedId || request.contentHash !== confirmedReviewHash || contentHash(request.waivers) !== contentHash([...implicitWeak, ...confirmedWaivers])) throw new StaleAnnotationDraftError("The demo Journey changed after confirmation; its new content was not approved.");
+    return provenance;
+  } });
   const waived = promotedJourney.metadata.acceptedWeak?.rules;
-  await rm(demoDraftPath(opts.journeysDir, opts.id), { force: true });
   // #471: the export record — only for a synthetic environment's jz-mask-v1 render; else any older
   // record goes (it was rendered from another version and must not be exported in this one's name).
   let journeeze: NonNullable<ApproveDemoResult["journeeze"]>;
@@ -606,6 +617,7 @@ export async function approveDemo(opts: ApproveDemoOptions): Promise<ApproveDemo
     await clearApprovedDemo(opts.journeysDir, opts.id);
     journeeze = { media: false, reason: `environment '${environment}' does not declare synthetic: true — no demo media is exported to Journeeze` };
   }
+  await finalizeDemoAnnotations(annotationAuthority);
   return {
     id: opts.id,
     outcome: "approved",

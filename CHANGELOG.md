@@ -5,6 +5,56 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.30.0] – 2026-11-10
+
+### Behaviour changes
+
+- **A pass with no done check now exits 2.** `journey run`, `run_journey`, queued Journey calls and goal runs without `--success` or `--job` exit `2` (`inconclusive`) when their steps pass; they exited `0`. The default `doneCheckPolicy` is `require`. A find-out goal whose grounded answer was accepted keeps exit `0`, since it claims no end state. **To migrate:** add a `done` check to the job in `.jevitate/jobs.json`, or set `"doneCheckPolicy": "advisory"` in `.jevitate/project.json` to keep exit 0.
+- **A boundary run exits 2, not 1 (#807).** A goal run that meets a wall, loses its session, would write off the allowlist or opens a new tab ends `goalOutcome: "boundary"` (`inconclusive`). A CI script that read 1 as "the job is broken" should expect 2 here.
+- **A done check that reads false exits 1 (#800).** Steps pass but the job is not done: `defects-found`, `failure.kind: "done-check-failed"`. It exited 0.
+- **`proven` is now `sensitive` (#812).** `journey verify --mutate` reports `verdict: "sensitive"`, with `verdictLegacy: "proven"` until 0.32.0. `mutationProofPolicy: "require-sensitive"` replaces `"require-proven"`. **To migrate:** read `verdictLegacy` in a script that tests `"proven"`.
+- **Mutation proof is advisory; the job done check is the gate.** `mutationProofPolicy` stays `advisory`. In the witness experiment (accuracy lab, 12 clean cells and 27 seeded-defect cells) the done check caught 27 of 27 defects with no false alarm on the 12 clean cells, where the proof caught 24 of 27 and raised 6 false alarms. The done-check reading took about a quarter of the proof's total time (23.6%).
+- **`journey readiness` gates on the job, not on the proof.** Its receipt leads with a `job` check: `not-achieved` exits 1, and `unverified` exits 2 under `doneCheckPolicy: "require"`. Under `advisory` proof policy, a missing, stale, insensitive or unwaived inconclusive proof no longer blocks readiness (it was exit 2 or 1) or fails `journey review --strict`; it is a checks-strength line marked `advisory: true`. A stale approval with fresh evidence is `awaitingHuman` with the owner's hash-bound commands, not a blocker (#808); `journey review --strict` still exits 1 on it. `require-attempt` and `require-sensitive` gate as before, and under `require-sensitive` a receipt that names no engine never counts. **To migrate:** run each Journey once with a done check before `journey readiness`, or set `"doneCheckPolicy": "advisory"`.
+- **An MCP promotion authorises test-mode runs only (#792).** Automation runs need an approval typed at a terminal or a reviewed PR (`E_APPROVAL_CHANNEL_FOR_MODE`). Declare a real test target `"trust": "test"`, or run `jevitate journey promote <id>` at a terminal.
+- **MCP cannot loosen limits (#799).** `site_policy` only tightens; `mission_targets` cannot promote a target.
+- **A target no file declares runs in automation mode.**
+- **`explore --job` with an unknown job id exits 64** (`E_EXPLORE_JOB`, a usage error). It exited 2.
+- **A missing route is no longer a defect (#807).** A goal run that opened every page it could reach and tried every safe control, with none leading toward the goal, ends `inconclusive` (exit 2), `goalReason: "no-route-found"`, naming the pages it searched; it exited 1 (`defects-found`). A run below that coverage floor ends as before and names the first gap in `noRouteShortfall`; a page with a hidden or unperceived control never reads `no-route-found`.
+- **With a done check, the job decides the exit.** A goal run that gave up or ran out of budget while its done check reads achieved exits 0 (`succeeded`); a pass whose done check reads false reports `goalOutcome: "failed"`, `goalReason: "done-check-failed"` (exit 1).
+
+### Added
+
+- **Job done checks and attainment (#800).** `jobs[].done`; every run reports `job: { attainment, basis }`; `explore --job`. A Journey that links no job may carry its own check in `metadata.done`. MCP `run_journey` and `queue_journey` take `noDoneCheck` and `requireDoneCheck` (not both), and `jevitate journey queue` takes `--no-done-check` and `--require-done-check`. A run record gains `job` and `journey.proofHash`.
+- **`journey shorten` (#801).** An authoring-time search, with no model, for a shorter path to the same job: it removes steps, replays every candidate in full with the fixtures reset around it, and decides each by the job's done check in a fresh context. It never drops a confirm, agree or accept click. The output is a new unpromoted draft (`<id>-shortest`) and a report; the result is the shortest found within the budget, not an optimum. MCP `shorten_journey` takes draft Journeys only.
+- **Run modes and trust (#792)**, **holds and secret steps (#793, #798)**: `jevitate inbox approve|resume`, `targets.json` `secretFields`.
+- **`queue_journey` (#797)** and **`shorten_journey` (#801)**, the two tools added to the served set.
+- **Secrets off the command line and out of files (#819, #827).** Every replay command takes `--secret-field`; `'param=<name>=env:<VAR>'` binds a secret parameter by its name, a token in a `navigate` URL included, and works in `targets.json` `secretFields`. A bound value goes only to its binding's origin (`E_SECRET_ORIGIN_REFUSED`). A secret value in a `check` suite or campaign spec is refused by name. Over MCP the value comes only from the operator's `targets.json` (`E_SECRET_MODE_UNAVAILABLE` for a URL secret with no binding). `journey readiness --mode replay|prove` takes `--secret-field` too.
+- **Full proof report saved first (#818).** `journey verify --mutate` writes its redacted report under `.jevitate/journeys/.verify/reports/` before it prints, and the receipt binds it as `nativeReport`.
+- **Adjudicator and evidence (#812).** One value-free `evidence.json` per run and per verify.
+- **Reconcile and receipts (#795)**, **typed Journey parameters (#796)** (`E_JOURNEY_PARAM_TYPE`), and **catalog contract v3** (`jobs[].done`, typed parameters).
+- **Shadow write sentinel (#794).** `JEVITATE_WRITE_SENTINEL=shadow`; advisory, holds nothing.
+- **Harness targets (#802).** A pass on a `trust: "harness"` target, goal runs included, exits 0 and reads `unverified`.
+- **`--render-wait-ms` (#837).** Goal exploration and Journey authoring take a bounded settle wait, with the same MCP arguments and suite goal option, for authenticated pages that take longer than the default 15 s to settle before the first action. The default is unchanged, and hang detection, success checks and authorization still apply.
+
+### Fixed
+
+- **A fresh install gets the tested Playwright (#825).** `@jevitate/cli` pins `playwright` 1.63.0 exactly; it declared `^1.49.0`, so an install could float to an untested version. An upgrade that changes it needs `jevitate install-browser` once.
+- **`import("@jevitate/cli")` works (#815).** The root export is bundled like the bin; it imported the private `@jevitate/playwright` and failed with `ERR_MODULE_NOT_FOUND`.
+- **Exact build checks (#784).** The release pack also proves the root export reports the bin's identity. A tool checking for the published build compares the whole `--version` line and refuses `-source-`.
+- **`--allow` under `--env` (#803).** `journey run --allow <origin>` and `journey verify --allow <origin>` let a step navigate to that origin; the `E_ENV_ORIGIN_REFUSED` message lists those origins.
+- **Goal runs after a refused `blocked` (#826).** The hint finds a control the goal names in part or by a close variant, and a run that ran out of decisions straight after a refusal says so.
+- **Sign-in goals (#810, #807).** A "Sign in with..." goal may type and submit; a goal-typed credential is never stored; return-to-start and new-tab links behave.
+- **Proof soundness (#811, #813, #821, #805, #806).** Causal request pairing replaces the last-write rule; waived postconditions; read-only UI transitions no longer need persistence; observation horizons. A sibling end-state check that held while its neighbours failed stays a `cascade` and the refusal says why; `journey verify --plan` flags an absence check that shares mutations (#817). A proof from another engine version is `stale` with a `staleCause` instead of blaming an unchanged Journey (#816).
+- **Secrets on argv (#827)** warn by name; **`editText`**, **short-secret masking** and **`extract as` naming** (0.29.0 accepted limits). An adversarial mission's `scope.routeGlobs` no longer holds a prefix's URL secret in plain text.
+- **Log pruning** counts a run's evidence folder with its record (#790).
+- **Goal-run stalls (#241).** Re-walking a wizard forward to a state it reached before is not a `ui-no-progress` hang, and a background poll after a send that sent nothing no longer keeps the run waiting.
+
+### Limits
+
+- An agent that can write `.jevitate/` or `~/.jevitate/` can forge `trust` and an approval's channel.
+- A done check is as good as its author.
+- A proof's strength depends on a target you can reset.
+
 ## [0.29.1] – 2026-11-09
 
 ### Security

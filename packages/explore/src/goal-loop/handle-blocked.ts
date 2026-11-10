@@ -14,7 +14,9 @@ import type { RunContext } from "./context.js";
 import type { ActionableControlEvidence, ActionableControlKind, ActionableControlOutcome, ActionableControlResume } from "./context/types.js";
 import { terms } from "./goal-focus.js";
 import { JOB_WAIT_SLICE_MS, MAX_EARLY_BLOCKED_REFUSALS, quote, waitOutJob } from "./helpers.js";
+import { detectRunBoundary, endAtBoundary } from "./boundary.js";
 import { deferEnding } from "./min-effort.js";
+import { steerToFloor } from "./no-route.js";
 import type { Flow, Step } from "./step.js";
 
 /**
@@ -88,10 +90,23 @@ function instructionText(controls: readonly Control[], visibleText: string): str
 const goalNames = (goal: string, name: string): boolean => new RegExp(`\\b${escaped(normalized(name))}\\b`).test(goal);
 
 /**
+ * #826 — the goal names the control in part: at least two of its content words (stemmed) stand in the
+ * goal (`Publish report` from 'Publish the Q3 sales report', `Show the demo now` from 'press Show the
+ * demo'), or its only content word is a variant of a goal word (`Reports`). One shared word of several
+ * (`Publish archive`) is not the goal naming it.
+ */
+export const goalNamesPart = (name: string, goalTerms: ReadonlySet<string>): boolean => {
+  const controlTerms = terms(name);
+  const hits = [...controlTerms].filter((t) => goalTerms.has(t)).length;
+  return controlTerms.size > 0 && hits >= Math.min(2, controlTerms.size);
+};
+
+/**
  * #693 — an enabled, untried forward control that the goal and the page's own instruction both
  * name. Deterministic: the page text minus the controls' labels must be an instruction containing
  * every content word of the control's name, and at least one of those words must be in the goal.
- * #769 — with `goalNamed`, a control whose whole name the goal states need not be in that instruction.
+ * #769 — with `goalNamed`, a control whose whole name the goal states need not be in that instruction;
+ * #826 — nor one the goal names in part (`goalNamesPart`).
  */
 export function forwardControls(
   ctx: RunContext,
@@ -113,7 +128,7 @@ export function forwardControls(
     const controlTerms = terms(name);
     if (controlTerms.size === 0) continue;
     const instructed = [...controlTerms].some((t) => goalTerms.has(t)) && [...controlTerms].every((t) => instructionTerms.has(t));
-    if (instructed || (goalNamed && goalNames(goal, name))) out.push(control);
+    if (instructed || (goalNamed && (goalNames(goal, name) || goalNamesPart(name, goalTerms)))) out.push(control);
   }
   // #769 — rank by how explicitly the goal names the control: a control the goal itself states
   // (`Show the demo`, from 'press Show the demo') precedes one the page instruction merely suggests (`Check in`).
@@ -121,15 +136,16 @@ export function forwardControls(
 }
 
 /**
- * #769 — how explicitly `goal` names `name`: a whole-name phrase in the goal outranks mere term
- * overlap, then the fraction of the name the goal names, then the raw count. A stable sort keeps the
- * page's own order for equal ranks.
+ * #769 — how explicitly `goal` names `name`: a whole-name phrase in the goal outranks a name the goal
+ * states in part (#826), which outranks mere term overlap (a control only the page's instruction
+ * suggests); within a tier, more goal-named words, then the fraction of the name they cover. A stable
+ * sort keeps the page's own order for equal ranks.
  */
 function goalNaming(goal: string, name: string, goalTerms: ReadonlySet<string>): number {
   const controlTerms = terms(name);
   if (controlTerms.size === 0) return 0;
   const hits = [...controlTerms].filter((t) => goalTerms.has(t)).length;
-  return (goalNames(goal, name) ? 1_000 : 0) + (hits / controlTerms.size) * 100 + hits;
+  return (goalNames(goal, name) ? 10_000 : 0) + (goalNamesPart(name, goalTerms) ? 1_000 : 0) + hits * 10 + (hits / controlTerms.size) * 5;
 }
 
 /** The first #693 forward control, or null — the single obvious control a model `blocked` is refused beside. */
@@ -176,6 +192,13 @@ export async function handleBlocked(ctx: RunContext, step: Step): Promise<Flow> 
     ctx.lastActedOp = "wait";
     ctx.statusAfter = "waiting";
     return "continue";
+  }
+  // 0.30.0 (#807): a give-up at a wall or a lost session is a boundary, not a defect.
+  const boundary = detectRunBoundary(ctx, step.snap, { giveUp: true });
+  if (boundary !== null) {
+    record(false, boundary.reason, { origin: "engine" });
+    endAtBoundary(ctx, boundary);
+    return "stop";
   }
   // #237: giving up before trying anything proves nothing about the app. Refused (and the model
   // told to explore) while the page offers controls; a model that insists ends `inconclusive`.
@@ -233,6 +256,14 @@ export async function handleBlocked(ctx: RunContext, step: Step): Promise<Flow> 
   if (deferred !== null) {
     record(false, deferred, { origin: "engine" });
     // #769 — no action was taken: this turn must not count toward no-progress.
+    ctx.refusedTurn = true;
+    return "continue";
+  }
+  // rc-030b (#807): a give-up below the no-route floor whose only gaps the run can still open is deferred
+  // toward them (bounded; the floor, not the steer, decides the ending).
+  const floorNote = steerToFloor(ctx);
+  if (floorNote !== null) {
+    record(false, floorNote, { origin: "engine" });
     ctx.refusedTurn = true;
     return "continue";
   }

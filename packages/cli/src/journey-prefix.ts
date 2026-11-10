@@ -1,4 +1,5 @@
-import { secretParamNamesArgvWarning } from "./secret-params.js";
+import { secretParamNamesArgvWarning, withCommandSecretParams, type BoundSecretParams, type CommandSecretSeams } from "./secret-params.js";
+import { planSecretRun } from "./journey-secret-mode.js";
 import { redactCredentialShapes, redactText, redactUrl } from "@jevitate/ai-core";
 import { clock } from "@jevitate/domain";
 import {
@@ -163,6 +164,10 @@ export interface ResolveJourneyPrefixOptions {
   readonly dbPath?: string;
   /** The `--env`/`--base-url` names `environment` came from (persisted for later replays). */
   readonly environmentFlags?: { readonly env?: string; readonly baseUrl?: string };
+  /** #827: where each secret parameter `params` holds from a binding may go (`explore --secret-field`, targets.json). */
+  readonly boundSecretParams?: BoundSecretParams;
+  /** Where a target's `secretFields` `env:` sources are read over MCP (default `process.env`). */
+  readonly secretEnv?: Readonly<Record<string, string | undefined>>;
 }
 
 /** #293: how a finding's replay goes back through its run's Journey prefix (`result.branch.replay`). */
@@ -215,7 +220,17 @@ export async function resolveJourneyPrefix(opts: ResolveJourneyPrefixOptions): P
     throw new JourneyRequiresAuthError(`journey '${opts.id}' requires auth (metadata.requiresAuth) — run with --storage-state <file>`);
   }
   const prefix = journeyPrefix(full, resolved.step);
-  const used = prefixParams(full, prefix, opts.params);
+  // #827: a secret parameter from the environment. On the CLI `explore --secret-field` (or targets.json with
+  // --env/--base-url) bound it; over MCP only the operator's targets.json binding for this origin supplies one
+  // the call left out (vault-autofill): a mission's prefix never holds for a person.
+  let given: Record<string, string> = { ...opts.params };
+  let bound = opts.boundSecretParams;
+  if (inMcpInvocation()) {
+    const plan = planSecretRun({ stored, journey: prefix, params: prefixParams(full, prefix, given), bound, origin: opts.environment?.baseUrl ?? stored.recording.site, environment: opts.environment, mode: undefined, mcp: true, surface: true, flag: "vault-autofill", env: opts.secretEnv ?? process.env });
+    given = { ...plan.params, ...given };
+    if (plan.bound !== undefined) bound = { ...bound, ...plan.bound };
+  }
+  const used = prefixParams(full, prefix, given);
   validateParams(journeyParamSchema(prefix), used);
   const branch = journeyBranchPoint(full, resolved);
   const site = full.recording.site;
@@ -259,7 +274,8 @@ export async function resolveJourneyPrefix(opts: ResolveJourneyPrefixOptions): P
           runJourneyProgrammatically({
             dir: opts.dir,
             id: opts.id,
-            params: opts.params,
+            params: given,
+            ...(bound === undefined ? {} : { boundSecretParams: bound }),
             session,
             stopAfterStep: resolved.step,
             ...(siteGate === undefined ? {} : { siteGate }),
@@ -397,7 +413,14 @@ export interface PrefixFromBranchOptions {
   readonly params?: Readonly<Record<string, string>>;
   readonly storageState?: string;
   readonly dbPath?: string;
-  readonly environmentSeams?: { readonly environmentsFile?: string; readonly targetsFile?: string };
+  /** The target's files and (H7) where the Journey's approval is read (its catalog dir: default the project's). */
+  readonly environmentSeams?: CommandSecretSeams;
+  /** #827: `--secret-field` bindings: a secret parameter from the environment, off the command line (with the environment's targets.json secretFields). */
+  readonly secretFields?: readonly string[];
+  /** Where a binding's `env:` source is read (default `process.env`). */
+  readonly env?: Readonly<Record<string, string | undefined>>;
+  /** The command the `--param` warning names (it takes `--secret-field`). */
+  readonly command?: string;
 }
 
 /**
@@ -408,26 +431,36 @@ export interface PrefixFromBranchOptions {
 export async function prefixFromBranch(branch: RecordedBranch, opts: PrefixFromBranchOptions = {}): Promise<JourneyPrefix> {
   const info = branch.replay;
   if (info === undefined) throw new BranchReplayInputError(`the finding branched from journey '${branch.journeyId}' step ${branch.step}, but its result records no replay info — re-run the anchored mission`);
-  const params = { ...info.params, ...(opts.params ?? {}) };
   const onArgv = info.secretParams.filter((n) => opts.params?.[n] !== undefined);
-  if (onArgv.length > 0) opts.warn?.(secretParamNamesArgvWarning(onArgv));
-  const missing = info.secretParams.filter((n) => !(n in params));
-  if (missing.length > 0) {
-    throw new BranchReplayInputError(`the finding's Journey prefix types secret param(s) ${missing.join(", ")}: give them again with --param <name>=<value>`);
-  }
+  if (onArgv.length > 0) opts.warn?.(secretParamNamesArgvWarning(onArgv, opts.command));
   try {
     const environment = environmentFromFlags({ ...(info.env === undefined ? {} : { env: info.env }), ...(info.baseUrl === undefined ? {} : { baseUrl: info.baseUrl }) }, opts.environmentSeams ?? {});
+    // #827: a secret parameter from a binding (--secret-field, the environment's targets.json), off the command line.
+    let supplied: { params: Record<string, string>; bound?: BoundSecretParams };
+    try {
+      supplied = await withCommandSecretParams({ dir: info.journeysDir, ids: [branch.journeyId], params: { ...info.params, ...(opts.params ?? {}) }, flags: opts.secretFields ?? [], environment, env: opts.env ?? process.env, seams: { ...opts.environmentSeams, journeysDir: info.journeysDir } });
+    } catch (err) {
+      throw new BranchReplayInputError(err instanceof Error ? err.message : String(err));
+    }
+    const params = supplied.params;
+    const missing = info.secretParams.filter((n) => !(n in params));
+    if (missing.length > 0) {
+      throw new BranchReplayInputError(
+        `the finding's Journey prefix types secret param(s) ${missing.join(", ")}: give ${missing.length === 1 ? "it" : "them"} from the environment with ${missing.map((n) => `--secret-field 'param=${n}=env:<VAR>'`).join(" ")} (or the environment's targets.json secretFields), or with --param <name>=<value>`,
+      );
+    }
     return await resolveJourneyPrefix({
       dir: info.journeysDir,
       id: branch.journeyId,
       atStep: String(branch.step),
       params,
+      ...(supplied.bound === undefined ? {} : { boundSecretParams: supplied.bound }),
       ...(environment === undefined ? {} : { environment }),
       ...(opts.storageState === undefined ? {} : { storageState: opts.storageState }),
       ...(opts.dbPath === undefined ? {} : { dbPath: opts.dbPath }),
     });
   } catch (err) {
-    if (err instanceof Error && !(err instanceof JourneyPrefixStaleError)) throw new BranchReplayInputError(`cannot replay through journey '${branch.journeyId}' step ${branch.step}: ${err.message}`);
+    if (err instanceof Error && !(err instanceof JourneyPrefixStaleError) && !(err instanceof BranchReplayInputError)) throw new BranchReplayInputError(`cannot replay through journey '${branch.journeyId}' step ${branch.step}: ${err.message}`);
     throw err;
   }
 }
