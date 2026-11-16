@@ -1,12 +1,7 @@
-import { NOT_A_CREDENTIAL_WAY_OUT, assertBoundSecretsOnOrigins, currentBoundSecretParams, resolveBoundSecretOrigins, fixtureSecretNeeds, masksExtractedValue, secretBoundNeeds } from "./secret-params.js";
-import { JourneyRunEvidenceWriter, type WriteReceipt } from "./journey-run-evidence.js";
-import { hasRunHooks, resolveRunMode, runReadDoneCheckHooks, runValidateParamsHooks, withRunHookGuard, type RunHookContext, type RunMode } from "./journey-run-hooks.js";
-import { prepareMcpRunGuard } from "./mcp-run-guard.js";
-import { FsJourneyStore, JourneyRegistry, declaredNonSecretParams, describeStep, loadRefusedParamNames, flatJourneySteps, journeyEndState, journeyParamSchema, journeyPrefix, lintJourney, lintJourneyDoneCheck, lintUploadFixtures, secretParamNames, secretParamValues, stampAnchorStepIds, validateParams, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
-import { assertHttpChecksAllowed, createHttpProbe, httpCheckRefs } from "./http-probe.js";
-import { inMcpInvocation, programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
-import { mcpMayBindTargetSecrets, resolveRunTarget } from "./journey-run-mode-gate.js";
-import { planSecretRun, secretHandbackHandler, secretOriginRefusalOf, withSecretHandbacks } from "./journey-secret-mode.js";
+import { JourneyRunEvidenceWriter } from "./journey-run-evidence.js";
+import { type RunMode } from "./journey-run-hooks.js";
+import { FsJourneyStore, JourneyRegistry, describeStep, flatJourneySteps, lintJourney, lintJourneyDoneCheck, lintUploadFixtures, secretParamNames, secretParamValues, stampAnchorStepIds, type Journey, type JourneyApproval, type JourneyLintFinding, type ApprovalProvenance } from "@jevitate/journey";
+import { programmaticProvenance, type ApprovalConfirm } from "./approval-provenance.js";
 import { journeyEntry } from "./forge-verify.js";
 import { checkProposal, deleteJourneyProposal, proposedJourney, rejectJourneyProposal, requireJourneyProposal } from "./journey-proposal-store.js";
 import { journeyReviewHash } from "./journey-review.js";
@@ -15,41 +10,22 @@ import { anchorRuleMode, assertAnchorRules, journeyAnchorIssues, refLintFindings
 import { journeyCatalogGate, loadCatalog, resolveCatalogDir } from "./catalog-api.js";
 import { journeyDoneCheckFindings } from "./catalog-refs.js";
 import type { JevSetup } from "./jev-advisor.js";
-import { registerDeclaredSecrets } from "@jevitate/ai-core";
-import { safeRunPolicy, clock, contentHash } from "@jevitate/domain";
-import { dirname, join } from "node:path";
-import { PlaywrightBrowserPort, type BrowserPort } from "@jevitate/playwright";
-import { assertSameExtensionBuild, closeOnce, finalizeVideos, runVideoDir, sessionLaunchOptions } from "./browser-run-options.js";
-import { artifactStamp } from "./mission-journal.js";
-import { findProjectDir, logsDirFor, type LayoutDeps } from "./project-dir.js";
-import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
-import { RecordingInterpreter, type StepObserver } from "@jevitate/interpreter";
-import { ReplayDeltas, replayDeltaSummary, resolveMissionFixture, type BlockedWrite, type ReplayDeltaSummary } from "@jevitate/explore";
+import { clock, contentHash } from "@jevitate/domain";
+import { dirname } from "node:path";
+import { findProjectDir, type LayoutDeps } from "./project-dir.js";
+import { resolveMissionFixture } from "@jevitate/explore";
 import { ensureStepIds, fixtureNoRoot } from "@jevitate/recording";
-import { BrowseTheWebToken } from "@jevitate/screenplay";
-import { SecretPixelMask, maskingPort } from "./demo-capture.js";
-import { RunScreenshots, composeObservers, screenshotObserver, screenshotsDirFor, type ScreenshotsResult } from "./run-screenshots.js";
-import { JourneyRunner, type JourneyHealOptions, type JourneyRunResult } from "@jevitate/runtime";
-import { journeyStepRisk } from "./journey-heal.js";
-import { installHealProbeGuard } from "./heal-probe-guard.js";
-import { gateJourney } from "./site-gate-cli.js";
-import { substituteSetupRefs, type FixtureRecord } from "./mission-fixtures.js";
-import { applyJourneyEnvironment } from "./environments.js";
-import { JourneyOutcomeChecks, type OutcomeCheckFailure, type SlowStep } from "./journey-network-checks.js";
-import { assertHandbackNoHeal, attachHandback, HandbackWriteObserver } from "./journey-handback.js";
-import type { HandbackOutcome } from "@jevitate/journey";
-import { redactErrorSecrets, redactSecretValues, runSecretValues } from "./journey-api-redaction.js";
-import { prefixParams } from "./journey-api-redaction.js";
-import { effectiveAllowedOrigins, operatorAllowedOrigins } from "./journey-api-redaction.js";
-import { JourneyProposalArgsError, JourneyRequiresAuthError, StaleReviewError, UnknownJourneyError, WeakJourneyError } from "./journey-api-errors.js";
-import { healObserver, persistHealRun, stepWriteBlocker, watchOffAllowlistWrites } from "./journey-api-heal.js";
+import { redactErrorSecrets, operatorAllowedOrigins } from "./journey-api-redaction.js";
+import { JourneyProposalArgsError, StaleReviewError, UnknownJourneyError, WeakJourneyError } from "./journey-api-errors.js";
 import type { HealRunFields, MutationReplayOptions, RunJourneyProgrammaticallyOptions } from "./journey-api-heal.js";
+import { prepareStoredJourneyRun, runPreparedStoredJourney, type MutationReplayFields, type RunEvidenceScope, type RunJourneyResult as MovedRunJourneyResult, type StoredJourneyRunContext, type StoredJourneyRunState } from "./journey-api-run.js";
 
 export { effectiveAllowedOrigins, evidenceErrorOf, prefixParams, redactErrorSecrets, redactSecretParams, redactSecretValues, runSecretValues } from "./journey-api-redaction.js";
 export { operatorAllowedOrigins };
 export { JourneyProposalArgsError, JourneyRequiresAuthError, StaleReviewError, UnknownJourneyError, WeakJourneyError } from "./journey-api-errors.js";
 export { draftOnStored, watchEscapedWrites, watchOffAllowlistWrites } from "./journey-api-heal.js";
 export type { HealRunFields, MutationReplayOptions, RunJourneyProgrammaticallyOptions } from "./journey-api-heal.js";
+export type { MutationReplayFields } from "./journey-api-run.js";
 
 
 /** #401: the assertion-strength lint's verdict for one Journey (`journey lint`). */
@@ -59,26 +35,6 @@ export interface JourneyLintResult {
   errors: number;
   warnings: number;
 }
-
-
-/** #402: what a mutation-proof replay returns beyond `journey run`'s result. */
-export interface MutationReplayFields {
-  /** The step-request / end-state checks that failed (`structuredFailures`). */
-  outcomeFailures?: OutcomeCheckFailure[];
-  /** The writes aborted in `blockWritesAtStep`'s window, and after it (`blockAfterWindow`). */
-  blockedWrites?: BlockedWrite[];
-  /** `METHOD /path` of a blocked line a server answered after the window all the same (a popup, a worker). */
-  blockEscaped?: string[];
-}
-
-
-
-/**
- * #564: a run's full secret set — its secret-param values plus every value the run bound under a
- * credential-like name (an `extract as: "apiKey"` output, read from the result's `output`).
- */
-const secretBoundNoHeal = (needs: readonly string[]): string =>
-  `${needs.length === 0 ? "this run holds a secret (a secret parameter, a fixture secret or an extracted credential)" : `this Journey needs ${needs.join(", ")}`}, and nothing secret-bound goes to a model. Fix the step by hand, or heal a Journey that needs no secret. ${NOT_A_CREDENTIAL_WAY_OUT}`;
 
 
 /**
@@ -337,7 +293,8 @@ export async function promoteJourney(dir: string, id: string, opts: PromoteJourn
  * `ParamValidationError`, from `@jevitate/journey`) BEFORE any browser is
  * launched, then builds the real Actor + `JourneyRunner` and runs.
  */
-export type RunJourneyResult = JourneyRunResult & { fixtures?: FixtureRecord; videoPaths?: string[]; actionDeltas?: ReplayDeltaSummary; slowSteps?: SlowStep[]; offAllowlistWrites?: string[]; handback?: HandbackOutcome; writes?: WriteReceipt[] } & Partial<ScreenshotsResult> & MutationReplayFields & HealRunFields;
+/** The result of a stored-journey run: `journey-api-run.ts`'s shape, still named and exported here. */
+export type RunJourneyResult = MovedRunJourneyResult & MutationReplayFields & HealRunFields;
 
 /**
  * #812/#800: a surface's run (one with a `runRecorder`: `journey run` and `run_journey`) writes its
@@ -372,17 +329,6 @@ export async function runJourneyProgrammatically(opts: RunJourneyProgrammaticall
 
 const STEP_KIND = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 const ERROR_CODE = /^E_[A-Z0-9_]{1,62}$/;
-
-/** One run's evidence: the writer, the steps the replay reported, and how the record is finished. */
-interface RunEvidenceScope {
-  readonly writer: JourneyRunEvidenceWriter;
-  readonly hooks: { mode: RunMode | undefined };
-  /** A StepObserver feeding the writer: the step each write belongs to, and how each step ended. */
-  observer(): StepObserver;
-  /** The steps of the Journey that ran (a prefix or environment changes none of their kinds). */
-  ran(journey: Journey): void;
-  finish(err: unknown, result?: RunJourneyResult): string | undefined;
-}
 
 function runEvidenceFor(opts: RunJourneyProgrammaticallyOptions, stored: Journey): RunEvidenceScope | undefined {
   const recorder = opts.runRecorder;
@@ -453,338 +399,20 @@ function runEvidenceFor(opts: RunJourneyProgrammaticallyOptions, stored: Journey
 
 async function runStoredJourney(opts: RunJourneyProgrammaticallyOptions, mutation: MutationReplayOptions, stored: Journey, evidence: RunEvidenceScope | undefined): Promise<RunJourneyResult> {
   await opts.assertRunnable?.(stored);
-  // #247: onto the chosen environment (a step on an origin neither it nor #803 `--allow` allows is refused here).
-  let full = applyJourneyEnvironment(stored, opts.environment, opts.allow);
-  // #293: only the prefix up to the anchor runs (its params are the ones those steps take).
-  let journey = opts.stopAfterStep === undefined ? full : journeyPrefix(full, opts.stopAfterStep);
-  opts.runRecorder?.noteJourney(journey);
-  evidence?.ran(journey);
-  // 0.30.0 run hooks (journey-run-hooks.ts): what every hook is told; the mode once `resolveMode` decided it.
-  let mode: RunMode | undefined;
-  const target = { origin: opts.environment?.baseUrl ?? stored.recording.site, environment: opts.environment, targetsFile: opts.runGuardTargetsFile };
-  // Independent check H3: every value the run knows (bound, vault, fixture outputs, extracted), whether or not it writes evidence.
-  const knownValues = new Set<string>();
-  const noteKnown = (v: string): void => {
-    if (v !== "") knownValues.add(v);
-    evidence?.writer.noteValue(v);
-  };
-  const hookCtx = (): RunHookContext => ({ journey: stored, params: opts.params, channel: opts.runRecorder?.channel, mode, evidence: evidence?.writer, target, knownValues: () => [...knownValues] });
-  const allowedOrigins = effectiveAllowedOrigins(journey, opts.environment, opts.allow);
-  // #543: an http end-state check reads only an origin the replay allows — refused before any
-  // fixture or browser (the probe re-checks every request after substitution).
-  if (journey === full) assertHttpChecksAllowed(journeyEndState(journey), allowedOrigins, `journey '${opts.id}' end state`);
-  // #256: a Journey recorded with extensions replays only under that same build (ExtensionMismatchError, exit 64).
-  if ((journey.recording.extensions ?? []).length > 0) assertSameExtensionBuild(journey.recording.extensions, opts.browser, `journey '${opts.id}'`);
-
-  // #118: a Journey that declares it needs auth refuses BEFORE any browser launch when no
-  // storageState was given — a clear, typed failure instead of a deep `replay-target-not-found`.
-  if (journey.metadata.requiresAuth === true && opts.storageState === undefined) {
-    throw new JourneyRequiresAuthError(
-      `journey '${opts.id}' requires auth (metadata.requiresAuth) — run with --storage-state <file>`,
-    );
-  }
-
-  // Fail fast: validate BEFORE any browser launch, so bad params never pay
-  // the cost (or risk) of opening a browser.
-  const inputParams = journey === full ? opts.params : prefixParams(full, journey, opts.params);
-  mode = await resolveRunMode(hookCtx());
-  if (mode !== undefined) evidence?.writer.noteMode(mode);
-  // #827: a command's bound secrets (verify, chain, demo, an exploration's prefix) reach each of its replays.
-  const givenBound = opts.boundSecretParams ?? currentBoundSecretParams();
-  // 0.30.0 §5.3: a human step or a secret nobody supplied — vault-autofill, a hold, or a refusal, before anything opens.
-  // H7: over MCP, the one rule run_journey applies before the operator's targets.json supplies a secret (journey-run-mode-gate.ts).
-  const mayBindTargetSecrets = inMcpInvocation()
-    ? await mcpMayBindTargetSecrets(stored, mode ?? resolveRunTarget(target).mode, { journeysDir: opts.dir, catalogDir: resolveCatalogDir(undefined) })
-    : undefined;
-  const secretPlan = planSecretRun({
-    mayBindTargetSecrets,
-    stored,
-    journey,
-    params: inputParams,
-    bound: givenBound,
-    origin: target.origin,
-    environment: opts.environment,
-    targetsFile: opts.runGuardTargetsFile,
-    mode,
-    mcp: inMcpInvocation(),
-    // A run a surface started, a hold's resume, or any run of an MCP tool call (verify_journey, journey_readiness, chain_journeys).
-    surface: opts.runRecorder?.channel !== undefined || opts.resumeAtStep !== undefined || inMcpInvocation(),
-    flag: opts.secretMode,
-    env: opts.secretEnv ?? process.env,
-    heldSecretParams: opts.heldSecretParams,
-  });
-  if (secretPlan.heldSecretParams.length > 0) {
-    const wasFull = journey === full;
-    full = withSecretHandbacks(full, secretPlan.heldSecretParams);
-    journey = wasFull ? full : withSecretHandbacks(journey, secretPlan.heldSecretParams);
-  }
-  for (const v of [...secretPlan.values, ...Object.values(secretPlan.params)]) noteKnown(v);
-  const boundSecretParams = secretPlan.bound === undefined ? givenBound : { ...givenBound, ...secretPlan.bound };
-  // A secret goes only to an origin a person or operator named: a `--secret-field` binding's allowlist is
-  // the run's own origin(s) and `--allow`, never an origin only the Journey file authored. Checked here,
-  // before any browser, for a navigate URL or http check that would carry it; the interpreter checks each page.
-  const resolvedBound = resolveBoundSecretOrigins(boundSecretParams, operatorAllowedOrigins(journey, opts.environment, opts.allow));
-  if (resolvedBound !== undefined) assertBoundSecretsOnOrigins(journey, resolvedBound, target.origin);
-  validateParams(journeyParamSchema(journey), { ...secretPlan.params, ...inputParams });
-  await runValidateParamsHooks(hookCtx());
-  // #402: the mutated copy replays (and is judged); the stored Journey still names, redacts and gates.
-  const replayed = mutation.mutateJourney === undefined || journey !== full ? journey : mutation.mutateJourney(journey);
-
-  // #789: under an MCP invocation, this run's guard: a production target is refused here, before anything opens.
-  // 0.30.0 §5.4: the mode decides whether the Journey's own `allowedOrigins` join the write allowlist (automation mode drops them).
-  // §5.1: test mode lets a destructive control act and a write reach the declared environment; each is noted in the evidence.
-  const runGuard = prepareMcpRunGuard({
-    site: journey.recording.site,
-    allowedOrigins,
-    environment: opts.environment,
-    targetsFile: opts.runGuardTargetsFile,
-    ...(mode === undefined ? {} : { mode }),
-    authoredOrigins: journey.metadata.allowedOrigins ?? [],
-    onRelaxed: (note) => evidence?.writer.note(note),
-  });
-
-  const policy = opts.policy ?? safeRunPolicy();
-  // #583 §3: a prepare-only boundary never self-heals — refused before any fixture or browser opens.
-  assertHandbackNoHeal(journey, policy.selfHeal.mode !== "fail-closed");
-
-  // The site policy (`jevitate site policy set <origin>`): pacing, throttles, budgets, quiet hours —
-  // decided before any fixture or browser; a refusal says why and when to retry.
-  const gate = await gateJourney(opts.siteGate, journey.recording, { ...(opts.account === undefined ? {} : { account: opts.account }), enforceLimits: true });
-
-  const fx = opts.fixtures?.(journey.recording.site, allowedOrigins, stored.recording.site);
-  let params: Record<string, string> = { ...secretPlan.params, ...inputParams };
-  let declaredSecrets: { release(): void } | undefined;
+  const ctx: StoredJourneyRunContext = { opts, mutation, stored, evidence, fixtureBaseDir: journeyFixtureBaseDir, operatorAllowedOrigins: (journey) => operatorAllowedOrigins(journey, opts.environment, opts.allow) };
+  const prep = await prepareStoredJourneyRun(ctx);
+  const fx = opts.fixtures?.(prep.journey.recording.site, prep.allowedOrigins, stored.recording.site);
+  const state: StoredJourneyRunState = { params: { ...prep.secretPlan.params, ...prep.inputParams }, declaredSecrets: undefined };
   try {
-    if (fx !== undefined) {
-      await fx.setup();
-      const b = fx.bindings();
-      params = Object.fromEntries(Object.entries(params).map(([k, v]) => [k, substituteSetupRefs(v, b, { where: `--param ${k}` })]));
-      // #812: a fixture's outputs, and the params they were bound into, are masked from the evidence's write shapes.
-      for (const v of [...Object.values(b.values), ...fx.secrets(), ...Object.values(params)]) noteKnown(v);
-    }
-    // #140 order: fixture setup (above) → open the browser (#137 launch options, #118 storageState) → run → restore.
-    // #250/#251: a recorded or screenshotted run carries the live pixel mask from its first paint.
-    // A fixture's credential-named output is redacted by name, wherever a param carried it.
-    const secrets = [...new Set([...secretParamValues(stored, params), ...(fx?.secrets() ?? []), ...secretPlan.values])];
-    // Known values, not discovered ones: a declared 3-5 digit secret is masked inside a longer digit run too.
-    declaredSecrets = registerDeclaredSecrets(secrets);
-    const mask = opts.mask ?? new SecretPixelMask(secrets);
-    const capturing = opts.session === undefined && (opts.browser?.recordVideo !== undefined || opts.screenshots !== undefined);
-    const openPort = (): BrowserPort => {
-      const rawPort = (opts.browserPortFactory ?? (() => new PlaywrightBrowserPort()))();
-      return capturing ? maskingPort(rawPort, mask) : rawPort;
-    };
-    const startedAt = clock.nowIso();
-    const stampBase = `journey-${opts.id.replace(/[^A-Za-z0-9._-]/g, "_")}-${artifactStamp(startedAt)}`;
-    const artifactName = `${stampBase}.json`;
-    const healDir = join(logsDirFor(), `${stampBase}.heal`);
-    // #245: `--record-video` → `journey-<id>-<stamp>.videos/` under the given dir, else the logs dir.
-    const videoDir =
-      opts.browser?.recordVideo === undefined || opts.session !== undefined
-        ? undefined
-        : runVideoDir(opts.browser, join(opts.browser.recordVideo.dir ?? logsDirFor(), artifactName));
-    const flat = flatJourneySteps(journey);
-    const shots =
-      opts.screenshots === undefined || opts.session !== undefined
-        ? undefined
-        : new RunScreenshots({
-            spec: opts.screenshots,
-            dir: screenshotsDirFor(opts.screenshots, join(logsDirFor(), artifactName)),
-            secrets,
-            title: `journey ${journey.metadata.name}`,
-            mask,
-          });
-    const whatOf = (i: number): string => {
-      const s = flat[i];
-      if (s === undefined) return `step ${i + 1}`;
-      const pick = [s.recorded.objective, s.recorded.step.label].map((t) => (t ?? "").trim()).find((t) => t !== "");
-      return pick ?? describeStep(s.recorded.step);
-    };
-    // #293: a given session is the caller's — replayed into, never opened or closed here.
-    const session =
-      opts.session ??
-      (await openPort().open({
-        ...sessionLaunchOptions(opts.browser, videoDir),
-        allowedOrigins,
-        baseUrl: journey.recording.site,
-        ...opts.emulation,
-        ...(opts.storageState !== undefined ? { storageState: opts.storageState } : {}),
-      }));
-    const closeSession = opts.session === undefined ? closeOnce(() => session.close()) : async (): Promise<void> => undefined;
-    // #485: the origins outside the run's allow list that the page sent a write to (origins only —
-    // never a path, query or body). The campaign preflight reads them for an allow-list slip.
-    const offAllowlist = watchOffAllowlistWrites(session, allowedOrigins);
-    // #812: with evidence the writer watches the run, and the #790 record is derived from what it saw.
-    if (evidence === undefined) opts.runRecorder?.attach(session);
-    else evidence.writer.attach(session);
-    await runGuard?.arm(session, params, evidence === undefined ? opts.runRecorder?.noteRefusedWrite : (request) => evidence.writer.noteRefusedWrite(request, request.method(), request.url()));
-    // #583 §3: a declared boundary watches every first-party write for the whole run (aborting them
-    // only with `blockWrites`), so the typed handback state is decided from the run's own evidence.
-    const handbackObserver =
-      journey.metadata.boundary === undefined
-        ? undefined
-        : new HandbackWriteObserver(allowedOrigins, { blockWrites: journey.metadata.boundary.blockWrites === true });
-    if (handbackObserver !== undefined) await handbackObserver.arm(session.page);
-    try {
-      const actor = CastActor.named("cli-runner").whoCan(
-        new BrowseTheWeb(session, allowedOrigins),
-        ...gate.abilities,
-      );
-      const boundOption = resolvedBound === undefined ? {} : { boundSecretParams: new Map(Object.entries(resolvedBound)) };
-      const replayDeltas = opts.actionDeltas === true ? new ReplayDeltas({ secrets, recorded: flat.map((f) => f.recorded) }) : undefined;
-      // #322/#400: a full replay (never an anchored prefix) must also satisfy the Journey's end state
-      // and each step's request expectations.
-      // #543: `${name}` from the run's params (a secret param refused) and `${setup.x}` from the
-      // fixture bindings — for the end state's checks and (#565) every step expectation's references.
-      const refs = httpCheckRefs({ params, secretParams: loadRefusedParamNames(journey, params), ...(fx === undefined ? {} : { bindings: fx.bindings() }) });
-      const outcomeChecks = new JourneyOutcomeChecks(session.page, journey === full ? replayed : undefined, {
-        ...(mutation.beforeFinalNetworkCaptureClose === undefined ? {} : { beforeFinalNetworkCaptureClose: mutation.beforeFinalNetworkCaptureClose }),
-        ...(mutation.relaxedStepRequests === undefined ? {} : { relaxedStepRequests: mutation.relaxedStepRequests }),
-        secrets,
-        // #543: the end state's http checks: allowlist-bound requests.
-        httpProbe: createHttpProbe({ allowlist: allowedOrigins }),
-        resolveRef: refs,
-        ...(opts.stepResponseTimeoutMs === undefined ? {} : { stepResponseTimeoutMs: opts.stepResponseTimeoutMs }),
-      });
-      const blocker = mutation.blockWritesAtStep === undefined ? undefined : await stepWriteBlocker(session.page, mutation.blockWritesAtStep, allowedOrigins, mutation.blockAfterWindow, mutation.readRequests);
-      // #453 (Q2): a guarded click/fill heal probe runs under a per-step write blocker.
-      // Context-level (popups, WebSockets), no write exemptions; see heal-probe-guard.ts.
-      const healGuard = opts.heal === undefined || policy.selfHeal.mode === "fail-closed" ? undefined : await installHealProbeGuard(session.page, runGuard === undefined ? undefined : (ws) => runGuard.claimSocket(ws));
-      const observer = composeObservers(
-        evidence?.observer(),
-        mutation.earliestObserver,
-        outcomeChecks.observer(),
-        blocker?.observer,
-        replayDeltas?.observer(),
-        opts.observer,
-        shots === undefined ? undefined : screenshotObserver(shots, (a) => a.ability(BrowseTheWebToken).session.page, whatOf),
-      );
-      const skipStep = mutation.skipStep;
-      const selectAlternative = mutation.selectAlternativeAtStep;
-      const fixtureBaseDir = opts.fixtureBaseDir ?? journeyFixtureBaseDir();
-      // A value extracted before the run throws has no `output` to be read from, and must still be masked. The guard hears it through the interpreter.
-      // #564: a credential the run extracts joins the redaction set as it binds: the heal payload, the evidence screenshots.
-      const extractedCredentials = new Set<string>();
-      const nonSecretParams = declaredNonSecretParams(stored);
-      const onExtracted = async (value: string, name?: string): Promise<void> => {
-        opts.runRecorder?.noteValue(value);
-        noteKnown(value);
-        // A credential name, or one that names a credential and ends in a describing word with a credential-length value (`apiKey_name`).
-        if (name === undefined || !masksExtractedValue(name, value, nonSecretParams)) return;
-        extractedCredentials.add(value);
-        await mask.addSecret(value);
-      };
-      // The #789 guard, then any `beforeWrite` run hook: exactly `runGuard` while none is registered.
-      const actionGuard = withRunHookGuard(runGuard, hookCtx);
-      const interpreter =
-        opts.interpreter ??
-        (evidence === undefined && opts.observer === undefined && shots === undefined && replayDeltas === undefined && outcomeChecks.observer() === undefined && blocker === undefined && healGuard === undefined && skipStep === undefined && selectAlternative === undefined && actionGuard === undefined
-          ? new RecordingInterpreter({ fixtureBaseDir, refLookup: refs, onExtracted, ...boundOption })
-          : new RecordingInterpreter({
-              ...boundOption,
-              observer,
-              fixtureBaseDir,
-              refLookup: refs,
-              onExtracted,
-              ...(actionGuard === undefined ? {} : { actionGuard }),
-              ...(skipStep === undefined ? {} : { skipStep: (i: number) => skipStep(i) }),
-              ...(selectAlternative === undefined ? {} : { selectAlternative: (i: number) => (i === selectAlternative.index ? { avoid: selectAlternative.avoid } : undefined) }),
-            }));
-      // Decided from the Journey, before it runs: a break can come before the extract, with the value already on the page.
-      const secretBound = [...secretBoundNeeds(stored, params), ...fixtureSecretNeeds(fx)];
-      const heal: JourneyHealOptions | undefined =
-        opts.heal === undefined || healGuard === undefined
-          ? undefined
-          : { scope: opts.heal.scope, riskOf: journeyStepRisk(), writeGuard: healGuard.guard, allowedOrigins, noHealBecause: () => (secretBound.length > 0 || secrets.length > 0 || extractedCredentials.size > 0 ? secretBoundNoHeal(secretBound) : undefined), observe: healObserver(healDir, mask) };
-      const handback = secretPlan.secretMode === "visible-handback" ? secretHandbackHandler({ ctx: hookCtx, page: session.page, holdKinds: secretPlan.holdKinds }) : undefined;
-      const runner = new JourneyRunner(actor, interpreter, handback, secretPlan.secretManager, opts.selfHealer, heal);
-      const runPolicy = secretPlan.secretMode === undefined ? policy : { ...policy, secret: { ...policy.secret, secretMode: secretPlan.secretMode } };
-      let result: JourneyRunResult;
-      // #564: the run's secrets also cover every value it bound under a credential-like name (an
-      // `extract as: "apiKey"`), so the output, failures and artifacts below never carry it.
-      let runSecrets: readonly string[] = secrets;
-      try {
-        // #609: a mutated copy may no longer name a param the stored Journey takes (a targeted proof
-        // relaxed the only check naming an assertion-only `expected_*` param). The supplied set was
-        // validated against the stored Journey above; the copy runs with the subset it still reads.
-        const replayParams = replayed === journey ? params : prefixParams(journey, replayed, params);
-        const raw = await outcomeChecks.run(
-          actor,
-          () =>
-            runner
-              .run({
-                journey: replayed,
-                params: replayParams,
-                policy: runPolicy,
-                ...(opts.resumeAtStep === undefined ? {} : { resumeAt: opts.resumeAtStep - 1 }),
-                ...(secretPlan.secretRefs === undefined ? {} : { secretRefs: secretPlan.secretRefs }),
-              })
-              .catch((err: unknown) => {
-                throw secretOriginRefusalOf(err, target.origin, mode ?? "automation", secretPlan.trust) ?? err;
-              }),
-          {
-          collectStepFailuresOnReplayFailure: mutation.structuredFailures === true,
-          ...(mutation.beforeEndState === undefined ? {} : { beforeEndState: mutation.beforeEndState }),
-          ...(mutation.afterEndState === undefined ? {} : { afterEndState: mutation.afterEndState }),
-        });
-        runGuard?.check();
-        if ("output" in raw) opts.onRawOutput?.(raw.output);
-        if ("output" in raw && raw.output !== null && typeof raw.output === "object") for (const v of Object.values(raw.output as Record<string, unknown>)) if (typeof v === "string") noteKnown(v);
-        // The page is still open: a done check reads it here (#800, a later deliverable's hook).
-        if (hasRunHooks("readDoneCheck")) await runReadDoneCheckHooks({ ...hookCtx(), page: session.page, result: raw });
-        runSecrets = [...new Set([...runSecretValues(secrets, raw, nonSecretParams), ...extractedCredentials])];
-        result = redactSecretValues(raw, runSecrets);
-      } finally {
-        mutation.onRunSecrets?.([...new Set([...runSecrets, ...extractedCredentials])]);
-        await gate.done();
-        await healGuard?.guard.disarm();
-        await healGuard?.dispose();
-        await handbackObserver?.disarm();
-      }
-      // #453: a self-heal run persists its record (heal attempts, the proposal) and indexes it.
-      // #453 review: a run that cannot write its proposal (a prefix or mutated replay, a proof error)
-      // is never pending review — `persistHealRun` reports it quarantined, saying why.
-      let healFields: Partial<Awaited<ReturnType<typeof persistHealRun>>["fields"]> = {};
-      if (policy.selfHeal.mode !== "fail-closed") {
-        const unwritable = journey !== full ? "only a prefix of the Journey ran" : mutation.mutateJourney !== undefined ? "a mutated copy of the Journey ran" : undefined;
-        const persisted = await persistHealRun({ result, stored, params, secrets: runSecrets, opts, stampBase, startedAt, ...(unwritable === undefined ? {} : { unwritable }) });
-        result = persisted.result;
-        healFields = persisted.fields;
-      }
-      // #583: the typed handback state, decided from the run's own results and network evidence —
-      // attached only when the Journey declares a boundary (otherwise the result is unchanged).
-      result = attachHandback(result, journey, handbackObserver?.counts() ?? { writes: 0, writesBlocked: 0, observation: "unavailable" });
-      const slowFields = outcomeChecks.slowSteps.length === 0 ? {} : { slowSteps: [...outcomeChecks.slowSteps] };
-      const writeOrigins = offAllowlist.stop();
-      const originFields = writeOrigins.length === 0 ? {} : { offAllowlistWrites: redactSecretValues(writeOrigins, runSecrets) };
-      const shotFields = shots === undefined ? {} : await shots.finish();
-      const deltaFields = replayDeltas === undefined ? {} : { actionDeltas: redactSecretValues(replayDeltaSummary(replayDeltas), runSecrets) };
-      // #245: the context closed (its video finalized) before the result naming it is returned.
-      const videos = await finalizeVideos(videoDir, closeSession);
-      // After the close: a replay stays open a while before it, and a block holds until then.
-      await blocker?.guard.disarm();
-      const mutationFields: MutationReplayFields = {
-        ...(mutation.structuredFailures === true ? { outcomeFailures: redactSecretValues([...outcomeChecks.lastFailures], runSecrets) } : {}),
-        ...(blocker === undefined ? {} : { blockedWrites: blocker.guard.drain() }),
-        ...(blocker === undefined || blocker.escaped().length === 0 ? {} : { blockEscaped: blocker.escaped() }),
-      };
-      if (fx === undefined) return { ...result, ...healFields, ...videos, ...shotFields, ...deltaFields, ...slowFields, ...originFields, ...mutationFields };
-      await fx.restore();
-      // #399: a fixture output passed in as a secret param (`--param t='${setup.t}'`) is redacted here too.
-      return { ...result, ...healFields, ...videos, ...shotFields, ...deltaFields, ...slowFields, ...originFields, ...mutationFields, fixtures: redactSecretValues(fx.record(), runSecrets) };
-    } finally {
-      offAllowlist.stop();
-      await runGuard?.dispose();
-      await closeSession();
-    }
+    return await runPreparedStoredJourney(prep, state, fx, ctx);
   } catch (err) {
     // A replay that ends before the run's own secret set is told it (a fixture's setup): what it knew by then.
-    mutation.onRunSecrets?.([...new Set([...secretParamValues(stored, params), ...(fx?.secrets() ?? []), ...secretPlan.values])]);
+    mutation.onRunSecrets?.([...new Set([...secretParamValues(stored, state.params), ...(fx?.secrets() ?? []), ...prep.secretPlan.values])]);
     // #399: an error escaping the run (a crash, a closed page) may echo a navigated URL that
     // carried a secret parameter — its message and stack are redacted, its class kept.
-    throw redactErrorSecrets(err, secretParamValues(journey, { ...inputParams, ...params }));
+    throw redactErrorSecrets(err, secretParamValues(prep.journey, { ...prep.inputParams, ...state.params }));
   } finally {
-    declaredSecrets?.release();
+    state.declaredSecrets?.release();
     await fx?.restore();
     if (mutation.onFixtureRestoreFailed !== undefined && fx?.restoreFailed() === true) mutation.onFixtureRestoreFailed();
   }
