@@ -129,7 +129,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "coverage-strategy.ts runCoverageMission": { hostHealth: SEAM, nowIso: SEAM },
   "adversarial-strategy.ts runAdversarialCliMission": { hostHealth: SEAM, nowIso: SEAM },
   "feature-strategy.ts runFeatureCliMission": { hostHealth: SEAM, nowIso: SEAM },
-  "run.ts runExploreMultiRun": { nowIso: SEAM },
+  "run-options.ts runExploreMultiRun": { nowIso: SEAM },
   "verify-fix-cli.ts runVerifyFix": { runGuardTargetsFile: GUARD_TARGETS, settleCeilingMs: "verify-fix reuses the recorded run's render wait", evidencePaceMs: EVIDENCE_PACE },
   "usability-strategy.ts runUsabilityMission": {
     hostHealth: SEAM,
