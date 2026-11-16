@@ -114,7 +114,9 @@ function declarationExports(pkgName) {
   if (moduleSymbol === undefined) throw new Error(`${indexPath} has no module symbol (not a module?)`);
   const result = checker
     .getExportsOfModule(moduleSymbol)
-    .map((sym) => ({ name: sym.name, kind: declarationKind(sym.flags) }))
+    // A re-export chain (index.ts → a.ts → a-part.ts, as the move-only file splits create) leaves
+    // the exported symbol an alias; classify what it resolves to, so a split never reads as a kind change.
+    .map((sym) => ({ name: sym.name, kind: declarationKind((sym.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(sym) : sym).flags) }))
     .sort((a, b) => a.name.localeCompare(b.name));
   declarationExportsCache.set(pkgName, result);
   return result;

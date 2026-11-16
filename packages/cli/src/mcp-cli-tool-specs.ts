@@ -1,0 +1,1023 @@
+import { CATALOG_EXPORT_FORMATS } from "./catalog-bundle-api.js";
+import {
+  AI,
+  BROWSER_FLAGS,
+  DEMO_SHOW,
+  EMULATION,
+  ENVIRONMENT,
+  EXTENSION,
+  FIXTURE_IDENTITY,
+  HOOK_FLAGS,
+  JEV_ADVICE,
+  JEV_AI,
+  JSON_FLAG,
+  LOCATION_FLAGS,
+  OMIT,
+  TAGS,
+  b,
+  many,
+  n,
+  num,
+  path,
+  pos,
+  s,
+  session,
+  type CliToolSpec,
+} from "./mcp-cli-tool-params.js";
+
+export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
+  {
+    name: "list_journeys",
+    description: "`jevitate journey list`: every Journey in the store (promoted and not) — id, name, promoted, params. find_capabilities is the promoted-only search.",
+    command: { path: "journey list", params: {}, omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...JSON_FLAG } },
+  },
+  {
+    name: "promote_journey",
+    description:
+      "`jevitate journey promote <id>`: promote a local Journey so it becomes discoverable (find_capabilities) and runnable (run_journey). " +
+      "#437: an approval made here is recorded as an AGENT's approval (approval.provenance.channel `mcp`, with the agent markers detected) — never as a person's — and `jevitate check --require-approvals` fails it unless `mcp` is an allowed channel. " +
+      "A promotion that must count as human sign-off is a person's act at their own terminal: hand it to them (`jevitate journey promote <id>`, typed confirmation). " +
+      "#453: proposal <pid> accepts a pending self-heal revision (review_journey shows it; bind with reviewedHash = its proposedHash) — the same gates, recorded as channel `mcp` (an agent's approval) with approval.proposal; rejectProposal <pid> + reason rejects it, leaving the stored Journey untouched.",
+    command: {
+      path: "journey promote",
+      params: {
+        id: pos(),
+        reviewedHash: s("--reviewed-hash"),
+        acceptUnvetted: s("--accept-unvetted"),
+        proposal: s("--proposal"),
+        rejectProposal: s("--reject-proposal"),
+        reason: s("--reason"),
+        ...JEV_ADVICE,
+      },
+      omitted: { ...LOCATION_FLAGS, 
+        "--dir": OMIT.storeDir,
+        "--accept-weak": OMIT.acceptWeak,
+        "--full": OMIT.reviewRendering,
+        "--review-sheet": OMIT.reviewSheet,
+        "--accept-findings": OMIT.acceptFindings,
+        "--non-interactive-approval": OMIT.nonInteractiveApproval,
+        ...JSON_FLAG,
+      },
+    },
+  },
+  {
+    name: "review_persona",
+    description:
+      "`jevitate persona review <id> --json` (#433): read-only. A catalog persona's review sheet — description, account role, session presence (never a credential), the jobs it serves, the Journeys linked to it, its approval state (draft / approved / stale = needs re-review), the pre-approval findings, and its content hash. " +
+      "readiness: true adds the #434 Readiness section (deterministic checks + INCOSE GtWR rule findings; with real: true and a judgment key, advisory Jev questions with probabilities). The #435 catalog analysis of its pairs is always included (classified by Jev with real: true). " +
+      "Approving a persona is a person's act on the CLI (`jevitate persona approve`): there is no MCP tool for it.",
+    command: { path: "persona review", params: { id: pos(), readiness: b("--readiness"), ...JEV_ADVICE }, omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, "--out": OMIT.catalogRendering, ...JSON_FLAG } },
+  },
+  {
+    name: "review_job",
+    description:
+      "`jevitate job review <id> --json` (#433): read-only. A catalog job's review sheet — its job story (\"When …, I want to …, so I can ….\"), its personas and which of them have a promoted Journey for it, the gaps, its Journeys, its approval state (draft / approved / stale = needs re-review), the pre-approval findings, and its content hash. " +
+      "readiness: true adds the #434 Readiness section (deterministic checks + INCOSE GtWR rule findings; with real: true and a judgment key, advisory Jev questions with probabilities). The #435 catalog analysis of its pairs is always included (classified by Jev with real: true). " +
+      "Approving a job is a person's act on the CLI (`jevitate job approve`): there is no MCP tool for it.",
+    command: { path: "job review", params: { id: pos(), readiness: b("--readiness"), ...JEV_ADVICE }, omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, "--out": OMIT.catalogRendering, ...JSON_FLAG } },
+  },
+  {
+    name: "draft_job_outcomes",
+    description:
+      "`jevitate job draft-outcomes <jobId> --json` (#465): draft 1–3 desired outcomes (count, default 3) for a catalog job with the generation model (real: true live, or fakeAi: true deterministic — exactly one) and write them into its jobs file marked provenance ai_draft for the team to review. " +
+      "It NEVER approves: an approved job becomes stale (needs re-review), and approving stays a person's act on the CLI (`jevitate job approve`) — there is no MCP tool for it.",
+    command: { path: "job draft-outcomes", params: { jobId: pos(), count: n("--count"), ...AI }, omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...JSON_FLAG } },
+  },
+  {
+    name: "catalog_status",
+    description:
+      "`jevitate catalog status --json` (#433): read-only. The catalog's coverage — the jobs × personas matrix (which pairs have a promoted Journey), approved jobs with no promoted Journey, Journeys linked to nothing, dangling links, and stale approvals (edited personas/jobs and the Journeys linked to them: needs re-review). " +
+      "#437: `approvals` lists every recorded approval and how it was made (provenance channel tty / non-interactive / mcp / ci / pr-review). requireApprovals (+ allowChannels: a comma list of tty, non-interactive, mcp, ci, pr-review; default tty): exit 1 when an approval is missing, stale or made over a channel not allowed. " +
+      "#523: strict: true exits 1 (listing `strict.violations`) when a persona/job approval is stale, or a promoted Journey links a catalog entry that is not approved (a draft) or links no job / no persona. " +
+      "#469: pr-review is a channel you may ALLOW, never one a caller sets — jevitate records it only after verifying the merged PR's approving review through the forge API in CI.",
+    command: {
+      path: "catalog status",
+      params: { requireApprovals: b("--require-approvals"), allowChannels: s("--allow-channels"), strict: b("--strict") },
+      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "catalog_draft",
+    description:
+      "`jevitate catalog draft <kind> <id> --name <text> --json` (#523): add a DRAFT persona or job (kind: persona | job) to the catalog — personas.json / jobs.json, created when missing — so a Journey can link it (metadata.persona / metadata.job) before a person vets it. " +
+      "A persona's name is written as its role, its description as its description; a job's name is its motivation (\"I want to …\"), description its goal, and trigger / outcome its other story parts (absent: a placeholder to write before approving). " +
+      "An id the catalog already has is refused (E_CATALOG_DRAFT_EXISTS). It NEVER approves: approving stays a person's act on the CLI (`jevitate persona|job approve`) — there is no MCP tool for it.",
+    command: {
+      path: "catalog draft",
+      params: {
+        kind: pos("string", { enum: ["persona", "job"] }),
+        id: pos(),
+        name: s("--name", { required: true }),
+        description: s("--description"),
+        trigger: s("--trigger"),
+        outcome: s("--outcome"),
+      },
+      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "analyze_catalog",
+    description:
+      "`jevitate catalog analyze --json` (#435): read-only and advisory. Problems BETWEEN catalog items, grouped by INCOSE GtWR set characteristic (complete, consistent, feasible, comprehensible, able to be validated, correct): candidate pairs chosen by code (shared persona or trigger/outcome terms, opposing writes on one resource, same role), each with why it was paired and — with real: true — Jev's typed classification (compatible | duplicate | overlapping | conflicting | dependent, with a probability), " +
+      "completeness gaps, and update advice (stale approvals, Journeys whose last mutation proof fails). Pairs over maxPairs are listed as overflow, never dropped. It never changes the catalog and never gates.",
+    command: { path: "catalog analyze", params: { ...JEV_ADVICE, maxPairs: n("--max-pairs") }, omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--markdown": OMIT.catalogRendering, ...JSON_FLAG } },
+  },
+  {
+    name: "export_catalog_bundle",
+    description:
+      "`jevitate catalog export --format journeeze-bundle --out <dir> --json` (#464): write the catalog (personas, jobs, Journeys with their approvals, links, checks, findings) and, #471, each approved demo's jz-mask-v1-masked media (media/<id>/…, only for demos approved on a synthetic: true environment) as a Journeeze catalog bundle (bundle.json) under out — a directory inside the project (never ~/.jevitate/). " +
+      "check: `jevitate check` records (check.json paths, confined like every read path) to include — default <project>/jevitate-check/check.json when it exists; productName: the bundle's product.name (default the project's package.json name, else its folder name). " +
+      "Returns the bundle path, its sha256 digest, counts and warnings. It never uploads (publish_to_journeeze) and never approves anything.",
+    command: {
+      path: "catalog export",
+      params: {
+        format: s("--format", { required: true, enum: CATALOG_EXPORT_FORMATS }),
+        out: { kind: "project-path", flag: "--out", required: true },
+        check: { kind: "path[]", flag: "--check" },
+        productName: s("--product-name"),
+      },
+      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "publish_to_journeeze",
+    description:
+      "`jevitate publish journeeze --json` (#464): export the catalog bundle and upload it to the Journeeze product this project is connected to (a ZIP with the masked demo media when there is any, else bundle.json), then wait until it is imported or refused; returns the status, productName, summary, warnings and errors. dryRun: true exports and validates but sends nothing. " +
+      "productName: the bundle's product.name — overrides the connected product's name (default: the saved connection's product name, or whoami's when the key comes from JOURNEEZE_UPLOAD_KEY). A dry run verifies the key with whoami and refuses with E_JOURNEEZE_PRODUCT_MISMATCH when its product.name differs from the one this publish names. " +
+      "The upload key is resolved by jevitate itself (its secret store, or JOURNEEZE_UPLOAD_KEY in CI): it is never an argument and never in a result. A refusal carries its specific code (E_JOURNEEZE_NOT_CONNECTED, E_JOURNEEZE_KEY_REFUSED, E_JOURNEEZE_FORBIDDEN, E_JOURNEEZE_UNAVAILABLE, …). Connecting a project (entering the key) is a person's act on the CLI (`jevitate connect journeeze`) — there is no MCP tool for it. Publishing never approves anything.",
+    command: { path: "publish journeeze", params: { dryRun: b("--dry-run"), productName: s("--product-name") }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+  },
+  {
+    name: "review_journey",
+    description:
+      "`jevitate journey review <id> --json` (#432): read-only. The Journey's review sheet for promotion sign-off — summary (goal, success criteria, missing intent), steps (action, target control, objective, expected result, params), side effects (expected write requests, controls matching safety rules with their rule ids, origins), inputs (parameter and secret names only — never values), proof (end-state checks, per-step assertions, lint, last mutation-proof verdict), the change since its last approval, a pending self-heal proposal (#453: per-step before/after, hypothesis, evidence, staleness, proposedHash), and its content hash. " +
+      "readiness: true adds the #434 Readiness section (links, intent, lint, mutation proof; with real: true and a judgment key, advisory Jev questions with probabilities); the #435 catalog analysis of its pairs is always included. " +
+      "Pass that hash as promote_journey reviewedHash to bind an approval to exactly what was reviewed. " +
+      "#523: strict: true exits 1 (defects) when the sheet has any ⚠ attention item (and runs the code-only readiness link checks — missing job / persona — even without readiness); ○ items and Jev never fail it. " +
+      "M5: env / baseUrl judge the mutation proof's freshness for that target, as verify_journey ran it (default: the Journey's recorded site, where a proof made on another target reads stale, cause target). " +
+      "#467: stale: true (and no id) instead lists every promoted Journey whose approval is stale — each with its approved and current hash and stepIdOnly: true when the only change is minted step ids — for a person to re-approve; it never approves.",
+    command: {
+      path: "journey review",
+      params: { id: { kind: "string", positional: true }, stale: b("--stale"), readiness: b("--readiness"), strict: b("--strict"), ...JEV_ADVICE, ...ENVIRONMENT },
+      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--markdown": OMIT.reviewRendering, "--full": OMIT.reviewRendering, "--out": OMIT.reviewRendering,
+        "--pre-approval": "CLI-only native human-owner queue preflight; a typed pending-action projection, not approval or a new MCP review capability",
+        ...JSON_FLAG },
+    },
+  },
+  {
+    name: "lint_journey",
+    description:
+      "`jevitate journey lint <id>`: the assertion-strength lint — the assertions that cannot prove the Journey's outcome (a write with no asserted effect, visibility-only claims, nothing after the last write, …). promote_journey refuses a Journey with any error finding. " +
+      "#487: fix: true stamps the step id of each anchor that references a step by number only and writes the Journey (#507: on a promoted Journey its approval goes stale; the result carries needsReapproval and reapproveCommand), reporting what was stamped.",
+    command: { path: "journey lint", params: { id: pos(), fix: b("--fix") }, omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--sarif": OMIT.storeDir, ...JSON_FLAG } },
+  },
+  {
+    name: "journey_anchors",
+    description:
+      "`jevitate journey anchors <id>` (#293): a Journey's named anchors — states worth exploring from, each with the step it follows and its suggested adversarial probes. Branch a mission off one with run_exploration fromJourney + atStep. " +
+      "#487: suggest: true instead proposes anchors where the recorded flow changes state (a new page, a form that became valid, a completed write) — advisory, writes nothing; accept one with journey_anchor_add.",
+    command: { path: "journey anchors", params: { id: pos(), suggest: b("--suggest") }, omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...JSON_FLAG } },
+  },
+  {
+    name: "journey_anchor_add",
+    description:
+      "`jevitate journey anchor add <journeyId>` (#487): add a named anchor to a Journey — step is a 1-based step number or a step id; the step's stable id is written at once. Returns the anchor lint issues that remain. " +
+      "On a promoted Journey (#507) the approval goes stale: it stays promoted, the old approval is kept for the review diff, and the result carries needsReapproval: true and reapproveCommand (jevitate journey promote <id> --reviewed-hash <new review hash>), which only a person runs. #519: region declares the page region missions at this anchor attack (a descriptor like testId=import-view); a run from this anchor scopes control coverage to it and --scope-region cannot override it.",
+    command: {
+      path: "journey anchor add",
+      params: { journeyId: pos(), name: s("--name", { required: true }), step: s("--step", { required: true }), description: s("--description"), probe: many("--probe"), region: s("--region") },
+      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "journey_anchor_remove",
+    description:
+      "`jevitate journey anchor remove <journeyId>` (#487): remove the named anchor from a Journey; returns the anchor lint issues that remain. On a promoted Journey (#507) the approval goes stale: it stays promoted, the old approval is kept for the review diff, and the result carries needsReapproval: true and reapproveCommand (jevitate journey promote <id> --reviewed-hash <new review hash>), which only a person runs.",
+    command: { path: "journey anchor remove", params: { journeyId: pos(), name: s("--name", { required: true }) }, omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...JSON_FLAG } },
+  },
+  {
+    name: "journey_link",
+    description:
+      "`jevitate journey link <id> --json` (#523): link a Journey to a catalog job (job) and/or persona (persona) — metadata.job / metadata.persona — or clear a link (unlinkJob / unlinkPersona: true); at least one of the four. " +
+      "Each id is checked against the catalog: an unknown id is refused (E_JOURNEY_LINK_ARGS, the message lists the catalog's ids). A draft entry (catalog_draft) may be linked: the result's needsApproval says a person still approves it before promote. Linking is never an approval. " +
+      "On a promoted Journey the approval goes stale (#507): it stays promoted, the result carries needsReapproval: true and reapproveCommand, which only a person runs. A link is not executable content, so it never stales a mutation proof.",
+    command: {
+      path: "journey link",
+      params: { id: pos(), job: s("--job"), persona: s("--persona"), unlinkJob: b("--unlink-job"), unlinkPersona: b("--unlink-persona") },
+      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "annotate_journey",
+    description:
+      "`jevitate journey annotate <id>` (#246): replay the Journey and DRAFT each step's objective/expected result (and a missing goal/success criteria) into a reviewable draft — the Journey itself is never written. " +
+      "With approve: true, applies the reviewed draft (shows the diff; refused with E_JOURNEY_ANNOTATIONS_STALE if the Journey changed since the draft) — the same proposal/approval semantics as the CLI. Drafting needs real or fakeAi.",
+    command: {
+      path: "journey annotate",
+      paramJourneys: (a) => [a["id"]],
+      params: { ...EXTENSION, id: pos(), approve: b("--approve"), params: { kind: "params", flag: "--param" }, storageState: session("--storage-state"), fixtures: path("--fixtures"), fixtureIdentity: FIXTURE_IDENTITY, screenshots: { kind: "screenshots", flag: "--screenshots" }, actionDeltas: b("--action-deltas"), ...ENVIRONMENT, ...EMULATION, ...AI },
+      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir,
+        "--status": "CLI-only native annotation transaction status/resume protocol; no new MCP transaction capability",
+        "--reviewed-hash": "binds standalone annotation apply to the exact native terminal-reviewed transaction; MCP cannot supply human TTY approval",
+        ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "demo_journey",
+    description:
+      "`jevitate journey demo <id>` (#248): replay a Journey as a narrated demo — a WebM video with .vtt subtitles (video: a .webm path) and/or a Markdown step-by-step guide with screenshots (guide: a .md path). A Journey that no longer replays fails (exit 1). Paths inside the project or ~/.jevitate.",
+    command: {
+      path: "journey demo",
+      paramJourneys: (a) => [a["id"]],
+      params: {
+        id: pos(),
+        ...EXTENSION,
+        video: path("--video"),
+        guide: path("--guide"),
+        pace: n("--pace"),
+        params: { kind: "params", flag: "--param" },
+        storageState: session("--storage-state"),
+        fixtures: path("--fixtures"),
+        fixtureIdentity: FIXTURE_IDENTITY,
+        screenshots: { kind: "screenshots", flag: "--screenshots" },
+        actionDeltas: b("--action-deltas"),
+        ...ENVIRONMENT,
+        ...EMULATION,
+        ...DEMO_SHOW,
+      },
+      omitted: { "--secret-field": OMIT.envSecret, ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "verify_journey",
+    description:
+      "`jevitate journey verify <id> --plan|--mutate|--status` (#402): plan previews the exact mutations, assertion pairings, unpaired assertions and minimum replay count without opening a browser; mutate proves each assertion can fail by replaying the Journey as recorded, then once per mutation, with independence, control and closing replays around them. Mutations only skip steps, abort the app's own writes or alter checked non-secret inputs; nothing is fabricated. status (#787) reads a proof's durable progress and whether its verifier is live, exited or stale: no browser, no hook, nothing of the app's. resume, with mutate, continues an interrupted proof of the same Journey and configuration, reusing finished pairs after the base replay passes again; any mismatch, a damaged or over-24h checkpoint, or a live verifier is refused by name (data.reason) and never starts over. Set exactly one of plan, mutate or status.",
+    command: {
+      path: "journey verify",
+      paramJourneys: (a) => [a["id"]],
+      params: {
+        id: pos(),
+        ...EXTENSION,
+        mutate: b("--mutate"),
+        plan: b("--plan"),
+        status: b("--status"),
+        resume: b("--resume"),
+        params: { kind: "params", flag: "--param" },
+        storageState: session("--storage-state"),
+        fixtures: path("--fixtures"),
+        fixtureIdentity: FIXTURE_IDENTITY,
+        // M5: the app version the proof's receipt binds (as run_check's).
+        appVersion: s("--app-version"),
+        ...ENVIRONMENT,
+        ...EMULATION,
+      },
+      omitted: { "--secret-field": OMIT.envSecret, ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, "--allow": OMIT.mcpOrigins, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+    },
+    // The command takes `status` first and runs no proof, whatever else is set.
+    answersWhileBusy: (args) => args["status"] === true,
+  },
+  {
+    // 0.30.0 #801 (owner decision): the authoring-time shortest-path search, the tool twin of `journey shorten`.
+    name: "shorten_journey",
+    description:
+      "`jevitate journey shorten <id> --job <jobId> [--budget n] [--out-id <id>]` (#801): authoring time only, no model. Searches for a shorter path to the same job by removing steps; every candidate is a full replay of the DRAFT Journey (real writes), on env/baseUrl like verify_journey (the environment's targets.json secretFields supply a secret parameter; never params), with its fixtures set up before and restored after it, decided only by the job's done check (.jevitate/jobs.json jobs[].done) read in a fresh browser context. A candidate that drops a confirm/agree/accept click, or navigates past one it dropped, is refused and costs no replay. budget (default 30) counts every replay, the recorded path's included. " +
+      "A promoted Journey is refused ({code: E_JOURNEY_SHORTEN_PROMOTED}); the run-mode gate and the run guard decide as for run_journey before any replay (an unapproved draft runs on a test-mode target only). A secret parameter's value in params is refused by name ({code: E_SECRET_PARAM_OVER_MCP}). " +
+      "Returns the CLI's report: wording (\"shortest found within budget\", never optimal), originalSteps, shortestSteps, replaysUsed, budget, stopped (searched | budget | recorded-path-fails), baseline, removed (step, kind), refused, and draftId: a NEW unpromoted draft a person reviews and promotes. The source Journey is not changed.",
+    command: {
+      path: "journey shorten",
+      paramJourneys: (a) => [a["id"]],
+      params: {
+        id: pos(),
+        job: s("--job", { required: true }),
+        budget: n("--budget"),
+        outId: s("--out-id"),
+        params: { kind: "params", flag: "--param" },
+        storageState: session("--storage-state"),
+        fixtures: path("--fixtures"),
+        fixtureIdentity: FIXTURE_IDENTITY,
+        stepResponseTimeoutMs: n("--step-response-timeout"),
+        ...EXTENSION,
+        ...ENVIRONMENT,
+        ...EMULATION,
+      },
+      omitted: { "--secret-field": OMIT.envSecret, "--allow": OMIT.mcpOrigins, ...LOCATION_FLAGS, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "journey_readiness",
+    description:
+      "`jevitate journey readiness <id> [--with <toId>] --json` (#581): one readiness receipt for a Journey or a linked pair — lint, schema, the #582 handoff, the #583 boundary, strict review, annotations, catalog links/approvals, the recorded mutation proof (fresh only while bound to the current review hash) and promotion, each pass / fail / inconclusive / stale / not-run / awaiting-human. mode: report (default; no browser, sends nothing) | replay (baseline run, or the chain for a pair with requests) | prove (replay plus verify --mutate). replay/prove need env or baseUrl, refuse an environment flagged production and refuse missing params by name, all before any browser. verdict: technically-ready (exit 0) | blocked (1) | inconclusive / incomplete (2); a passing replay never hides an inconclusive proof. Approvals are listed under awaitingHuman and never acted on; the receipt carries no param value, page text or secret.",
+    command: {
+      path: "journey readiness",
+      paramJourneys: (a) => [a["id"], a["with"]],
+      params: {
+        id: pos(),
+        with: s("--with"),
+        mode: s("--mode", { enum: ["report", "replay", "prove"] }),
+        params: { kind: "params", flag: "--param" },
+        requests: path("--requests"),
+        storageState: session("--storage-state"),
+        fixtures: path("--fixtures"),
+        fixtureIdentity: FIXTURE_IDENTITY,
+        ...EXTENSION,
+        ...ENVIRONMENT,
+      },
+      // #827: secret fields come from targets.json for the run's --env/--base-url, never from the request.
+      omitted: { "--secret-field": OMIT.envSecret, ...LOCATION_FLAGS, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "journey_bundle",
+    description:
+      "`jevitate journey bundle <id> [--with <toId>] --out <dir> --json` (#584): write a local human review bundle (bundle.md + manifest.json) for a Journey or a linked pair from a report-mode readiness — verdict and blockers first, contracts, boundary, side effects, hashes, distinct approval states and the ordered human-only commands (promote carries the review hash only when technically ready). check: re-derive an existing bundle's hashes; a changed Journey or catalog entry fails closed with E_BUNDLE_STALE. out is a directory inside the project. It never uploads, approves or promotes.",
+    command: {
+      path: "journey bundle",
+      params: {
+        id: { kind: "string", positional: true },
+        with: s("--with"),
+        out: { kind: "project-path", flag: "--out" },
+        check: path("--check"),
+      },
+      omitted: { ...LOCATION_FLAGS, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "chain_journeys",
+    description:
+      "`jevitate journey chain --from <discover> --to <reply> --requests <file>` (#580): run a discover Journey once, then a prepare-only reply Journey once per approved request in the JSON Lines file ({commentId, account, replyText}) matched to a discovered record by commentId AND account. Both Journeys must be promoted. #608: params supplies explicit producer (discover) params, validated against the producer's schema before anything runs. Unmatched requests never run; an empty discovery stops the chain (no target is guessed). The result names ids and outcomes only, never record or reply text. Exit 0 only when every request matched and its run was ok.",
+    command: {
+      path: "journey chain",
+      paramJourneys: (a) => [a["from"], a["to"]],
+      params: {
+        from: s("--from", { required: true }),
+        to: s("--to", { required: true }),
+        requests: path("--requests", { required: true }),
+        params: { kind: "params", flag: "--param" },
+        storageState: session("--storage-state"),
+        ...EXTENSION,
+        ...EMULATION,
+        ...ENVIRONMENT,
+      },
+      omitted: { "--secret-field": OMIT.envSecret, ...LOCATION_FLAGS, 
+        "--allow-draft": "#580: over MCP a chain runs promoted Journeys only, as run_journey does; running drafts is the operator's CLI call",
+        "--dir": OMIT.storeDir,
+        "--allow": OMIT.mcpOrigins,
+        ...BROWSER_FLAGS,
+        ...JSON_FLAG,
+      },
+    },
+  },
+  {
+    name: "publish_journey",
+    description: "`jevitate journey publish <id> --to <source>`: publish a promoted Journey into a registered source on a new publish/<id> branch (a PR when gh is available). Secret references only; declared origins must cover its steps.",
+    command: {
+      path: "journey publish",
+      params: { id: pos(), to: s("--to", { required: true }), declareOrigin: many("--declare-origin"), as: s("--as") },
+      omitted: { ...LOCATION_FLAGS,  "--dir": OMIT.storeDir, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "create_demo",
+    description:
+      "`jevitate demo \"<aspect>\"` / `demo create` (#249): explore a NAMED, non-production environment (env, required) toward the aspect, checked by success (required), minimize the path (verified by replay), annotate it and render a DRAFT demo (video, .vtt, guide). Nothing is promoted until approve_demo. Needs real or fakeAi.",
+    command: {
+      path: "demo create",
+      params: { tags: TAGS, ...EXTENSION,
+        aspect: pos(),
+        env: s("--env"),
+        success: s("--success"),
+        persona: s("--persona"),
+        id: s("--id"),
+        start: s("--start"),
+        maxActions: n("--max-actions"),
+        maxDecisions: n("--max-decisions"),
+        out: path("--out"),
+        pace: n("--pace"),
+        storageState: session("--storage-state"),
+        fixtures: path("--fixtures"),
+        fixtureIdentity: FIXTURE_IDENTITY,
+        ...EMULATION,
+        ...DEMO_SHOW,
+        ...JEV_AI,
+      },
+      omitted: { "--dir": OMIT.storeDir, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "approve_demo",
+    description:
+      "`jevitate demo approve <id>` (#249): approve a DRAFT demo — renders the final demo (no DRAFT marks) on the environment it was made on, then applies its annotations and promotes the Journey. A replay that no longer works promotes nothing (exit 1). " +
+      "#437: an approval made here is recorded as an AGENT's approval (approval.provenance.channel `mcp`) — never as a person's — and `jevitate check --require-approvals` fails it unless `mcp` is allowed; human sign-off is the person's `jevitate demo approve <id>` at their own terminal.",
+    command: {
+      path: "demo approve",
+      params: {
+        ...EXTENSION,
+        id: pos(),
+        out: path("--out"),
+        pace: n("--pace"),
+        storageState: session("--storage-state"),
+        fixtures: path("--fixtures"),
+        fixtureIdentity: FIXTURE_IDENTITY,
+        ...EMULATION,
+        ...DEMO_SHOW,
+        acceptUnvetted: s("--accept-unvetted"),
+        ...JEV_ADVICE,
+      },
+      omitted: { "--dir": OMIT.storeDir, "--accept-findings": OMIT.acceptFindings, "--non-interactive-approval": OMIT.nonInteractiveApproval, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "run_exploration",
+    description:
+      "`jevitate explore` run DIRECTLY (every strategy: goal (default) | coverage | exploratory | adversarial | usability, or feature): drives a real browser on url (which must be on an allow origin) within its budget, and returns the typed result (read later with get_mission_result by its result id). " +
+      "For a PROMOTED target prefer queue_exploration (queue + poll). Model-driven strategies need real or fakeAi. Media: recordVideo, screenshots, evidenceVideo. Sessions: storageState, persona/actor entries 'name=<storageState path>'; authCheck (off/auto/urlExcludes:/selector:) ends a run on an expired session as auth-expired (inconclusive), re-signing a persona in once when its personas file declares login parameters.",
+    command: {
+      path: "explore",
+      paramJourneys: (a) => [a["fromJourney"]],
+      params: { tags: TAGS, ...EXTENSION,
+        url: s("--url"),
+        targetId: s("--target"),
+        // #293 journey-anchored exploration: replay a promoted Journey to a step/anchor, then the mission.
+        fromJourney: s("--from-journey"),
+        atStep: s("--at-step"),
+        params: { kind: "params", flag: "--param" },
+        ...ENVIRONMENT,
+        allow: many("--allow"),
+        strategy: s("--strategy", { enum: ["goal", "coverage", "exploratory", "adversarial", "usability"] }),
+        goal: s("--goal"),
+        success: many("--success"),
+        successWhen: s("--success-when", { enum: ["final", "held", "each"] }),
+        allowVacuousChecks: b("--allow-vacuous-checks"),
+        // 0.30.0 (#800): the job whose done check (jobs.json, read in a fresh context) verifies the goal run.
+        job: s("--job"),
+        requireDoneCheck: b("--require-done-check"),
+        actionDeltas: b("--action-deltas"),
+        feature: s("--feature"),
+        route: many("--route"),
+        scopeRegion: many("--scope-region"),
+        blockOffAllowlistNavigation: b("--block-off-allowlist-navigation"),
+        scope: s("--scope", { enum: ["app"] }),
+        maxActions: n("--max-actions"),
+        maxDecisions: n("--max-decisions"),
+        // #424: the minimum exploration effort (goal strategy).
+        minActions: n("--min-actions"),
+        minDistinctStates: n("--min-distinct-states"),
+        stallTimeout: n("--stall-timeout"),
+        invariants: { kind: "path[]", flag: "--invariants" },
+        storageState: session("--storage-state"),
+        saveStorageState: session("--save-storage-state"),
+        persona: { kind: "named-sessions", flag: "--persona" },
+        personas: path("--personas"),
+        // #427: the pre-flight auth check (off | auto | urlExcludes:<text> | selector:<css>); a persona's
+        // `login` refresh reads only the env variable NAMES the operator's personas file declares.
+        authCheck: s("--auth-check"),
+        actor: { kind: "named-sessions", flag: "--actor" },
+        fixtures: path("--fixtures"),
+        fixtureIdentity: FIXTURE_IDENTITY,
+        fixture: path("--fixture"),
+        typeFixture: { kind: "bound-paths", flag: "--type-fixture" },
+        uploadFixture: { kind: "bound-paths", flag: "--upload-fixture" },
+        appClass: s("--app-class"),
+        show: s("--show"),
+        minConfidence: num("--min-confidence"),
+        maxFindingsPerPage: n("--max-findings-per-page"),
+        product: path("--product"),
+        polish: b("--polish"),
+        probeGuards: b("--probe-guards"),
+        repeat: n("--repeat"),
+        minAgreement: n("--min-agreement"),
+        allowDestructive: b("--allow-destructive"),
+        dialogs: s("--dialogs", { enum: ["dismiss", "accept"] }),
+        allowWrites: b("--allow-writes"),
+        allowWrite: many("--allow-write"),
+        deny: many("--deny"),
+        paid: many("--paid"),
+        allowControl: many("--allow-control"),
+        readRpc: many("--read-rpc"),
+        settleIgnore: many("--settle-ignore"),
+        ignoreNoProgress: many("--ignore-no-progress"),
+        ignoreOverflow: many("--ignore-overflow"),
+        checkOverflow: b("--check-overflow"),
+        apiPrefix: many("--api-prefix"),
+        longPollMs: n("--long-poll-ms"),
+        devServer: b("--dev-server"),
+        jobWaitMs: n("--job-wait-ms"),
+        renderWaitMs: n("--render-wait-ms"),
+        replyWaitMs: n("--reply-wait-ms"),
+        replyQuietMs: n("--reply-quiet-ms"),
+        replyCeilingMs: n("--reply-ceiling-ms"),
+        replyMaxChars: n("--reply-max-chars"),
+        hangReplays: n("--hang-replays"),
+        minControlCoverage: num("--min-control-coverage"),
+        requireFormSubmit: b("--no-require-form-submit"),
+        fileIssues: b("--file-issues"),
+        out: path("--out"),
+        recordVideo: { kind: "optional-path", flag: "--record-video" },
+        screenshots: { kind: "screenshots", flag: "--screenshots" },
+        evidenceVideo: b("--evidence-video"),
+        overlay: b("--no-overlay"),
+        ...EMULATION,
+        ...DEMO_SHOW,
+        ...JEV_AI,
+      },
+      omitted: {
+        ...HOOK_FLAGS,
+        ...BROWSER_FLAGS,
+        ...JSON_FLAG,
+        "--secret": OMIT.envSecret,
+        "--secret-field": OMIT.envSecret,
+        "--totp": OMIT.envSecret,
+        "--allow-secret-cmd": OMIT.envSecret,
+        "--secret-cmd-attempts": OMIT.envSecret,
+        "--allow-log-cmd": OMIT.logCmd,
+        "--log-source": OMIT.logCmd,
+        "--log-defect": OMIT.logCmd,
+        "--log-ignore": OMIT.logCmd,
+        "--log-scope": OMIT.logCmd,
+        "--log-correlation-header": OMIT.logCmd,
+        "--log-id-pattern": OMIT.logCmd,
+        "--log-quiet-ok": OMIT.logCmd,
+        "--server-log-drain-ms": OMIT.logCmd,
+        "--log-triage": OMIT.logTriage,
+        "--hang-replay-writes": OMIT.hangWrites,
+        "--issue-repo": OMIT.filingRepo,
+        "--jevitate-repo": OMIT.filingRepo,
+        "--journeys-dir": OMIT.storeDir,
+      },
+    },
+  },
+  {
+    name: "run_campaign",
+    description:
+      "`jevitate campaign run <spec>` (#293): a bounded campaign of journey-anchored missions — replay each job's promoted Journey (discovery), run its anchored missions in order with the spec's fixtures restore between runs, and return ONE deduped report (each defect with the Journey steps it branched from). An invalid spec is refused listing every problem. #485: before any mission it runs a preflight (every start URL reachable, every session signed in, no allow-list origin slip) and refuses with the problems listed; skipPreflight: true runs without it (recorded on the report as preflight.skipped). allowDestructive/allowWrites/deny/paid/invariants and the media flags are forwarded to every mission. H5 (0.30.0): each discovery replay reads its job's done check, as run_journey does (discovery[].job): a job not achieved makes the campaign exit 1 (done-check-failed), an unverified one exit 2 under project.json doneCheckPolicy require (the default; a harness target excepted). doneCheck: false (`--no-done-check`) skips the readings; requireDoneCheck (`--require-done-check`) folds unverified to 2 even under advisory; not both. Needs real or fakeAi.",
+    command: {
+      path: "campaign run",
+      params: {
+        tags: TAGS,
+        spec: pos("path"),
+        out: path("--out"),
+        // #311: forwarded to every mission, exactly as run_exploration takes them.
+        allowDestructive: b("--allow-destructive"),
+        allowWrites: b("--allow-writes"),
+        deny: many("--deny"),
+        paid: many("--paid"),
+        allowControl: many("--allow-control"),
+        invariants: { kind: "path[]", flag: "--invariants" },
+        recordVideo: { kind: "optional-path", flag: "--record-video" },
+        screenshots: { kind: "screenshots", flag: "--screenshots" },
+        evidenceVideo: b("--evidence-video"),
+        // #485: like run_exploration authCheck "off" — an explicit opt-out, recorded on the report (preflight.skipped).
+        skipPreflight: b("--skip-preflight"),
+        // #205/#746: start on a starved host (the campaign-start check and every mission) instead of E_HOST_STARVED.
+        ignoreHostLoad: b("--ignore-host-load"),
+        // H5 (0.30.0): the discovery replays' done check, as run_journey's noDoneCheck / requireDoneCheck.
+        doneCheck: b("--no-done-check"),
+        requireDoneCheck: b("--require-done-check"),
+        ...JEV_AI,
+      },
+      omitted: { "--secret-field": OMIT.envSecret,
+        "--journeys-dir": OMIT.storeDir,
+        "--allow-shell-hooks": OMIT.hooks,
+        "--hook-timeout-ms": OMIT.hooks,
+        "--allow-log-cmd": OMIT.logCmd,
+        "--log-source": OMIT.logCmd,
+        "--log-defect": OMIT.logCmd,
+        "--log-ignore": OMIT.logCmd,
+        "--log-scope": OMIT.logCmd,
+        "--log-correlation-header": OMIT.logCmd,
+        "--log-id-pattern": OMIT.logCmd,
+        "--log-quiet-ok": OMIT.logCmd,
+        "--server-log-drain-ms": OMIT.logCmd,
+        "--log-triage": OMIT.logTriage,
+        ...JSON_FLAG,
+      },
+    },
+  },
+  {
+    name: "run_sweep",
+    description:
+      "`jevitate sweep --targets <file>` (#425): many explore missions — one per target in a .tsv/.json targets file (id, url|route, persona storage state, strategy, goal, tags, and the value-typed explore options run_exploration takes) — " +
+      "with bounded concurrency, resumable (resume + out), and ONE sweep.result.json: per-target outcome and depth, defects deduped by fingerprint across targets (one finding, N sightings), environment causes grouped. " +
+      "stopOnEnvFailure K stops starting runs when the first K all failed for environment/setup reasons. A target that stalled on a starved host (host-starved) is retried once after load drops; hostStarvedRetry: false records the first result instead. Every run is tagged target=<id> plus tags. A persona path in the file is confined like a storageState argument. Long-running: bound it with the file and concurrency.",
+    command: {
+      path: "sweep",
+      params: {
+        tags: TAGS,
+        targets: path("--targets", { required: true }),
+        concurrency: n("--concurrency"),
+        resume: b("--resume"),
+        out: path("--out"),
+        // #513: the sweep-wide upload fixture (confined to the path roots here and to the project root by the CLI, #498).
+        fixture: path("--fixture"),
+        stopOnEnvFailure: n("--stop-on-env-failure"),
+        hostStarvedRetry: b("--no-host-starved-retry"),
+        ...ENVIRONMENT,
+        // Forwarded to every run, exactly as run_exploration / run_campaign take them.
+        allowDestructive: b("--allow-destructive"),
+        allowWrites: b("--allow-writes"),
+        deny: many("--deny"),
+        paid: many("--paid"),
+        allowControl: many("--allow-control"),
+        invariants: { kind: "path[]", flag: "--invariants" },
+        recordVideo: { kind: "optional-path", flag: "--record-video" },
+        screenshots: { kind: "screenshots", flag: "--screenshots" },
+        evidenceVideo: b("--evidence-video"),
+        ...JEV_AI,
+      },
+      omitted: {
+        // The sweep forwards the browser launch flags to every run; as on every browser-driving
+        // command they are the operator's setting, never an MCP argument.
+        ...BROWSER_FLAGS,
+        "--max-browsers": OMIT.browserBin,
+        "--max-browser-memory": OMIT.browserBin,
+        "--extension": OMIT.browserBin,
+        "--allow-log-cmd": OMIT.logCmd,
+        "--log-source": OMIT.logCmd,
+        "--log-defect": OMIT.logCmd,
+        "--log-ignore": OMIT.logCmd,
+        "--log-scope": OMIT.logCmd,
+        "--log-correlation-header": OMIT.logCmd,
+        "--log-id-pattern": OMIT.logCmd,
+        "--log-quiet-ok": OMIT.logCmd,
+        "--server-log-drain-ms": OMIT.logCmd,
+        "--log-triage": OMIT.logTriage,
+        ...JSON_FLAG,
+      },
+    },
+  },
+  {
+    name: "author_journey",
+    description:
+      "`jevitate explore-author-journey`: explore url toward goal (checked by success) several takes, and author an UNPROMOTED Journey from the verified path (promote_journey makes it runnable). Each take is run_exploration's goal run (same run-shaping arguments); a not-reached result carries the discovery take's stop reason, checks and result/transcript/Recording paths. Needs real or fakeAi.",
+    command: {
+      path: "explore-author-journey",
+      params: { ...EXTENSION,
+        url: s("--url"),
+        goal: s("--goal"),
+        success: many("--success"),
+        allow: many("--allow"),
+        id: s("--id"),
+        name: s("--name"),
+        takes: n("--takes"),
+        maxActions: n("--max-actions"),
+        maxDecisions: n("--max-decisions"),
+        storageState: session("--storage-state"),
+        out: path("--out"),
+        // #369: every take is explore's goal run — the same run-shaping arguments as run_exploration.
+        successWhen: s("--success-when", { enum: ["final", "held", "each"] }),
+        allowVacuousChecks: b("--allow-vacuous-checks"),
+        actionDeltas: b("--action-deltas"),
+        typeFixture: { kind: "bound-paths", flag: "--type-fixture" },
+        uploadFixture: { kind: "bound-paths", flag: "--upload-fixture" },
+        fixture: path("--fixture"),
+        saveStorageState: session("--save-storage-state"),
+        replyWaitMs: n("--reply-wait-ms"),
+        replyQuietMs: n("--reply-quiet-ms"),
+        replyCeilingMs: n("--reply-ceiling-ms"),
+        replyMaxChars: n("--reply-max-chars"),
+        jobWaitMs: n("--job-wait-ms"),
+        renderWaitMs: n("--render-wait-ms"),
+        deny: many("--deny"),
+        paid: many("--paid"),
+        allowControl: many("--allow-control"),
+        allowDestructive: b("--allow-destructive"),
+        allowWrites: b("--allow-writes"),
+        dialogs: s("--dialogs", { enum: ["dismiss", "accept"] }),
+        readRpc: many("--read-rpc"),
+        hangReplays: n("--hang-replays"),
+        settleIgnore: many("--settle-ignore"),
+        longPollMs: n("--long-poll-ms"),
+        devServer: b("--dev-server"),
+        apiPrefix: many("--api-prefix"),
+        ignoreNoProgress: many("--ignore-no-progress"),
+        // #544: mission fixtures set up before / restored after every take; the Journey records the file.
+        fixtures: path("--fixtures"),
+        fixtureIdentity: FIXTURE_IDENTITY,
+        screenshots: { kind: "screenshots", flag: "--screenshots" },
+        ...EMULATION,
+        ...JEV_AI,
+      },
+      omitted: { ...LOCATION_FLAGS, 
+        "--journeys-dir": OMIT.storeDir,
+        ...HOOK_FLAGS,
+        ...BROWSER_FLAGS,
+        ...JSON_FLAG,
+        "--secret": OMIT.envSecret,
+        "--secret-field": OMIT.envSecret,
+        "--totp": OMIT.envSecret,
+        "--allow-secret-cmd": OMIT.envSecret,
+        "--secret-cmd-attempts": OMIT.envSecret,
+        "--allow-log-cmd": OMIT.logCmd,
+        "--log-source": OMIT.logCmd,
+        "--log-defect": OMIT.logCmd,
+        "--log-ignore": OMIT.logCmd,
+        "--log-scope": OMIT.logCmd,
+        "--log-correlation-header": OMIT.logCmd,
+        "--log-id-pattern": OMIT.logCmd,
+        "--log-quiet-ok": OMIT.logCmd,
+        "--server-log-drain-ms": OMIT.logCmd,
+        "--log-triage": OMIT.logTriage,
+      },
+    },
+  },
+  {
+    name: "run_check",
+    description:
+      "`jevitate check --suite <file>`: the CI regression gate — a suite of Journeys, invariants, goals and missions within a budget; writes JUnit + SARIF + JSON under out. Exit 1 = a gating finding; exit 5 = nothing failed but a self-heal proposed Journey revision(s) awaiting review. " +
+      "#453 selfHeal hybrid|full (+ changes <git range> and/or changeNote[], and a gateway — real or fakeAi; healMax* budgets): a Journey that quarantines is re-run ONCE with a change-aware self-heal; a proposed revision is pending review (exit 5), never a pass. " +
+      "#437 requireApprovals (+ allowChannels: a comma list of tty, non-interactive, mcp, ci, pr-review; default tty): also an `approval` finding for each promoted Journey or approved persona/job whose approval is missing, stale or made over a channel not allowed. " +
+      "#469: pr-review is a channel you may ALLOW, never one a caller sets — jevitate records it only after verifying the merged PR's approving review through the forge API in CI. " +
+      "#799 requireTrust: also fails (exit 1, naming the environment) when an environment's trust in .jevitate/environments.json differs from the last commit — a trust change is PR-reviewed and committed first; it can only make the check stricter. " +
+      "#470 maxBrittleSteps n: opt-in locator gate — a Journey item with more than n brittle steps (missing the project's testIdAttributes convention) is a gating finding; without it locator health is advisory. " +
+      "H5 (0.30.0): each Journey item reads its job's done check, as run_journey does, and its item carries `job`: a job not achieved is a gating done-check-failed finding (exit 1); a pass with an unverified job makes the check exit 2 under project.json doneCheckPolicy require (the default; a harness target excepted), 0 under advisory. doneCheck: false (`--no-done-check`) skips the readings (every job reads unverified, no-check); requireDoneCheck (`--require-done-check`) folds unverified to exit 2 even under advisory; not both.",
+    command: {
+      path: "check",
+      params: { tags: TAGS, ...EXTENSION,
+        suite: path("--suite", { required: true }),
+        out: path("--out"),
+        jsonOut: path("--json-out"),
+        junit: path("--junit"),
+        sarif: path("--sarif"),
+        baseline: s("--baseline"),
+        changedRoutes: many("--changed-routes"),
+        targetBuild: s("--target-build"),
+        appVersion: s("--app-version"),
+        evidenceInput: path("--evidence-input"),
+        evidenceManifest: path("--evidence-manifest"),
+        evidenceOut: { kind: "project-path", flag: "--evidence-out" },
+        evidenceDecisionOut: { kind: "project-path", flag: "--evidence-decision-out" },
+        requireApprovals: b("--require-approvals"),
+        allowChannels: s("--allow-channels"),
+        requireTrust: b("--require-trust"),
+        maxBrittleSteps: n("--max-brittle-steps"),
+        // H5 (0.30.0): the Journey items' done check, as run_journey's noDoneCheck / requireDoneCheck.
+        doneCheck: b("--no-done-check"),
+        requireDoneCheck: b("--require-done-check"),
+        selfHeal: s("--self-heal", { enum: ["fail-closed", "hybrid", "full"] }),
+        changes: s("--changes"),
+        changeNote: many("--change-note"),
+        healMaxAttempts: n("--heal-max-attempts"),
+        healMaxModelCalls: n("--heal-max-model-calls"),
+        healMaxMs: n("--heal-max-ms"),
+        healMaxRunAttempts: n("--heal-max-run-attempts"),
+        healMaxRunMs: n("--heal-max-run-ms"),
+        ...JEV_AI,
+      },
+      omitted: { "--baseline-dir": OMIT.storeDir, ...BROWSER_FLAGS, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "locator_health",
+    description:
+      "`jevitate locator-health --json` (#470): read-only and advisory. Per recorded step, the selector rung its target resolves by and whether it meets the project's test-id convention (testIdAttributes in project config; default data-testid, data-test; data-tflow-id never counts) — for every promoted Journey, one Journey (journey) or one run result (run). It never changes a Journey and never gates (run_check maxBrittleSteps is the opt-in gate).",
+    command: { path: "locator-health", params: { journey: s("--journey"), run: path("--run"), baseline: path("--baseline") }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+  },
+  {
+    name: "get_report",
+    description: "`jevitate report`: one deduped defect list for a target across every mode and run (+ an optional diff section against a baseline run, tag or `last`).",
+    command: {
+      path: "report",
+      params: { tags: TAGS, target: s("--target"), since: s("--since"), baseline: s("--baseline"), out: path("--out") },
+      omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "diff_runs",
+    description: "`jevitate diff <runA> <runB>`: classify findings new / resolved / still-present / flaky / not-rerun between two runs (runA = baseline).",
+    command: { path: "diff", params: { tags: TAGS, runA: pos(), runB: pos() }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+  },
+  {
+    name: "baselines",
+    description: "`jevitate baseline list | show <name> | tag <name> <runs…>`: named baselines for report/check/diff.",
+    actions: {
+      list: { path: "baseline list", params: {}, omitted: JSON_FLAG },
+      show: { path: "baseline show", params: { name: pos() }, omitted: JSON_FLAG },
+      tag: { path: "baseline tag", params: { name: pos(), runs: pos("string[]") }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+    },
+  },
+  {
+    name: "ledger",
+    description:
+      "`jevitate ledger add <result> <fingerprint> | list | verify [fingerprints…]`: the repro ledger verify_fix falls back to, kept by fingerprint. verify replays entries (replays, storageState).",
+    actions: {
+      add: { path: "ledger add", params: { result: pos("path"), fingerprint: pos(), ticket: s("--ticket") }, omitted: { "--dir": OMIT.storeDir, "--secret": OMIT.envSecret, ...JSON_FLAG } },
+      list: { path: "ledger list", params: {}, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+      verify: {
+        path: "ledger verify",
+        params: { ...EXTENSION, fingerprints: { kind: "string[]", positional: true }, ticket: s("--ticket"), replays: n("--replays"), storageState: session("--storage-state") },
+        omitted: { "--dir": OMIT.storeDir, "--allow-log-cmd": OMIT.logCmd, ...BROWSER_FLAGS, ...JSON_FLAG },
+      },
+    },
+  },
+  {
+    name: "run_load_test",
+    description: "`jevitate load run <journeyId>`: replay a Journey concurrently (concurrency × iterations) against an authorized origin and report latency/errors.",
+    command: {
+      path: "load run",
+      paramJourneys: (a) => [a["journeyId"]],
+      params: {
+        tags: TAGS,
+        journeyId: pos(),
+        ...EXTENSION,
+        authorizedOrigin: many("--authorized-origin"),
+        concurrency: n("--concurrency"),
+        iterations: n("--iterations"),
+        seed: n("--seed"),
+        params: { kind: "params", flag: "--param" },
+        storageState: session("--storage-state"),
+        ...ENVIRONMENT,
+        ...EMULATION,
+      },
+      omitted: { "--secret-field": OMIT.envSecret, "--dir": OMIT.storeDir, ...BROWSER_FLAGS, ...JSON_FLAG },
+    },
+  },
+  {
+    name: "prune_logs",
+    description: "`jevitate logs prune`: prune run output under .jevitate/logs by the retention policy (dryRun: report only).",
+    command: { path: "logs prune", params: { dryRun: b("--dry-run") }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+  },
+  {
+    name: "run_queued_missions",
+    description:
+      "`jevitate mission run --once`: drain the missions queue_exploration queued (each through its strategy's runner; results where get_mission_result reads them), then return the drain report. Model-driven missions need real or fakeAi (others stay queued, reported as skipped).",
+    command: {
+      path: "mission run",
+      params: { tags: TAGS, ...EXTENSION, ...JEV_AI },
+      omitted: {
+        "--once": "the default: MCP drains what is queued once and returns",
+        "--watch": OMIT.watch,
+        "--interval": OMIT.watch,
+        "--dir": OMIT.storeDir,
+        "--targets-dir": OMIT.storeDir,
+        "--out": OMIT.storeDir,
+        ...BROWSER_FLAGS,
+        ...JSON_FLAG,
+      },
+    },
+  },
+  {
+    name: "mission_targets",
+    description:
+      "`jevitate mission target add | list | update | promote`: the targets queue_exploration may enqueue against (only PROMOTED ones). 0.30.0: promote over MCP is refused ({error: refused, code: E_TARGET_PROMOTE_OVER_MCP}): promoting a target is a person's act, `jevitate mission target promote <id>` at a terminal. add/update may set the target's session (storageState / saveStorageState paths); which environment variables a target's secret fields read is the operator's (`--secret-field` on the CLI, or targets.json), never an MCP argument.",
+    actions: {
+      add: {
+        path: "mission target add",
+        params: {
+          id: pos(),
+          name: s("--name"),
+          description: s("--description"),
+          authorizedOrigin: s("--authorized-origin"),
+          apiOrigin: many("--api-origin"),
+          baseUrl: s("--base-url"),
+          storageState: session("--storage-state"),
+          saveStorageState: { kind: "optional-session", flag: "--save-storage-state" },
+        },
+        omitted: { "--dir": OMIT.storeDir, "--secret-field": OMIT.envSecret, ...JSON_FLAG },
+      },
+      list: { path: "mission target list", params: {}, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+      update: {
+        path: "mission target update",
+        params: { id: pos(), storageState: session("--storage-state"), saveStorageState: { kind: "optional-session", flag: "--save-storage-state" }, clearAuth: b("--clear-auth") },
+        omitted: { "--dir": OMIT.storeDir, "--secret-field": OMIT.envSecret, ...JSON_FLAG },
+      },
+      promote: { path: "mission target promote", params: { id: pos() }, omitted: { "--dir": OMIT.storeDir, ...JSON_FLAG } },
+    },
+  },
+  {
+    name: "profiles",
+    description: "`jevitate profile create <name> | status <name>`: isolated credential/data profiles.",
+    actions: {
+      create: { path: "profile create", params: { name: pos() }, omitted: JSON_FLAG },
+      status: { path: "profile status", params: { name: pos() }, omitted: JSON_FLAG },
+    },
+  },
+  {
+    name: "recordings",
+    description:
+      "`jevitate recording diff | fit | postdoc | promote | propose`: compare takes, fit a Recording, post-document takes, promote a literal to a variable, and (#566) propose bindings from two or more takes. " +
+      "Captured values never reach the model: diff returns each value as a hint (length, shape, words), postdoc returns constants redacted. " +
+      "propose (take, more: take files, confined) returns params, outputs, {var} checks (pre-write identity / post-write exact value), credential handbacks, stopBefore and the ambiguities a person must decide (redacted evidence only), " +
+      "and saves an UNPROMOTED draft Journey in the server's journeys store (id; refused when that id exists) or to out (a file inside the project); draft: false saves none. It never promotes or approves: next run review_journey strict and journey verify with mutate.",
+    actions: {
+      diff: { path: "recording diff", params: { takeA: pos("path"), takeB: pos("path"), more: { kind: "path[]", positional: true } }, omitted: JSON_FLAG },
+      propose: {
+        path: "recording propose",
+        params: {
+          take: pos("path"),
+          more: { kind: "path[]", positional: true },
+          out: { kind: "project-path", flag: "--out" },
+          draft: b("--no-draft"),
+          id: s("--id"),
+          name: s("--name"),
+        },
+        omitted: { "--journeys-dir": OMIT.storeDir, ...JSON_FLAG },
+      },
+      fit: { path: "recording fit", params: { file: pos("path") }, omitted: JSON_FLAG },
+      postdoc: { path: "recording postdoc", params: { take: pos("path"), more: { kind: "path[]", positional: true }, decisions: path("--decisions"), out: path("--out") }, omitted: JSON_FLAG },
+      // No --json flag: it prints the promoted Recording as JSON (refusals are envelopes).
+      promote: {
+        path: "recording promote",
+        params: { file: pos("path"), page: n("--page", { required: true }), step: n("--step", { required: true }), var: s("--var", { required: true }) },
+        omitted: {},
+      },
+    },
+  },
+  {
+    name: "regressions",
+    description:
+      "`jevitate regression capture | run`: capture a finding as a committed regression (from a Recording/result, verified by attempts) and replay one by id (exit 1 = it regressed).",
+    actions: {
+      capture: {
+        path: "regression capture",
+        params: { ...EXTENSION,
+          from: path("--from", { required: true }),
+          id: s("--id", { required: true }),
+          result: path("--result"),
+          fingerprint: s("--fingerprint"),
+          summary: s("--summary"),
+          attempts: n("--attempts"),
+          force: b("--force"),
+          storageState: session("--storage-state"),
+          fixtures: path("--fixtures"),
+          fixtureIdentity: FIXTURE_IDENTITY,
+          ...EMULATION,
+          ...DEMO_SHOW,
+        },
+        omitted: { "--secret-field": OMIT.envSecret, "--dir": OMIT.storeDir, "--param": OMIT.branchParams, ...HOOK_FLAGS, ...BROWSER_FLAGS, ...JSON_FLAG },
+      },
+      run: {
+        path: "regression run",
+        params: { tags: TAGS, ...EXTENSION, id: pos(), attempts: n("--attempts"), storageState: session("--storage-state"), ...ENVIRONMENT, ...EMULATION, ...DEMO_SHOW },
+        omitted: { "--secret-field": OMIT.envSecret, "--dir": OMIT.storeDir, "--param": OMIT.branchParams, ...BROWSER_FLAGS, ...JSON_FLAG },
+      },
+    },
+  },
+  {
+    name: "site_policy",
+    description: "`jevitate site policy get | set | rules` and `site simulate`: per-origin pacing, throttles, budgets and quiet hours (run_journey honours them); `rules` lists the control safety rules (ids, what they match, whether --allow-control can waive them). 0.30.0: set over MCP only tightens: a policy looser than the effective one on any axis (pacing, interval, budget, quiet hours) is refused ({error: refused, code: E_POLICY_LOOSEN_OVER_MCP, axes}); a person loosens one at a terminal.",
+    actions: {
+      get: { path: "site policy get", params: { site: pos(), account: s("--account") }, omitted: { "--db": OMIT.storeDir, ...JSON_FLAG } },
+      rules: { path: "site policy rules", params: {}, omitted: JSON_FLAG },
+      set: { path: "site policy set", params: { site: pos(), file: path("--file", { required: true }), account: s("--account") }, omitted: { "--db": OMIT.storeDir, ...JSON_FLAG } },
+      simulate: { path: "site simulate", params: { site: pos(), script: path("--script", { required: true }), seed: n("--seed"), account: s("--account") }, omitted: { "--db": OMIT.storeDir, ...JSON_FLAG } },
+    },
+  },
+  {
+    name: "sources",
+    description:
+      "`jevitate source add | list | pull | update | remove | run`: distributed Journey sources (git). A source's Terms of Use and per-Journey trust are a person's decisions (`source add --accept-tou`, `source trust` on the CLI); run refuses an untrusted Journey.",
+    actions: {
+      add: { path: "source add", params: { name: pos(), gitUrl: pos() }, omitted: { "--accept-tou": OMIT.tou, ...JSON_FLAG } },
+      list: { path: "source list", params: {}, omitted: JSON_FLAG },
+      pull: { path: "source pull", params: { name: pos() }, omitted: JSON_FLAG },
+      update: { path: "source update", params: { name: pos() }, omitted: JSON_FLAG },
+      remove: { path: "source remove", params: { name: pos() }, omitted: JSON_FLAG },
+      run: {
+        path: "source run",
+        // The Journey is resolved through the source's run gate: runSourceJourney refuses there.
+        paramJourneys: () => [],
+        params: { tags: TAGS, ...EXTENSION, name: pos(), journeyId: pos(), params: { kind: "params", flag: "--param" }, storageState: session("--storage-state"), ...EMULATION },
+        omitted: { "--secret-field": OMIT.envSecret, ...BROWSER_FLAGS, ...JSON_FLAG },
+      },
+    },
+  },
+  {
+    name: "ux_review",
+    description: "`jevitate ux <recording>`: offline UX review of a saved Recording — ranked, cited usability findings (appClass required). Needs real or fakeAi.",
+    command: {
+      path: "ux",
+      params: {
+        recording: pos("path"),
+        appClass: s("--app-class"),
+        job: s("--job"),
+        persona: s("--persona"),
+        evidence: path("--evidence"),
+        result: path("--result"),
+        out: path("--out"),
+        show: s("--show"),
+        minConfidence: num("--min-confidence"),
+        maxFindingsPerPage: n("--max-findings-per-page"),
+        product: path("--product"),
+        polish: b("--polish"),
+        ...JEV_AI,
+      },
+      omitted: JSON_FLAG,
+    },
+  },
+  {
+    name: "validate_invariants",
+    description: "`jevitate invariants validate <files…>`: validate app-declared invariant files (optionally against a url / allow origins / observer actors) without running anything.",
+    command: {
+      path: "invariants validate",
+      params: { files: pos("path[]"), url: s("--url"), allow: many("--allow"), observer: many("--observer") },
+      omitted: JSON_FLAG,
+    },
+  },
+  {
+    name: "get_ai_status",
+    description:
+      "`jevitate ai status`: which model-gateway credentials each AI feature uses, where each comes from (env or the stored file) and whether its provider accepts it (a live auth check; `verify: false` skips it) — names, sources and verdicts only, never a key value.",
+    command: { path: "ai status", params: { verify: b("--no-verify"), jevProvider: s("--jev-provider", { enum: ["typesafe", "openrouter"] }) }, omitted: JSON_FLAG },
+  },
+];
+
