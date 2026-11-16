@@ -286,7 +286,7 @@ const CALL_SITES: Readonly<Record<string, { readonly scope: readonly string[]; r
   "journey-hold.ts": { scope: ["inDoneCheckScope(doneCheck,"] },
   "journey-readiness.ts": { scope: ["scope.run(() => run(o))"] },
   // Owner decision 2026-11-09: each check Journey item runs in a scope opened where the item calls its runner.
-  "check-api.ts": { scope: ["scope.run(run)"], in: "check-execute.ts" },
+  "check-api-phases.ts": { scope: ["scope.run(run)"], in: "check-execute.ts" },
   "journey-verify.ts": { reason: "mutation-proof replays judge the Journey's assertions (sensitive/inconclusive), never the job; the job is `journey run`'s" },
   "journey-annotate-api.ts": { reason: "an authoring replay that drafts step objectives; it reports no pass" },
   "journey-labels-migrate-api.ts": { reason: "a migration replay that re-resolves labels; it reports no pass" },

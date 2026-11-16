@@ -1,46 +1,26 @@
 import { readFileSync } from "node:fs";
 import { reportSlowness } from "./cold-start-report.js";
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { aggregateOf, formatUsageLine, type UsageCounts } from "@jevitate/ai-core";
+import { aggregateOf, formatUsageLine } from "@jevitate/ai-core";
 import { consolidate, diffRuns, findingKey, renderJUnit, renderReportMarkdown, renderSarif, type ConsolidatedDefect, type DiffEntry, type FindingIdentity, type FindingsDiff, type GateCase, type RunRecord } from "@jevitate/findings";
 import { approvalsReportVerified } from "./approval-provenance.js";
 import { loadCatalog } from "./catalog-api.js";
 import { findJob, type Catalog } from "./catalog.js";
 import { evaluateOutcomeTargets } from "./outcome-targets.js";
-import { runAdversarialCliMission, runCoverageMission, runExploration, runFeatureCliMission } from "./explore-api.js";
-import { runJourneyProgrammatically } from "./journey-api.js";
-import { runUsabilityMission } from "./ux-api.js";
-import { runVerifyFix } from "./verify-fix-api.js";
-import { currentEngineInfo } from "./engine.js";
 import { loadRunFile, resolveBaseline, scanRuns, summarizeRun } from "./report-api.js";
-import { CheckAiSetupError, CheckArgsError, CheckPreflightError, type CheckFinding, type CheckGateways, type CheckItemReport, type CheckResult, type CheckRunners, type LocatorHealthSummary, type RunCheckOptions } from "./check-types.js";
-import { brittleStepGate, testIdAttributesOf, testIdAttributesOrDefault } from "./locator-health-api.js";
+import { type CheckFinding, type CheckItemReport, type CheckResult, type LocatorHealthSummary, type RunCheckOptions } from "./check-types.js";
 import { combineHealth, compareLocatorHealth, exceedsBrittleSteps, trendLine, type LocatorHealthDetail, type LocatorHealthTrend, type LocatorSuggestion } from "./locator-health.js";
 import { findProjectDir } from "./project-dir.js";
-import { BudgetMeter } from "./check-budget.js";
-import { type Planned, type PreparedTarget, errorMessage, plan, prepareSelfHeal, prepareTarget } from "./check-plan.js";
-import { makeEvidenceSelfHealer } from "./self-heal-adapter.js";
-import type { SelfHealer } from "@jevitate/runtime";
-import { type ExecContext, type Executed, caseDetail, execute } from "./check-execute.js";
-import { clock, journeyMissionOutcome, type JourneyRunOutcome, JOURNEY_RUN_OUTCOMES } from "@jevitate/domain";
+import { errorMessage, type Planned } from "./check-plan.js";
+import { type Executed, caseDetail, execute } from "./check-execute.js";
+import { journeyMissionOutcome, type JourneyRunOutcome, JOURNEY_RUN_OUTCOMES } from "@jevitate/domain";
 import type { JobVerdict } from "@jevitate/adjudicator";
-import { doneCheckPolicyOf } from "./journey-done-check-hook.js";
 import { DONE_CHECK_FAILED_MESSAGE, doneCheckExitInput } from "./journey-done-check.js";
-import { evidenceKey, reuseDecision } from "./check-evidence.js";
+import { prepareCheckPlan, prepareCheckRun, resolveCheckEvidence, resolveCheckInputs } from "./check-api-phases.js";
 export { affectedBy } from "./check-plan.js";
 export { BudgetMeter } from "./check-budget.js";
 export { type BudgetReport, CheckAiSetupError, CheckArgsError, type CheckFinding, type CheckGateways, type CheckItemReport, CheckPreflightError, type CheckResult, type CheckRunners, type ItemKind, type RunCheckOptions } from "./check-types.js";
-
-const REAL_RUNNERS: CheckRunners = {
-  journey: runJourneyProgrammatically,
-  goal: runExploration,
-  coverage: runCoverageMission,
-  adversarial: runAdversarialCliMission,
-  feature: runFeatureCliMission,
-  usability: runUsabilityMission,
-  verifyFix: runVerifyFix,
-};
 
 /**
  * #643: for each Journey item with a baseline (a clean replay) whose catalog job declares desired
@@ -84,21 +64,6 @@ async function approvalDefects(opts: RunCheckOptions, req: NonNullable<RunCheckO
     return { key, keys: [key], identity, category: "approval", severity: "hard", title: v.message, fingerprints: [], modes: [], occurrences: 1, runCount: 0, evidence: [], intermittent: false };
   });
   return { defects };
-}
-
-/**
- * #470: the project's test-id convention for a check's Journey items. With the opt-in gate a malformed
- * project config refuses the check (it would gate on a guessed convention); without it the defaults
- * apply, as a run's result.json does.
- */
-function checkTestIdAttributes(opts: RunCheckOptions): readonly string[] {
-  const projectDir = opts.projectDir === undefined ? findProjectDir() : opts.projectDir;
-  if (opts.maxBrittleSteps === undefined) return testIdAttributesOrDefault(projectDir);
-  try {
-    return testIdAttributesOf(projectDir);
-  } catch (e) {
-    throw new CheckPreflightError(`--max-brittle-steps needs the project's testIdAttributes convention: ${errorMessage(e)}`);
-  }
 }
 
 /** #470: the gate's finding for one Journey item past `--max-brittle-steps` (hard: it fails the check). */
@@ -202,68 +167,13 @@ function withLocatorWarnings(sarif: ReturnType<typeof renderSarif>, suggestions:
 }
 
 export async function runCheck(opts: RunCheckOptions): Promise<CheckResult> {
-  const nowIso = opts.nowIso ?? (() => clock.nowIso());
-  const startedAt = nowIso();
-  const engine = currentEngineInfo();
-  const outDir = resolve(opts.outDir);
-  const resultsDir = join(outDir, "results");
-  const runners: CheckRunners = { ...REAL_RUNNERS, ...opts.runners };
-
-  // Preflight — everything validated before the first browser opens.
-  const prepared: PreparedTarget[] = [];
-  for (const t of opts.suite.targets) prepared.push(await prepareTarget(t, opts));
-  const items = plan(prepared, opts.changedRoutes, opts);
-  // #704: decide from immutable, validated proof inputs before a gateway is selected or a browser
-  // can open. A matching manifest turns every otherwise-runnable item into an explicit skip.
-  const evidence = opts.evidence === undefined
-    ? undefined
-    : opts.evidence.refusalReasons !== undefined && opts.evidence.refusalReasons.length > 0
-      ? { decision: "run" as const, reasons: opts.evidence.refusalReasons }
-      : reuseDecision(opts.evidence.input, opts.evidence.manifest);
-  const evidenceKeyValue = opts.evidence === undefined ? undefined : evidenceKey(opts.evidence.input);
-  const reuse = evidence?.decision === "skip";
-  // #453: refuse a bad self-heal request and read the change scope ONCE, before the first browser opens.
-  const heal = await prepareSelfHeal(opts);
-  // #470: the opt-in locator gate and the convention it measures against, before anything runs.
-  if (opts.maxBrittleSteps !== undefined) {
-    try {
-      brittleStepGate(opts.maxBrittleSteps);
-    } catch (e) {
-      throw new CheckArgsError(errorMessage(e));
-    }
-  }
-  const testIdAttributes = items.some((i) => i.kind === "journey" && i.skipped === undefined) ? checkTestIdAttributes(opts) : undefined;
-  let gw: Promise<CheckGateways> | undefined;
-  const gateways = (): Promise<CheckGateways> => {
-    if (opts.gateways === undefined) return Promise.reject(new CheckAiSetupError("this suite needs a model gateway: pass --real or --fake-ai (or set \"ai\" in the suite)"));
-    gw ??= opts.gateways();
-    return gw;
-  };
-  // A missing/unselectable gateway throws here (typed), before any browser opens.
-  if (!reuse && items.some((i) => i.needsAi && i.skipped === undefined)) await gateways();
-  await mkdir(resultsDir, { recursive: true });
-
-  const meter = new BudgetMeter(opts.suite.budget, { ...(opts.now === undefined ? {} : { now: opts.now }), costKnownZero: opts.aiMode === "fake" });
-  const usage = async (): Promise<UsageCounts | undefined> => (gw === undefined ? undefined : (await gw).usage.snapshot());
-  let n = 0;
-  let healer: Promise<SelfHealer> | undefined;
-  // H5 (0.30.0): every Journey item reads its job's done check, folded with the project's doneCheckPolicy.
-  const doneCheckDir = opts.projectDir === undefined ? findProjectDir() : opts.projectDir;
-  const doneCheckPolicy = opts.doneCheck?.policy ?? doneCheckPolicyOf(doneCheckDir);
-  const ctx: ExecContext = {
-    opts,
-    runners,
-    resultsDir,
-    gateways,
-    engine,
-    seq: () => String(++n),
-    doneCheck: { catalogDir: doneCheckDir, skip: opts.doneCheck?.skip === true, policy: doneCheckPolicy },
-    ...(testIdAttributes === undefined ? {} : { testIdAttributes }),
-    ...(heal === undefined ? {} : { heal, healer: () => (healer ??= gateways().then((g) => makeEvidenceSelfHealer(g.gen, { usage: g.usage }))) }),
-  };
-  const now = opts.now ?? clock.now;
-  let exceeded: string | undefined;
-  const executed: Array<{ item: Planned; ex: Executed | undefined; durationMs: number }> = [];
+  const inputs = resolveCheckInputs(opts);
+  const { startedAt, engine, outDir, resultsDir } = inputs;
+  const items = await prepareCheckPlan(opts);
+  const { evidence, evidenceKeyValue, reuse } = resolveCheckEvidence(opts);
+  const preparation = await prepareCheckRun(opts, inputs, items, reuse);
+  const { testIdAttributes, doneCheckPolicy, meter, usage, ctx, now, executed } = preparation;
+  let exceeded = preparation.exceeded;
   for (const item of items) {
     if (reuse) {
       executed.push({ item: { ...item, skipped: "reused matching evidence" }, ex: undefined, durationMs: 0 });
