@@ -188,7 +188,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // ── Journeys ────────────────────────────────────────────────────────────────────────────────
   // #497: the labels backfill replays with its own label-reading observer, never a whole interpreter.
   "journey-labels-migrate-api.ts runJourneyProgrammatically": { interpreter: OBSERVER_NOT_INTERPRETER },
-  "run.ts runJourneyProgrammatically": {
+  "run-action.ts runJourneyProgrammatically": {
     ...HOLD_RESUME,
     onRawOutput: "only `journey chain` hands a run's output on to a page",
     assertRunnable: MCP_RUN_GATE,

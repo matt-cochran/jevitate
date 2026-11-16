@@ -278,7 +278,7 @@ const SRC = dirname(fileURLToPath(import.meta.url));
  * reports (so it needs no job verdict). A new call site fails here until it is listed.
  */
 const CALL_SITES: Readonly<Record<string, { readonly scope: readonly string[]; readonly in?: string } | { readonly reason: string }>> = {
-  "journey-cli/run.ts": { scope: ["doneCheckRun.run("] },
+  "journey-cli/run-action.ts": { scope: ["doneCheckRun.run("] },
   "mcp-api.ts": { scope: ["runWithDoneCheck("] },
   "mission-queue-runner.ts": { scope: ["runWithDoneCheck("] },
   "journey-shorten.ts": { scope: ["check.run("] },
