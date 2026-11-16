@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.30.1] – 2026-11-16
+
+### Fixed
+
+- **`journey verify --mutate` proves upload steps (#720).** When an upload checks its own outcome, verify skips that upload and requires the check to fail. Before, a Journey with descriptor-bound uploads (`--upload-fixture`) left each upload's claim unproven. An upload that only restates its own target, or makes no claim, still gets no mutation.
+
+### Changed
+
+- Nine long functions in the CLI, explore and UX packages are split into named phase modules (#845). There is no change in behaviour; the public API snapshot is unchanged.
+
 ## [0.30.0] – 2026-11-10
 
 ### Behaviour changes
