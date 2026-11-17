@@ -129,7 +129,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "coverage-strategy.ts runCoverageMission": { hostHealth: SEAM, nowIso: SEAM },
   "adversarial-strategy.ts runAdversarialCliMission": { hostHealth: SEAM, nowIso: SEAM },
   "feature-strategy.ts runFeatureCliMission": { hostHealth: SEAM, nowIso: SEAM },
-  "run.ts runExploreMultiRun": { nowIso: SEAM },
+  "run-options.ts runExploreMultiRun": { nowIso: SEAM },
   "verify-fix-cli.ts runVerifyFix": { runGuardTargetsFile: GUARD_TARGETS, settleCeilingMs: "verify-fix reuses the recorded run's render wait", evidencePaceMs: EVIDENCE_PACE },
   "usability-strategy.ts runUsabilityMission": {
     hostHealth: SEAM,
@@ -166,7 +166,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
   "regression-cli.ts runRegressionCapture": {},
   "regression-cli.ts runRegressionRun": {},
-  "check-cli.ts runCheck": {
+  "check-cli-action.ts runCheck": {
     env: SEAM,
     now: SEAM,
     nowIso: SEAM,
@@ -188,7 +188,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   // ── Journeys ────────────────────────────────────────────────────────────────────────────────
   // #497: the labels backfill replays with its own label-reading observer, never a whole interpreter.
   "journey-labels-migrate-api.ts runJourneyProgrammatically": { interpreter: OBSERVER_NOT_INTERPRETER },
-  "run.ts runJourneyProgrammatically": {
+  "run-action.ts runJourneyProgrammatically": {
     ...HOLD_RESUME,
     onRawOutput: "only `journey chain` hands a run's output on to a page",
     assertRunnable: MCP_RUN_GATE,
@@ -299,7 +299,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     heal: QUEUED_JOURNEY_CALL,
     selfHealer: QUEUED_JOURNEY_CALL,
   },
-  "check-execute.ts runJourneyProgrammatically": {
+  "check-execute-items.ts runJourneyProgrammatically": {
     ...HOLD_RESUME, secretMode: SECRET_MODE_AUTO, secretEnv: SECRET_ENV_PROCESS,
     onRawOutput: "only `journey chain` hands a run's output on to a page",
     assertRunnable: MCP_RUN_GATE,
@@ -380,7 +380,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   },
 
   // ── check suites ────────────────────────────────────────────────────────────────────────────
-  "check-execute.ts runExploration": {
+  "check-execute-items.ts runExploration": {
     targetTrust: TRUST_FROM_RUN_MODE,
     doneCheck: "#800: a suite item takes no --job (suite-explore-options excludes it); a suite gates on its items' --success checks",
     doneCheckBasis: "#800: a suite item takes no --job (suite-explore-options excludes it); a suite gates on its items' --success checks",
@@ -398,22 +398,22 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     issueFiler: "check reports findings itself (JUnit/SARIF)",
     journeyPrefix: "#293: a suite's journey-anchored items are mission items (fromJourney/atStep); a goal item starts at its url",
   },
-  "check-execute.ts runCoverageMission": {
+  "check-execute-items.ts runCoverageMission": {
     hostHealth: SEAM,
     nowIso: SEAM,
   },
-  "check-execute.ts runAdversarialCliMission": {
+  "check-execute-items.ts runAdversarialCliMission": {
     hostHealth: SEAM,
     filing: "check reports findings itself (JUnit/SARIF)",
     issueFiler: "check reports findings itself (JUnit/SARIF)",
     nowIso: SEAM,
   },
-  "check-execute.ts runFeatureCliMission": {
+  "check-execute-items.ts runFeatureCliMission": {
     secrets: "a suite's feature mission declares no secret: `secret` applies to goals, usability and adversarial",
     hostHealth: SEAM,
     nowIso: SEAM,
   },
-  "check-execute.ts runUsabilityMission": {
+  "check-execute-items.ts runUsabilityMission": {
     secretCommand: "#324: a cmd: secret source runs an operator command — explore --allow-secret-cmd only, never a queued or suite mission",
     secretCommandAttempts: "#359: the bound on a cmd: secret source's command runs — goes with secretCommand (explore --allow-secret-cmd only)",
     hostHealth: SEAM,
@@ -426,7 +426,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     invariants: "usability refuses declared invariants (#150)",
     invariantAuthTokens: "usability refuses declared invariants (#150)",
   },
-  "check-execute.ts runVerifyFix": {
+  "check-execute-items.ts runVerifyFix": {
     ...VERIFY_FIX_INVOCATION,
     ...STORED_ALLOWLIST,
     actionDeltas: NO_DELTAS_HERE,
@@ -546,7 +546,7 @@ describe("surface wiring — every mission option is passed by every surface, or
 
   it("finds the surfaces (the analysis itself is not vacuous)", () => {
     const keys = sites.map((s) => s.key);
-    for (const k of ["goal-strategy.ts runExploration", "mission-queue-runner.ts runFeatureCliMission", "check-execute.ts runCoverageMission", "mcp-api.ts runVerifyFix"]) {
+    for (const k of ["goal-strategy.ts runExploration", "mission-queue-runner.ts runFeatureCliMission", "check-execute-items.ts runCoverageMission", "mcp-api.ts runVerifyFix"]) {
       expect(keys, k).toContain(k);
     }
   }, 120_000);

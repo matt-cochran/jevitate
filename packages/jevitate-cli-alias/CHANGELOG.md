@@ -1,5 +1,13 @@
 # jevitate
 
+## 0.30.1
+
+### Patch Changes
+
+- Tracks `@jevitate/cli` 0.30.1.
+- Updated dependencies [a64bb9d]
+  - @jevitate/cli@0.30.1
+
 ## 0.30.0
 
 ### Minor Changes

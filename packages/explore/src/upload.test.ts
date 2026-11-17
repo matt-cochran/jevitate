@@ -493,6 +493,142 @@ describe("explore loop — upload is recorded and replays deterministically", ()
         { redacted: false, value: "bound-avatar-only.txt" },
         { redacted: false, value: "bound-identity-only.txt" },
       ]);
+
+      // #720: the authored Recording replays both uploads exactly, each into its own input.
+      await withSession(
+        "explore-upload-two-bound-replay-",
+        async (fresh) => {
+          const actor = CastActor.named("replay").whoCan(new BrowseTheWeb(fresh, [origin]));
+          const result = await new RecordingInterpreter({ fixtureBaseDir: fixtureDir }).run(actor, run.recording);
+          expect(result.outcome).toBe("completed");
+          expect(await readAttachedNames(fresh)).toEqual({ avatar: "bound-avatar-only.txt", identity: "bound-identity-only.txt" });
+        },
+        origin,
+      );
+    },
+    120_000,
+  );
+
+  it(
+    "#720: binds the same file to two inputs, attaches it to both, and replays both",
+    async () => {
+      const shared = join(fixtureDir, "bound-shared.txt");
+      await writeFile(shared, "shared fixture bytes\n", "utf8");
+      const judge = new ScriptedJudge([{ op: "upload", target: "0" }, { op: "upload", target: "1" }, { op: "done" }]);
+      const run = await withSession(
+        "explore-upload-same-file-",
+        async (session) => {
+          const actor = CastActor.named("upload").whoCan(new BrowseTheWeb(session, [origin]));
+          const result = await explore({
+            actor,
+            judge,
+            gen: new FakeGenerationGateway(),
+            goal: "attach the same document twice",
+            allowlist: [origin],
+            startUrl: `${origin}/`,
+            fixtureRoot: fixtureDir,
+            uploadFixtures: [
+              { descriptor: "label=Choose avatar", matcher: { key: "label", value: "Choose avatar" }, name: "bound-shared.txt", path: shared },
+              { descriptor: "id=identity", matcher: { key: "id", value: "identity" }, name: "bound-shared.txt", path: shared },
+            ],
+          });
+          expect(await readAttachedNames(session)).toEqual({ avatar: "bound-shared.txt", identity: "bound-shared.txt" });
+          return result;
+        },
+        origin,
+      );
+      expect(run.stop).toBe("done");
+      expect(run.actions).toBe(2);
+      const uploads = run.recording.pages
+        .flatMap((page) => page.steps.map((step) => step.step))
+        .filter((step): step is Extract<Step, { kind: "upload" }> => step.kind === "upload")
+        .map((step) => step.file);
+      expect(uploads).toEqual([
+        { redacted: false, value: "bound-shared.txt" },
+        { redacted: false, value: "bound-shared.txt" },
+      ]);
+      expect(JSON.stringify(run.recording)).not.toContain(fixtureDir);
+      expect(JSON.stringify(judge.states)).not.toContain(fixtureDir);
+      await withSession(
+        "explore-upload-same-file-replay-",
+        async (fresh) => {
+          const actor = CastActor.named("replay").whoCan(new BrowseTheWeb(fresh, [origin]));
+          const result = await new RecordingInterpreter({ fixtureBaseDir: fixtureDir }).run(actor, run.recording);
+          expect(result.outcome).toBe("completed");
+          expect(await readAttachedNames(fresh)).toEqual({ avatar: "bound-shared.txt", identity: "bound-shared.txt" });
+        },
+        origin,
+      );
+    },
+    120_000,
+  );
+
+  it(
+    "#720: a control no binding matches never receives another control's bound file",
+    async () => {
+      const avatar = join(fixtureDir, "bound-avatar-solo.txt");
+      await writeFile(avatar, "avatar fixture bytes\n", "utf8");
+      const judge = new ScriptedJudge([{ op: "upload", target: "1" }, { op: "done" }]);
+      const run = await withSession(
+        "explore-upload-nonmatching-",
+        async (session) => {
+          const actor = CastActor.named("upload").whoCan(new BrowseTheWeb(session, [origin]));
+          const result = await explore({
+            actor,
+            judge,
+            gen: new FakeGenerationGateway(),
+            goal: "attach an identity document",
+            allowlist: [origin],
+            startUrl: `${origin}/`,
+            fixtureRoot: fixtureDir,
+            uploadFixtures: [{ descriptor: "label=Choose avatar", matcher: { key: "label", value: "Choose avatar" }, name: "bound-avatar-solo.txt", path: avatar }],
+          });
+          expect(await readAttachedNames(session)).toEqual({ avatar: null, identity: null });
+          return result;
+        },
+        origin,
+      );
+      expect(run.recording.pages.flatMap((p) => p.steps.map((s) => s.step)).some((s) => s.kind === "upload")).toBe(false);
+      expect(JSON.stringify(run.transcript)).toContain("upload has no mission fixture (fail-closed)");
+    },
+    120_000,
+  );
+
+  it(
+    "#720: two bindings that both match one control are refused as ambiguous and attach nothing",
+    async () => {
+      const first = join(fixtureDir, "bound-first.txt");
+      const second = join(fixtureDir, "bound-second.txt");
+      await writeFile(first, "first\n", "utf8");
+      await writeFile(second, "second\n", "utf8");
+      const judge = new ScriptedJudge([{ op: "upload", target: "0" }, { op: "done" }]);
+      const run = await withSession(
+        "explore-upload-ambiguous-",
+        async (session) => {
+          const actor = CastActor.named("upload").whoCan(new BrowseTheWeb(session, [origin]));
+          const result = await explore({
+            actor,
+            judge,
+            gen: new FakeGenerationGateway(),
+            goal: "attach an avatar",
+            allowlist: [origin],
+            startUrl: `${origin}/`,
+            fixture,
+            fixtureRoot: fixtureDir,
+            uploadFixtures: [
+              { descriptor: "label=Choose avatar", matcher: { key: "label", value: "Choose avatar" }, name: "bound-first.txt", path: first },
+              { descriptor: "id=avatar", matcher: { key: "id", value: "avatar" }, name: "bound-second.txt", path: second },
+            ],
+          });
+          expect(await readAttachedName(session)).toBeNull();
+          return result;
+        },
+        origin,
+      );
+      // Neither binding is guessed, and the generic --fixture fallback is not used for the ambiguous control.
+      expect(run.recording.pages.flatMap((p) => p.steps.map((s) => s.step)).some((s) => s.kind === "upload")).toBe(false);
+      expect(JSON.stringify(run.transcript)).toContain("--upload-fixture bindings are ambiguous for Choose avatar");
+      expect(JSON.stringify(judge.states[0]?.controls)).not.toContain("«fixture:bound-");
     },
     120_000,
   );
