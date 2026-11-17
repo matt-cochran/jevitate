@@ -76,6 +76,12 @@ export interface OutcomeCheckContext {
   readonly timeoutMs?: number;
   /** Bound on the network settle before reading requests / after the reload (ms). */
   readonly settleMs?: number;
+  /**
+   * #852: settle (network and DOM quiet, bounded by `settleMs`) before page checks too, not only before
+   * network/`reloadThen`/`http` ones. For a one-shot read (`timeoutMs: 0`) of a state that is expected
+   * NOT to hold, so a late-rendering page is read once it has landed rather than at `load`.
+   */
+  readonly settleBeforePage?: boolean;
   /** Judges one network check (default: `evaluateNetworkCheck` over every captured request). */
   readonly judgeNetwork?: (check: NetworkSuccessCheck, requests: readonly CapturedRequest[], truncated: boolean) => SuccessCheckResult;
   /**
@@ -104,7 +110,7 @@ export async function evaluateOutcomeChecks(checks: readonly SuccessCheck[], ctx
   const ceilingMs = ctx.settleMs ?? DEFAULT_ORACLE_SETTLE_MS;
   const judgeNetwork = ctx.judgeNetwork ?? ((c, requests, truncated) => evaluateNetworkCheck(c, requests, truncated));
   const results = new Map<number, SuccessCheckResult>();
-  const needsSettle = checks.some((c) => c.kind !== "page");
+  const needsSettle = ctx.settleBeforePage === true || checks.some((c) => c.kind !== "page");
   if (needsSettle) await monitorFor(page).waitSettled({ ceilingMs });
   const requests = capture?.sent() ?? [];
 

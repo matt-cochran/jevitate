@@ -398,6 +398,10 @@ Journey call and goal run reports a second answer beside its outcome:
 
 Code decides it, from the job's done check: a statement about the app's state that is false before the
 job is done and true after it, read in a fresh browser context. A model's judgment never decides it.
+The before reading (and the `--retry` reconcile reading) waits for the page to settle, meaning no request
+in flight and no DOM change for 500 ms, bounded by 2 s. It then reads the check once. A done state that
+the page renders after `load` is still seen. The after reading polls the check until it holds, bounded
+by 3 s. Re-checks wake on page activity, with interval polling as the fallback (#852).
 The check lives on the job in `.jevitate/jobs.json`; its fields are in the
 [done-check contract](./contracts/done-check.md).
 

@@ -1122,7 +1122,7 @@
   isHttpOrigin: function
   targetAllowlist: function
 
-# @jevitate/playwright (101 exports)
+# @jevitate/playwright (102 exports)
   AdmissionTimeoutError: class
   BrowserCrashedError: class
   BrowserNotInstalledError: class
@@ -1161,6 +1161,7 @@
   browsersDir: function
   classifyInstalled: function
   cleanupOrphanBrowsers: function
+  closeIdleSharedBrowsers: function
   closeSharedBrowserPool: function
   closestDeviceNames: function
   configureSharedBrowserPool: function

@@ -167,6 +167,15 @@ export function configureSharedBrowserPool(overrides: Partial<BrowserPoolOptions
   sharedOverrides = overrides;
 }
 
+/**
+ * #852: closes the shared pool's IDLE browsers now (no live lease), keeping the pool itself. Called when
+ * a CLI command has finished, so the process exits without waiting out the idle-close timer; a
+ * long-lived command (mcp, ui) that is still leasing browsers keeps them.
+ */
+export async function closeIdleSharedBrowsers(): Promise<void> {
+  if (shared !== undefined) await shared.closeIdle();
+}
+
 /** Closes the shared pool's browsers now (e.g. at CLI exit) instead of waiting for the idle timer. */
 export async function closeSharedBrowserPool(): Promise<void> {
   const pool = shared;

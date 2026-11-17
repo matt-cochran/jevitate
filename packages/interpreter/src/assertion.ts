@@ -5,11 +5,18 @@ import { BrowseTheWebToken, CountOf, IsVisible, TextOf, ValueOf } from "@jevitat
 import { descriptorToTarget } from "./descriptor.js";
 import { evaluateVisual, isVisualAssertion } from "./visual-state.js";
 import { clock } from "@jevitate/domain";
+import { activityWakerFor, type ActivityWaker } from "./page-activity.js";
 
 /** Default bound for the bounded polling loop, in milliseconds. */
 const DEFAULT_TIMEOUT_MS = 5000;
 /** Default interval between re-evaluations in the bounded polling loop, in milliseconds. */
 const DEFAULT_POLL_MS = 100;
+/**
+ * #852: the shortest interval between two samples when a `wake` fires early. A page that mutates every
+ * frame (a clock, an animation, a spinner) would otherwise re-sample at frame rate; this caps it at
+ * ~40 samples/s, still well under the fallback `pollMs`.
+ */
+export const MIN_WAKE_INTERVAL_MS = 25;
 
 /**
  * Options for the bounded polling loop shared by `checkAssertion` and every
@@ -20,6 +27,12 @@ export interface CheckAssertionOptions {
   timeoutMs?: number;
   /** Interval between re-evaluations. Default 100ms. */
   pollMs?: number;
+  /**
+   * #852: wakes the loop early when the page changes (DOM mutation, request finished, navigation), so a
+   * check is re-read as soon as its state can have changed. `pollMs` stays the longest wait between
+   * samples (the fallback for changes no event reports): a wake can only make a sample come sooner.
+   */
+  wake?: ActivityWaker;
 }
 
 /**
@@ -48,8 +61,18 @@ export async function pollUntil(
   const deadline = clock.now() + timeoutMs;
   for (;;) {
     if (await sample()) return true;
-    if (clock.now() >= deadline) return false;
-    await clock.sleep(pollMs);
+    const remaining = deadline - clock.now();
+    if (remaining <= 0) return false;
+    const wait = Math.min(pollMs, remaining);
+    if (opts?.wake === undefined) {
+      await clock.sleep(wait);
+      continue;
+    }
+    const wokeFrom = clock.now();
+    await opts.wake(wait);
+    // Rate floor: an early wake never re-samples sooner than MIN_WAKE_INTERVAL_MS after the last one.
+    const floor = Math.min(MIN_WAKE_INTERVAL_MS, wait) - (clock.now() - wokeFrom);
+    if (floor > 0) await clock.sleep(floor);
   }
 }
 
@@ -76,7 +99,16 @@ export async function checkAssertion(
   a: Assertion,
   opts?: CheckAssertionOptions,
 ): Promise<boolean> {
-  return pollUntil(() => evaluateAssertionOnce(actor, a), opts);
+  return pollUntil(() => evaluateAssertionOnce(actor, a), { ...opts, wake: opts?.wake ?? actorActivityWaker(actor) });
+}
+
+/** #852: the activity waker of the actor's page; undefined (plain interval polling) without one. */
+function actorActivityWaker(actor: Actor): ActivityWaker | undefined {
+  try {
+    return activityWakerFor(actor.ability(BrowseTheWebToken).session.page);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
