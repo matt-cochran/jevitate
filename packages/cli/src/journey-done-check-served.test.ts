@@ -12,7 +12,7 @@ import { DONE_CHECK_HOOK_OWNER, registerDoneCheckHooks, registerDoneCheckHooksOn
 import { EVIDENCE_FILE } from "./journey-run-evidence.js";
 import { hasRunHookOwner, resetRunHooksForTests } from "./journey-run-hooks.js";
 import { buildProgram } from "./program.js";
-import { useSkippingTime } from "../../explore/src/testkit.js";
+import { startSkippingTime, stopSkippingTime, useSkippingTime } from "../../explore/src/testkit.js";
 
 useSkippingTime({ per: "all", pageClock: false });
 
@@ -51,6 +51,19 @@ function serve(): Promise<Server> {
     }
     const html = (b: string) => res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(`<!doctype html><html><body>${b}</body></html>`);
     if (path === "/items") return html(`<ul data-testid="items">${app.items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>`);
+    if (path === "/api/items.json") return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(app.items));
+    // #852: the same list, rendered client-side 300 ms AFTER the page's load event (a SPA). A reading taken
+    // at load sees an empty list; only a reading that waits for the page to settle (quiet 500 ms) sees it.
+    if (path === "/items-late")
+      return html(`<ul data-testid="items"></ul>
+<script>
+// BROWSER CODE: a SPA that fetches its data a moment after load (in-page time; the page clock is real here).
+window.addEventListener("load", () => setTimeout(async () => {
+  const items = await (await fetch("/api/items.json")).json();
+  const ul = document.querySelector("[data-testid=items]");
+  for (const i of items) { const li = document.createElement("li"); li.textContent = i; ul.appendChild(li); }
+}, 300));
+</script>`);
     if (path === "/new")
       return html(`<input data-testid="name" aria-label="Name"><button data-testid="save" type="button">Save</button><p data-testid="status"></p>
 <script>
@@ -104,12 +117,14 @@ beforeAll(async () => {
       jobs: [
         { id: "save-item", ...story, done: { version: 1, at: "/items", check: "textIncludes:testId=items|${item}", distinguishedBy: ["item"] } },
         { id: "no-check", ...story },
+        { id: "save-item-late", ...story, done: { version: 1, at: "/items-late", check: "textIncludes:testId=items|${item}", distinguishedBy: ["item"] } },
       ],
     }),
   );
   const registry = new JourneyRegistry(new FsJourneyStore(journeysDir));
   await registry.put(journey("save-item", "save-item"));
   await registry.put(journey("save-unchecked", "no-check"));
+  await registry.put(journey("save-item-late", "save-item-late"));
 });
 
 afterAll(async () => {
@@ -267,4 +282,31 @@ describe("GAPS 21: the real entry registers the done check (real Chromium)", () 
     expect(r.code).toBe(0);
     noMarker(r);
   }, 120_000);
+});
+
+// #852: the before reading's settle waits on real page activity (a timer the SPA schedules after load), so
+// it runs on the real clock: under skipping time its settle ceiling would elapse before the page acts.
+describe("[realtime] #852 the before reading of a client-rendered done page reads it settled (real Chromium)", () => {
+  beforeAll(() => stopSkippingTime());
+  afterAll(() => void startSkippingTime({ pageClock: false }));
+
+  it("#852: the before reading of a client-rendered done state reads the SETTLED page: already-true is still seen", async () => {
+    // The item is stored before step 1, but the done page renders it only after its load event. The before
+    // reading is one read (no poll); it must come after the page settles, or it would read "not done yet"
+    // and the run would claim to have achieved a job that was already done.
+    app.broken = false;
+    app.items = [MARKER];
+    writeProject("advisory");
+    const r = await run("save-item-late");
+    expect(r.data.job).toEqual({ attainment: "unverified", basis: "already-true" });
+    expect(r.code).toBe(0);
+  });
+
+  it("#852: a client-rendered done state that becomes true during the run is achieved", async () => {
+    app.broken = false;
+    const r = await run("save-item-late");
+    expect(r.data.job).toEqual({ attainment: "achieved", basis: "done-check" });
+    expect(r.code).toBe(0);
+  });
+
 });

@@ -1,7 +1,8 @@
 import { expect, test, vi } from "vitest";
 import type { Assertion } from "@jevitate/recording";
 import { CastActor, BrowseTheWeb } from "@jevitate/screenplay";
-import { checkAssertion, readAssertionText } from "./assertion.js";
+import { clock, FakeClock, installClock, resetClock } from "@jevitate/domain";
+import { checkAssertion, MIN_WAKE_INTERVAL_MS, pollUntil, readAssertionText } from "./assertion.js";
 
 function fakeLocator(overrides: Partial<Record<string, any>> = {}) {
   return {
@@ -213,4 +214,51 @@ test("readAssertionText: #213 — the current value a failed valueEquals read, f
   const actor = actorWithPage(fakePage(locator));
   const a: Assertion = { kind: "valueEquals", target: { testId: "last-name" }, value: "Litmus" };
   await expect(readAssertionText(actor as any, a)).resolves.toBe("old-value");
+});
+
+// === #852: activity wake with a rate floor and the interval fallback ===
+
+test("#852 pollUntil: an early wake re-samples before pollMs, and a wake storm is floored at MIN_WAKE_INTERVAL_MS", async () => {
+  const fake = new FakeClock();
+  installClock(fake);
+  try {
+    const sampledAt: number[] = [];
+    let n = 0;
+    const sample = async (): Promise<boolean> => {
+      sampledAt.push(fake.now());
+      return ++n >= 5;
+    };
+    // A page that mutates every frame: every wake returns at once.
+    const wake = vi.fn(async () => undefined);
+    const done = pollUntil(sample, { timeoutMs: 1000, pollMs: 100, wake });
+    await fake.runUntilIdle();
+    expect(await done).toBe(true);
+    expect(sampledAt).toHaveLength(5);
+    const gaps = sampledAt.slice(1).map((t, i) => t - sampledAt[i]!);
+    for (const g of gaps) expect(g).toBe(MIN_WAKE_INTERVAL_MS);
+  } finally {
+    resetClock();
+  }
+});
+
+test("#852 pollUntil: a wake that never fires early keeps the pollMs interval and still fails closed at the timeout", async () => {
+  const fake = new FakeClock();
+  installClock(fake);
+  try {
+    const sampledAt: number[] = [];
+    const wake = (ms: number) => clock.sleep(ms);
+    const done = pollUntil(
+      async () => {
+        sampledAt.push(fake.now());
+        return false;
+      },
+      { timeoutMs: 300, pollMs: 100, wake },
+    );
+    await fake.runUntilIdle();
+    expect(await done).toBe(false);
+    const t0 = sampledAt[0]!;
+    expect(sampledAt.map((t) => t - t0)).toEqual([0, 100, 200, 300]);
+  } finally {
+    resetClock();
+  }
 });
