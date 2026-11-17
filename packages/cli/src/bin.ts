@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { ProfileManager } from "@jevitate/daemon";
+import { closeIdleSharedBrowsers } from "@jevitate/playwright";
 import { buildProgram } from "./program.js";
 import { resolveDataDir } from "./data-dir.js";
 import { installMissionKillSwitch } from "./kill-signal.js";
@@ -33,10 +34,15 @@ if (envProblems.length > 0) {
 const profiles = new ProfileManager(resolveDataDir(["profiles"]));
 const dbPath = resolveDataDir(["db.sqlite"]);
 const program = buildProgram({ profiles, dbPath, logs: { autoPrune: true } });
-program.parseAsync(process.argv).catch((err) => {
-  // A registered command's secrets are known to the terminal layer: it reports this one redacted.
-  if (reportCommandRejection(err)) return;
-  process.stderr.write(`${String(err)}\n`);
-  // An unexpected error: the command could not finish, so it proves nothing (exit-codes.ts).
-  process.exitCode = EXIT_CODES.inconclusive;
-});
+program
+  .parseAsync(process.argv)
+  // #852: the command has finished; close the browsers nobody holds instead of waiting out the pool's
+  // idle timer (E1: ~1 s of every one-shot run). A long-lived command's leased browsers are kept.
+  .then(() => closeIdleSharedBrowsers())
+  .catch((err) => {
+    // A registered command's secrets are known to the terminal layer: it reports this one redacted.
+    if (reportCommandRejection(err)) return;
+    process.stderr.write(`${String(err)}\n`);
+    // An unexpected error: the command could not finish, so it proves nothing (exit-codes.ts).
+    process.exitCode = EXIT_CODES.inconclusive;
+  });

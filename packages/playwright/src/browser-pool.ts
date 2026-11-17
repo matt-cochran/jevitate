@@ -334,6 +334,27 @@ export class BrowserPool<C extends PooledContext, O> {
     }
   }
 
+  /**
+   * #852: closes now every browser that has no live lease, instead of letting its idle timer run out.
+   * A browser with a live lease is left alone. For a one-shot command that is finishing: without it the
+   * process waits out `idleCloseMs` (default 1 s) holding a browser nobody will lease again.
+   */
+  async closeIdle(): Promise<void> {
+    const idle = [...this.#browsers.entries()].filter(([, entry]) => entry.leases.size === 0 && !entry.closing);
+    for (const [key] of idle) this.#browsers.delete(key);
+    await Promise.all(
+      idle.map(async ([key, entry]) => {
+        entry.closing = true;
+        if (entry.idleTimer !== undefined) clock.clearTimeout(entry.idleTimer);
+        try {
+          await (await entry.browser).close();
+        } catch (err) {
+          process.emitWarning(`jevitate: closing idle browser ${key} failed: ${String(err)}`);
+        }
+      }),
+    );
+  }
+
   /** Closes every browser now (live leases are failed as crashes would be, but named as shutdown). */
   async close(): Promise<void> {
     const entries = [...this.#browsers.values()];
