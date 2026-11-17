@@ -1,0 +1,297 @@
+
+ RUN  v2.1.9 /home/mc/worktrees/structural-splits/.delivery/d01a-journey-verify-observer/1794785676509/worktree
+
+stdout | packages/cli/src/journey-verify-resume.e2e.test.ts > [realtime] a mutation proof that loses its observer or its verifier > spawns the code under test
+#787 e2e spawned /home/mc/worktrees/structural-splits/.delivery/d01a-journey-verify-observer/1794785676509/worktree/packages/cli/dist/bin.js: 0.30.0-source-d633d583 (commit d633d583, tree 024c5687, built 2026-11-15T23:16:39.027Z)
+
+ ✓ |unit| packages/cli/src/journey-verify-targeted-line.test.ts (4 tests) 3ms
+ ✓ |unit| packages/cli/src/journey-verify-evidence-file.test.ts (1 test) 256ms
+ ✓ |unit| packages/cli/src/journey-verify-failure-phase.test.ts (2 tests) 381ms
+ ✓ |unit| packages/cli/src/journey-verify-native-report.test.ts (10 tests) 1102ms
+   ✓ #818 the native report is persisted before stdout > survives a stdout that dies (EPIPE): the receipt names it by path and hash, and it is the exact report 332ms
+ ✓ |unit| packages/cli/src/journey-verify-no-reset.test.ts (9 tests) 1119ms
+   ✓ a proof with no reset hook or fixture > the report says so 315ms
+ ✓ |unit| packages/cli/src/journey-verify-terminal.test.ts (16 tests) 1428ms
+   ✓ a proof that keeps progressing > is never ended, however long it runs 346ms
+ ✓ |unit| packages/cli/src/journey-verify-retry.test.ts (25 tests) 1528ms
+ ✓ |unit| packages/cli/src/journey-verify.test.ts (46 tests) 1829ms
+ ✓ |unit| packages/cli/src/journey-verify-dropped-write.test.ts (43 tests) 2225ms
+ ✓ |unit| packages/cli/src/journey-verify-policy-cli.test.ts (9 tests) 184ms
+ ✓ |unit| packages/cli/src/journey-verify-read-requests.test.ts (5 tests) 226ms
+ ✓ |unit| packages/cli/src/journey-verify-checkpoint.test.ts (101 tests) 10915ms
+   ✓ a resumed proof and an uninterrupted one > reach the same verdict from the same results: proven 662ms
+   ✓ a resumed proof and an uninterrupted one > reach the same verdict from the same results: a mutation that still passed 630ms
+   ✓ a resumed proof and an uninterrupted one > reach the same verdict from the same results: a replay that errored 568ms
+   ✓ a resumed proof and an uninterrupted one > reach the same verdict from the same results: cascades only 550ms
+ ✓ |unit| packages/cli/src/journey-verify-resume.e2e.test.ts (7 tests) 163497ms
+   ✓ [realtime] a mutation proof that loses its observer or its verifier > spawns the code under test 1954ms
+   ✓ [realtime] a mutation proof that loses its observer or its verifier > a coordinator's death leaves a detached verifier going, a fresh status reads it, and a live verifier refuses a resume 25857ms
+   ✓ [realtime] a mutation proof that loses its observer or its verifier > runs the same proof whole, for the verdict a resume must match, and never stores the secret or the hook 26846ms
+   ✓ [realtime] a mutation proof that loses its observer or its verifier > a verifier killed with SIGKILL is reported as gone, and a resume reuses its finished pairs and reaches the same verdict 30304ms
+   ✓ [realtime] a mutation proof that loses its observer or its verifier > resume against a damaged checkpoint, or another hook, refuses and leaves the file alone 15980ms
+   ✓ [realtime] a mutation proof that loses its observer or its verifier > over a real `jevitate mcp`: no new tool, status answers during that server's own proof, and a new server resumes it after a SIGKILL 52893ms
+   ✓ [realtime] a mutation proof that loses its observer or its verifier > with the parent watchdog on, a dead parent ends the verifier, and what it finished is still there 9503ms
+ ✓ |browser| packages/cli/src/journey-verify-control-served.test.ts (30 tests) 963910ms
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (0s)
+progress journey verify: replay 3, mutation skip:3 (2s)
+progress journey verify: replay 4, mutation block-write:3 (2s)
+progress journey verify: replay 5, mutation closing replay, as recorded (3s)
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (0s)
+progress journey verify: replay 3, mutation skip:3 (2s)
+progress journey verify: replay 4, mutation block-write:3 (2s)
+progress journey verify: replay 5, mutation closing replay, as recorded (3s)
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (1s)
+progress journey verify: replay 3, mutation skip:3 (5s)
+progress journey verify: replay 4, mutation block-write:3 (11s)
+progress journey verify: replay 5, mutation stale-value:2 (17s)
+progress journey verify: replay 6, mutation stale-value:2 (22s)
+progress journey verify: replay 7, mutation control for step 2 (31s)
+progress journey verify: replay 8, mutation closing replay, as recorded (38s)
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (1s)
+progress journey verify: replay 3, mutation skip:3 (5s)
+progress journey verify: replay 4, mutation skip:3 (10s)
+progress journey verify: replay 5, mutation block-write:3 (16s)
+progress journey verify: replay 6, mutation block-write:3 (21s)
+progress journey verify: replay 7, mutation control for step 3 (31s)
+progress journey verify: replay 8, mutation stale-value:2 (37s)
+progress journey verify: replay 9, mutation stale-value:2 (42s)
+progress journey verify: replay 10, mutation stale-value:2 (53s)
+progress journey verify: replay 11, mutation control for step 2 (67s)
+progress journey verify: replay 12, mutation closing replay, as recorded (79s)
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (1s)
+progress journey verify: replay 3, mutation skip:3 (3s)
+progress journey verify: replay 4, mutation block-write:3 (35s)
+progress journey verify: replay 5, mutation stale-value:2 (67s)
+progress journey verify: replay 6, mutation closing replay, as recorded (72s)
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (0s)
+progress journey verify: replay 3, mutation skip:3 (1s)
+progress journey verify: replay 4, mutation block-write:3 (2s)
+progress journey verify: replay 5, mutation closing replay, as recorded (3s)
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (1s)
+progress journey verify: replay 3, mutation skip:3 (3s)
+progress journey verify: replay 4, mutation block-write:3 (35s)
+progress journey verify: replay 5, mutation skip:4 (67s)
+progress journey verify: replay 6, mutation skip:4 (72s)
+progress journey verify: replay 7, mutation control for step 4 (77s)
+progress journey verify: replay 8, mutation stale-value:2 (79s)
+progress journey verify: replay 9, mutation stale-value:2 (84s)
+progress journey verify: replay 10, mutation stale-value:2 (95s)
+progress journey verify: replay 11, mutation control for step 2 (109s)
+progress journey verify: replay 12, mutation closing replay, as recorded (120s)
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (1s)
+progress journey verify: replay 3, mutation skip:3 (5s)
+progress journey verify: replay 4, mutation block-write:3 (11s)
+progress journey verify: replay 5, mutation stale-value:2 (17s)
+progress journey verify: replay 6, mutation stale-value:2 (22s)
+progress journey verify: replay 7, mutation control for step 2 (32s)
+progress journey verify: replay 8, mutation closing replay, as recorded (38s)
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (0s)
+progress journey verify: replay 3, mutation skip:3 (1s)
+progress journey verify: replay 4, mutation block-write:3 (2s)
+progress journey verify: replay 5, mutation closing replay, as recorded (3s)
+progress journey verify: as recorded, replay 1 (0s)
+ ✓ |browser| packages/cli/src/journey-verify-served.test.ts (12 tests) 194511ms
+   ✓ journey verify --mutate (#402, served) > a weak Journey: the save step's own-target-visible expect still passes when the save is skipped or blocked — insensitive, exit 1 1396ms
+   ✓ journey verify --mutate (#402, served) > runs fixture setup before and restore after the base replay and every mutated replay (#544) 1258ms
+   ✓ journey verify --mutate (#402, served) > a strengthened Journey: the step-request status and the reloadThen are sensitive under skip and block-write; the valueEquals under stale-value — exit 0 10717ms
+   ✓ journey verify --mutate (#402, served) > a save step that asserts its own outcome is proven through the relaxed replay (#554) 24009ms
+   ✓ journey verify --mutate (#402, served) > a request failure is sensitive when its missing write makes a later action fail 63698ms
+   ✓ journey verify --mutate (#402, served) > block-write that did not block the step's own recorded write is not-applied, never a proof 1176ms
+   ✓ journey verify --mutate (#402, served) > proves a local review action by skip after the actual save write 78155ms
+   ✓ journey verify --mutate (#402, served) > applies an expectation-only HTTP mutation when the actual blocked write matches its declared glob 10851ms
+   ✓ journey verify --mutate (#402, served) > human output: one line per assertion, then a summary 1134ms
+   ✓ journey verify --mutate (#402, served) > a Journey whose unmutated replay fails is inconclusive (exit 2) and no mutation runs 1984ms
+ ✓ |browser| packages/cli/src/journey-verify-soundness-served.test.ts (156 tests) 1330418ms
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (1s)
+progress journey verify: replay 3, mutation skip:3 (2s)
+progress journey verify: replay 4, mutation swap-param:threadId (8s)
+progress journey verify: replay 5, mutation swap-param:threadId (13s)
+progress journey verify: replay 6, mutation swap-param:threadId (23s)
+progress journey verify: replay 7, mutation control for step 2 (36s)
+progress journey verify: replay 8, mutation closing replay, as recorded (47s)
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (1s)
+progress journey verify: replay 3, mutation skip:4 (2s)
+progress journey verify: replay 4, mutation swap-param:threadId (7s)
+progress journey verify: replay 5, mutation swap-param:threadId (13s)
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (1s)
+progress journey verify: replay 3, mutation skip:3 (2s)
+progress journey verify: replay 4, mutation swap-param:threadId (8s)
+progress journey verify: replay 5, mutation swap-param:threadId (13s)
+progress journey verify: replay 6, mutation swap-param:threadId (23s)
+progress journey verify: replay 7, mutation control for step 2 (37s)
+progress journey verify: replay 8, mutation closing replay, as recorded (47s)
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (1s)
+progress journey verify: replay 3, mutation skip:3 (3s)
+progress journey verify: replay 4, mutation swap-param:threadId (8s)
+ ✓ |browser| packages/cli/src/journey-verify-pairing-soundness-served.test.ts (7 tests) 210772ms
+progress journey verify: replay 5, mutation swap-param:threadId (13s)
+progress journey verify: replay 6, mutation swap-param:threadId (24s)
+ ✓ |browser| packages/cli/src/journey-verify-terminal.e2e.test.ts (5 tests) 7939ms
+   ✓ a stalled replay holding a real browser session > has its session closed when the proof's bound ends it 6066ms
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (1s)
+progress journey verify: replay 3, mutation swap-param:threadId (2s)
+progress journey verify: replay 7, mutation swap-param:threadId (39s)
+progress journey verify: replay 4, mutation swap-param:threadId (8s)
+progress journey verify: replay 5, mutation swap-param:threadId (18s)
+progress journey verify: replay 8, mutation control for step 2 (57s)
+progress journey verify: replay 9, mutation control for step 2 (72s)
+progress journey verify: replay 10, mutation guard-param:expected_threadid (83s)
+progress journey verify: replay 11, mutation closing replay, as recorded (88s)
+ ✓ |browser| packages/cli/src/journey-verify-targeted-served.test.ts (10 tests) 63466ms
+progress journey verify: replay 6, mutation control for step 2 (33s)
+progress journey verify: replay 7, mutation swap-param:threadId (43s)
+progress journey verify: replay 8, mutation control for step 2 (64s)
+progress journey verify: replay 9, mutation swap-param:threadId (79s)
+ ✓ |browser| packages/cli/src/journey-verify-sibling-end-state-served.test.ts (5 tests) 14033ms
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (1s)
+progress journey verify: replay 3, mutation stale-value:3 (3s)
+progress journey verify: replay 4, mutation stale-value:3 (8s)
+progress journey verify: replay 10, mutation control for step 2 (105s)
+progress journey verify: replay 11, mutation swap-param:threadId (126s)
+progress journey verify: replay 5, mutation control for step 3 (16s)
+progress journey verify: replay 6, mutation swap-param:reply (22s)
+progress journey verify: replay 7, mutation swap-param:reply (27s)
+progress journey verify: replay 8, mutation truncate-param:reply (36s)
+progress journey verify: replay 9, mutation truncate-param:reply (41s)
+progress journey verify: replay 12, mutation control for step 2 (156s)
+progress journey verify: replay 10, mutation closing replay, as recorded (51s)
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (1s)
+progress journey verify: replay 2, mutation independence replay, as recorded (1s)
+progress journey verify: replay 3, mutation stale-value:3 (3s)
+progress journey verify: replay 3, mutation swap-param:threadId (3s)
+progress journey verify: replay 4, mutation swap-param:threadId (8s)
+progress journey verify: replay 4, mutation stale-value:3 (8s)
+progress journey verify: replay 5, mutation swap-param:reply (13s)
+progress journey verify: replay 5, mutation swap-param:threadId (18s)
+progress journey verify: replay 6, mutation swap-param:reply (19s)
+progress journey verify: replay 7, mutation truncate-param:reply (24s)
+progress journey verify: replay 8, mutation truncate-param:reply (29s)
+progress journey verify: replay 6, mutation control for step 2 (34s)
+progress journey verify: replay 9, mutation closing replay, as recorded (35s)
+ ✓ |browser| packages/cli/src/journey-verify-params-served.test.ts (7 tests) 36198ms
+progress journey verify: replay 7, mutation swap-param:threadId (44s)
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (0s)
+progress journey verify: replay 3, mutation swap-param:who (1s)
+progress journey verify: replay 4, mutation closing replay, as recorded (6s)
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (0s)
+progress journey verify: replay 3, mutation swap-param:who (0s)
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (0s)
+progress journey verify: replay 3, mutation swap-param:who (0s)
+progress journey verify: replay 4, mutation closing replay, as recorded (6s)
+ ✓ |browser| packages/cli/src/journey-verify-select-served.test.ts (9 tests) 6086ms
+progress journey verify: replay 8, mutation control for step 2 (64s)
+progress journey verify: replay 9, mutation swap-param:threadId (80s)
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (0s)
+progress journey verify: replay 3, mutation skip:2 (2s)
+progress journey verify: replay 4, mutation block-write:2 (7s)
+progress journey verify: replay 5, mutation closing replay, as recorded (12s)
+ ✓ |browser| packages/cli/src/journey-verify-policy-served.test.ts (3 tests) 7774ms
+   ✓ block-write lets the declared read prerequisite reach the server and aborts only the save 2328ms
+   ✓ native mutate keeps recorded-origin policy when rebased, and `journey review --base-url` the same origin reviews fresh 5379ms
+progress journey verify: replay 10, mutation control for step 2 (105s)
+progress journey verify: replay 11, mutation swap-param:threadId (125s)
+progress journey verify: replay 12, mutation control for step 2 (156s)
+progress journey verify: replay 13, mutation swap-param:threadId (182s)
+progress journey verify: replay 14, mutation control for step 2 (215s)
+progress journey verify: replay 15, mutation closing replay, as recorded (246s)
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (1s)
+progress journey verify: replay 3, mutation swap-param:threadId (2s)
+progress journey verify: replay 4, mutation swap-param:threadId (8s)
+progress journey verify: replay 5, mutation swap-param:threadId (18s)
+progress journey verify: replay 6, mutation control for step 2 (34s)
+progress journey verify: replay 7, mutation swap-param:threadId (44s)
+progress journey verify: replay 8, mutation control for step 2 (65s)
+progress journey verify: replay 9, mutation swap-param:threadId (80s)
+ ✓ |browser| packages/cli/src/journey-verify-resume-control-served.test.ts (1 test) 61280ms
+   ✓ [realtime] a skipped control and a resume > reads what the uninterrupted proof reads: the toast's decay is not sensitivity 61236ms
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (0s)
+progress journey verify: replay 3, mutation skip:3 (2s)
+progress journey verify: replay 4, mutation block-write:3 (2s)
+progress journey verify: replay 5, mutation closing replay, as recorded (3s)
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (0s)
+progress journey verify: replay 3, mutation skip:3 (2s)
+progress journey verify: replay 10, mutation control for step 2 (106s)
+progress journey verify: replay 4, mutation block-write:3 (2s)
+progress journey verify: replay 5, mutation closing replay, as recorded (3s)
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (0s)
+progress journey verify: replay 11, mutation swap-param:threadId (126s)
+progress journey verify: replay 3, mutation skip:3 (2s)
+progress journey verify: replay 4, mutation block-write:3 (2s)
+progress journey verify: replay 5, mutation closing replay, as recorded (3s)
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (0s)
+progress journey verify: replay 3, mutation skip:3 (2s)
+progress journey verify: replay 4, mutation block-write:3 (2s)
+progress journey verify: replay 5, mutation closing replay, as recorded (3s)
+ ✓ |browser| packages/cli/src/journey-verify-cross-origin-served.test.ts (4 tests) 6042ms
+   ✓ journey verify --mutate on a split-origin app (#542, served) > without the API origin allowed, block-write is not-applied 1687ms
+   ✓ journey verify --mutate on a split-origin app (#542, served) > --allow <api origin> lets block-write abort the step's cross-origin write 1432ms
+   ✓ journey verify --mutate on a split-origin app (#542, served) > --allow <api origin> makes block-write apply (not not-applied) 1407ms
+   ✓ journey verify --mutate on a split-origin app (#542, served) > metadata.allowedOrigins lets block-write abort the step's cross-origin write without a flag 1401ms
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (1s)
+progress journey verify: replay 3, mutation skip:3 (3s)
+progress journey verify: replay 4, mutation skip:3 (8s)
+progress journey verify: replay 5, mutation stale-value:2 (13s)
+progress journey verify: replay 6, mutation stale-value:2 (19s)
+progress journey verify: replay 12, mutation control for step 2 (157s)
+ ✓ |browser| packages/cli/src/journey-verify-declared-targeted-served.test.ts (8 tests) 165927ms
+progress journey verify: replay 7, mutation stale-value:2 (29s)
+progress journey verify: replay 8, mutation control for step 2 (43s)
+progress journey verify: replay 9, mutation swap-param:reply (53s)
+progress journey verify: replay 10, mutation swap-param:reply (58s)
+progress journey verify: replay 11, mutation swap-param:reply (69s)
+progress journey verify: replay 12, mutation control for step 2 (82s)
+progress journey verify: replay 13, mutation truncate-param:reply (92s)
+progress journey verify: replay 14, mutation truncate-param:reply (98s)
+progress journey verify: replay 15, mutation truncate-param:reply (108s)
+progress journey verify: replay 16, mutation control for step 2 (121s)
+progress journey verify: replay 17, mutation closing replay, as recorded (131s)
+ ✓ |browser| packages/cli/src/journey-verify-request-relax-served.test.ts (1 test) 29178ms
+   ✓ #768 automatic request defense through actual Chromium > proves the cascade automatically and still accepts a declared request relaxation 29129ms
+progress journey verify: as recorded, replay 1 (0s)
+progress journey verify: replay 2, mutation independence replay, as recorded (1s)
+progress journey verify: replay 3, mutation skip:3 (3s)
+progress journey verify: replay 4, mutation skip:3 (8s)
+progress journey verify: replay 5, mutation stale-value:2 (13s)
+progress journey verify: replay 6, mutation stale-value:2 (18s)
+progress journey verify: replay 7, mutation swap-param:reply (24s)
+progress journey verify: replay 8, mutation swap-param:reply (30s)
+progress journey verify: replay 9, mutation truncate-param:reply (36s)
+progress journey verify: replay 10, mutation truncate-param:reply (41s)
+progress journey verify: replay 11, mutation closing replay, as recorded (48s)
+ ✓ |browser| packages/cli/src/journey-verify-apply-obligations-served.test.ts (2 tests) 63323ms
+ ✓ |browser| packages/cli/src/journey-verify-attach-bound.test.ts (2 tests) 77113ms
+   ✓ [realtime] a proof whose browser attach is slow or hung > a browser attach delayed past the 2 s bound still returns a verdict 37547ms
+   ✓ [realtime] a proof whose browser attach is slow or hung > a browser attach that never returns still returns a verdict 39235ms
+
+ Test Files  29 passed (29)
+      Tests  540 passed (540)
+   Start at  18:46:54
+   Duration  1691.80s (transform 19.13s, setup 7.62s, collect 122.84s, tests 3422.66s, environment 6ms, prepare 2.62s)
+

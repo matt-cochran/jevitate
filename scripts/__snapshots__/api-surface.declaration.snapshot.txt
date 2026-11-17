@@ -1,57 +1,57 @@
 === DECLARATION (src/index.ts, TS compiler API) ===
 
 # @jevitate/adjudicator (73 exports)
-  adjudicate: other
+  adjudicate: function
   AdvisoryJudgment: type-alias
   AdvisoryJudgmentSchema: variable
-  AssertionProof: other
+  AssertionProof: interface
   AssertionResult: interface
-  AssertionSite: other
-  assertionSiteKey: other
+  AssertionSite: type-alias
+  assertionSiteKey: function
   AssertionVerdict: type-alias
   BoundaryEvidence: type-alias
   BoundaryEvidenceSchema: variable
   BoundaryVerdict: interface
   ChecksVerdict: interface
-  classifyMutation: other
-  classifyMutationPlain: other
-  countsForGate: other
+  classifyMutation: function
+  classifyMutationPlain: function
+  countsForGate: function
   DoneCheckEvidence: type-alias
   DoneCheckEvidenceSchema: variable
   DoneCheckSpec: type-alias
   DoneCheckSpecSchema: variable
   DoneReading: type-alias
   DoneReadingSchema: variable
-  evaluatedOwnRequestFailure: other
+  evaluatedOwnRequestFailure: function
   EvidenceApprovalChannelSchema: variable
   EvidenceSubject: type-alias
   EvidenceSubjectSchema: variable
   IsolationNote: type-alias
-  isolationNoteReason: other
+  isolationNoteReason: function
   IsolationNoteSchema: variable
   JobVerdict: interface
-  judgeAssertions: other
-  judgeDoneCheck: other
+  judgeAssertions: function
+  judgeDoneCheck: function
   Known: type-alias
   KnownSchema: function
   MovedField: type-alias
-  mutationErrored: other
+  mutationErrored: function
   MutationEvidence: type-alias
   MutationEvidenceSchema: variable
-  MutationFailedSite: other
+  MutationFailedSite: type-alias
   MutationKindSchema: variable
-  MutationPlan: other
-  mutationProofVerdict: other
-  MutationProofVerdict: other
-  mutationResults: other
-  MutationRunResult: other
+  MutationPlan: interface
+  mutationProofVerdict: function
+  MutationProofVerdict: type-alias
+  mutationResults: function
+  MutationRunResult: interface
   MutationVerdict: type-alias
-  parseSiteKey: other
-  PlannedMutation: other
-  PlanSiteInfo: other
-  provenSensitive: other
+  parseSiteKey: function
+  PlannedMutation: interface
+  PlanSiteInfo: interface
+  provenSensitive: function
   RefusalCodeSchema: variable
-  rejudge: other
+  rejudge: function
   Rejudgement: interface
   ReplayEvidence: type-alias
   ReplayEvidenceSchema: variable
@@ -61,10 +61,10 @@
   RunContextSchema: variable
   RunEvidence: type-alias
   RunEvidenceSchema: variable
-  RunOutcome: other
+  RunOutcome: type-alias
   StepEvidence: type-alias
   StepEvidenceSchema: variable
-  TargetedProof: other
+  TargetedProof: interface
   TargetTrustSchema: variable
   UnknownReason: type-alias
   UnknownReasonSchema: variable
@@ -462,8 +462,8 @@
   act: function
   ActArgs: interface
   ACTION_CAUSED_MS: variable
-  ActionableControlCandidate: other
-  ActionableControlOutcome: other
+  ActionableControlCandidate: interface
+  ActionableControlOutcome: interface
   ActionDelta: interface
   ActionDeltas: class
   ActionDeltasOptions: interface
@@ -524,8 +524,8 @@
   BlockedWrite: interface
   BlockedWriteCause: interface
   blockedWriteCauses: function
-  BoundaryEvidence: other
-  BoundarySignal: other
+  BoundaryEvidence: interface
+  BoundarySignal: type-alias
   boundaryValueCandidates: function
   Bounds: interface
   boundSecretField: function
@@ -581,7 +581,7 @@
   CoverageReport: interface
   CoverageScope: interface
   CoverageScopeDeparture: interface
-  coverageStateFingerprint: other
+  coverageStateFingerprint: function
   CoverageSufficiency: interface
   CoverageSufficiencyThresholds: interface
   CoverageThresholds: interface
@@ -970,14 +970,14 @@
   RECURRING_MIN_COMPLETIONS: variable
   RECURRING_WINDOW_MS: variable
   redactAriaLine: function
-  redactContext: other
+  redactContext: function
   redactControl: function
-  REDACTION_MASK: other
+  REDACTION_MASK: variable
   redactPageText: function
-  redactText: other
-  redactUrl: other
+  redactText: function
+  redactUrl: function
   refusalNote: function
-  REGION_LOST_RESET_AFTER: other
+  REGION_LOST_RESET_AFTER: variable
   REJECTED_AGAIN_REASON: variable
   RELOAD_TIMEOUT_MS: variable
   reloadPage: function
@@ -1033,7 +1033,7 @@
   runFeatureMission: function
   runGoalBasedMission: function
   runInductionMission: function
-  RunOutcome: other
+  RunOutcome: type-alias
   RunRecorder: class
   SAFETY_RULES: variable
   SafetyConfig: interface
@@ -1274,67 +1274,67 @@
   writeFileAtomic: function
 
 # @jevitate/interpreter (61 exports)
-  anchorLocator: other
-  applyTextEdit: other
-  attrOf: other
-  Box: other
-  boxesOf: other
-  boxesOverlap: other
-  BufferingSink: other
-  checkAssertion: other
-  compareStyle: other
-  Comparison: other
-  DEFAULT_IN_VIEWPORT_MIN: other
-  describeTextEdit: other
-  descriptorLocator: other
-  descriptorRung: other
-  descriptorToTarget: other
-  evaluateVisual: other
-  FlashQuery: other
-  FlashResult: other
-  installFlashRecorder: other
-  InterpretResult: other
-  intersectionArea: other
-  intersectionRatio: other
-  isVisualAssertion: other
-  parseColor: other
-  parseNumber: other
-  PLAYWRIGHT_TEST_ID_ATTRIBUTE: other
-  PostconditionFailed: other
-  readAssertionEvidence: other
-  readAssertionText: other
-  readFlashes: other
-  RecordingInterpreter: other
-  RecordingSink: other
-  RedactedFillError: other
-  ReplayActionGuard: other
-  ReplayRefusal: other
-  ReplayTargetError: other
-  ReplayTargetFailure: other
-  ResolvedRung: other
-  ResolvedTarget: other
-  resolveTarget: other
-  ResolveTargetOptions: other
-  Rgba: other
-  rungLocator: other
-  runStep: other
-  SelectAlternative: other
-  SelectAlternativeUnavailableError: other
-  SizeBounds: other
-  sizeViolation: other
-  StepObserver: other
-  StepOutcome: other
-  StepResolution: other
-  StepWait: other
-  StepWaitHooks: other
-  styleChannel: other
-  stylesOf: other
-  textIncludesCI: other
-  TFLOW_ID_ATTRIBUTE: other
-  ToRecordingOptions: other
-  VisualAssertion: other
-  VisualVerdict: other
-  waitForOutcome: other
+  anchorLocator: function
+  applyTextEdit: function
+  attrOf: function
+  Box: interface
+  boxesOf: function
+  boxesOverlap: function
+  BufferingSink: class
+  checkAssertion: function
+  compareStyle: function
+  Comparison: type-alias
+  DEFAULT_IN_VIEWPORT_MIN: variable
+  describeTextEdit: function
+  descriptorLocator: function
+  descriptorRung: function
+  descriptorToTarget: function
+  evaluateVisual: function
+  FlashQuery: interface
+  FlashResult: type-alias
+  installFlashRecorder: function
+  InterpretResult: type-alias
+  intersectionArea: function
+  intersectionRatio: function
+  isVisualAssertion: function
+  parseColor: function
+  parseNumber: function
+  PLAYWRIGHT_TEST_ID_ATTRIBUTE: variable
+  PostconditionFailed: class
+  readAssertionEvidence: function
+  readAssertionText: function
+  readFlashes: function
+  RecordingInterpreter: class
+  RecordingSink: interface
+  RedactedFillError: class
+  ReplayActionGuard: interface
+  ReplayRefusal: class
+  ReplayTargetError: class
+  ReplayTargetFailure: type-alias
+  ResolvedRung: type-alias
+  ResolvedTarget: interface
+  resolveTarget: function
+  ResolveTargetOptions: interface
+  Rgba: interface
+  rungLocator: function
+  runStep: function
+  SelectAlternative: interface
+  SelectAlternativeUnavailableError: class
+  SizeBounds: interface
+  sizeViolation: function
+  StepObserver: interface
+  StepOutcome: type-alias
+  StepResolution: type-alias
+  StepWait: interface
+  StepWaitHooks: interface
+  styleChannel: function
+  stylesOf: function
+  textIncludesCI: function
+  TFLOW_ID_ATTRIBUTE: variable
+  ToRecordingOptions: interface
+  VisualAssertion: type-alias
+  VisualVerdict: interface
+  waitForOutcome: function
 
 # @jevitate/journey (341 exports)
   AcceptedFindings: interface
@@ -1343,7 +1343,7 @@
   AddAnchorInput: interface
   ANCHOR_BOUNDARIES: variable
   ANCHOR_NAME_MAX: variable
-  ANCHOR_NAME_RE: other
+  ANCHOR_NAME_RE: variable
   ANCHOR_NAME_RULE_RE: variable
   ANCHOR_RULE_CODES: variable
   anchorAddCommand: function
@@ -1477,10 +1477,10 @@
   intentCoverage: function
   IntentCoverage: interface
   isDoneCheckIssues: function
-  isLoadRefusedName: other
+  isLoadRefusedName: function
   isNoClaimExpect: function
   isOwnTargetVisible: function
-  isSecretName: other
+  isSecretName: function
   isSweepMode: function
   JevLayer: type-alias
   JevLayerSchema: variable
@@ -1574,7 +1574,7 @@
   mutationPlanSites: function
   MutationProofPolicyResult: type-alias
   MutationProofPolicyResultSchema: variable
-  MutationProofVerdict: other
+  MutationProofVerdict: type-alias
   mutationReplay: function
   MutationReplay: interface
   MutationReplayOptions: type-alias
@@ -1951,7 +1951,7 @@
 
 # @jevitate/recorder (50 exports)
   ActionCaptureEvent: interface
-  anchorLocator: other
+  anchorLocator: function
   AssembleOptions: interface
   assembleRecording: function
   assembleWithValues: function
@@ -1995,7 +1995,7 @@
   resolvesToSameElement: function
   roleOf: function
   Rung: type-alias
-  rungLocator: other
+  rungLocator: function
   SecretFieldPredicate: type-alias
   Stability: type-alias
   targetDisplay: function
@@ -2267,7 +2267,7 @@
   flattenRecording: function
   HandbackHandler: interface
   HealAttempt: interface
-  HealBudget: other
+  HealBudget: interface
   HealBudgetDimension: type-alias
   HealBudgetMeter: class
   HealBudgetUsage: interface
@@ -2298,10 +2298,10 @@
   RetargetCandidate: interface
   retargetRecording: function
   sanitizeStep: function
-  Secret: other
-  SecretManagerPort: other
-  SecretOriginMismatchError: other
-  SecretUnresolvableError: other
+  Secret: class
+  SecretManagerPort: interface
+  SecretOriginMismatchError: class
+  SecretUnresolvableError: class
   SelfHealer: interface
   SENTINEL_NOTE_UNAVAILABLE: variable
   SENTINEL_TASKS: variable
@@ -2345,17 +2345,17 @@
   ValueOf: variable
 
 # @jevitate/secrets (11 exports)
-  assertOriginBound: other
-  CliCommand: other
-  CliSecretManager: other
-  ExecFn: other
-  Secret: other
-  SecretAmbiguousBindingError: other
-  SecretManagerPort: other
-  SecretOriginMismatchError: other
-  SecretRef: other
-  SecretUnresolvableError: other
-  StubSecretManager: other
+  assertOriginBound: function
+  CliCommand: interface
+  CliSecretManager: class
+  ExecFn: type-alias
+  Secret: class
+  SecretAmbiguousBindingError: class
+  SecretManagerPort: interface
+  SecretOriginMismatchError: class
+  SecretRef: interface
+  SecretUnresolvableError: class
+  StubSecretManager: class
 
 # @jevitate/skills (4 exports)
   loadManifest: function
@@ -2529,14 +2529,14 @@
   GuardProbe: interface
   IMPACT_RANK: variable
   JevQuestionSpec: interface
-  JevQuestionSpecSchema: other
+  JevQuestionSpecSchema: variable
   JobImpact: type-alias
   JourneyEvidence: interface
   JourneyOutcome: type-alias
   journeysFor: function
   judgeScreen: function
-  loadRubric: other
-  loadV1Rubric: other
+  loadRubric: function
+  loadV1Rubric: function
   makeFinding: function
   MakeFindingInput: interface
   makeSignalFinding: function
@@ -2586,8 +2586,8 @@
   routeOf: function
   RubricApplicability: interface
   RubricEntry: interface
-  RubricEntrySchema: other
-  RubricLoadError: other
+  RubricEntrySchema: variable
+  RubricLoadError: class
   RunSignalCapture: interface
   ScreenRef: interface
   SIGNAL_IMPACT: variable
@@ -2627,5 +2627,5 @@
   UxReport: interface
   UxSpecifics: type-alias
   UxSpecificsItem: type-alias
-  V1_RUBRIC: other
+  V1_RUBRIC: variable
   withSignalFindings: function
