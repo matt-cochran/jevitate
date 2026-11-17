@@ -11,6 +11,7 @@ import { parseTokenPath, resolveLoginSecrets } from "./persona-login-parse.js";
 import { performLogin, selectLoginContext, showsSignInForm } from "./persona-login-form.js";
 import { assertPageAuthorized, LoginArgsError, LoginContextError, LoginFailedError, originOf, pathOf, scrub, type ApiLogin, type EnsureSession, type EnsureSessionOptions, type MintOptions, type MintResult, type SessionCheckOptions } from "./persona-login-types.js";
 import { findGitRoot, sessionFileInProjectRefusal } from "./project-dir.js";
+import { timePhase } from "@jevitate/domain";
 
 /** @public — the module's original export surface (some symbols are used only through these re-exports). */
 export type { ApiLogin, AuthCheck, AuthExpiredResult, EnsureSession, EnsureSessionOptions, LoginContext, LoginSecrets, LoginSuccess, MintOptions, MintResult, PersonaLogin, SessionCheckOptions } from "./persona-login-types.js";
@@ -363,7 +364,12 @@ async function keepRotatedSession(session: BrowserSession, file: string): Promis
 }
 
 /** The pre-flight: check the session; when it is expired and login parameters exist, re-mint once and re-check. */
-export async function ensurePersonaSession(o: EnsureSessionOptions): Promise<EnsureSession> {
+/** #852: a persona session check (and its refresh), timed as `login`. */
+export function ensurePersonaSession(o: EnsureSessionOptions): Promise<EnsureSession> {
+  return timePhase("login", () => ensurePersonaSessionImpl(o));
+}
+
+async function ensurePersonaSessionImpl(o: EnsureSessionOptions): Promise<EnsureSession> {
   if (o.check.mode === "off") return { ok: true, refreshed: false };
   const who = o.persona === undefined ? "the session" : `persona ${o.persona}`;
   let first: SessionCheck | undefined;

@@ -59,6 +59,7 @@ import {
   type HookResult,
   type PersistedFixtures,
 } from "./mission-fixtures-types.js";
+import { timePhase } from "@jevitate/domain";
 
 /** @public The fixture surface this module has always exported; some names have no in-repo caller. */
 export { SETUP_REF } from "./mission-fixtures-spec.js";
@@ -269,6 +270,10 @@ export class MissionFixtures {
 
   /** Sets up the fixture. Throws `FixtureSetupError`; the caller still calls `restore()`. */
   async setup(): Promise<void> {
+    return timePhase("fixtures", () => this.#setup());
+  }
+
+  async #setup(): Promise<void> {
     this.#values = {};
     this.#secretNames = new Set();
     this.#active = true;
@@ -288,6 +293,10 @@ export class MissionFixtures {
 
   /** Restores the state the last `setup()` created. Never throws: every step is logged, and a failure shows in `restoreFailed()`. */
   async restore(): Promise<void> {
+    return timePhase("fixtures", () => this.#restore());
+  }
+
+  async #restore(): Promise<void> {
     // #560: each restore pass starts with no restore bindings, so `reset()` never reuses a stale id.
     this.#restoreValues = {};
     this.#restoreSecretNames = new Set();

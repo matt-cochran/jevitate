@@ -1,6 +1,6 @@
 import type { ApprovalChannel } from "@jevitate/journey";
 import type { JobVerdict } from "@jevitate/adjudicator";
-import type { DoneCheckPolicy } from "@jevitate/domain";
+import type { DoneCheckPolicy, PhaseTimings } from "@jevitate/domain";
 // check-types.ts — `jevitate check` option, result and error types (#231).
 import type { SlownessReport } from "./cold-start-report.js";
 import type { OutcomeTargetResult } from "./outcome-targets.js";
@@ -188,6 +188,8 @@ export interface CheckItemReport {
   readonly goalOutcome?: string;
   readonly actions: number;
   readonly durationMs: number;
+  /** #852: the item's wall time by phase (prepare, siteGate, fixtures, login, browserOpen, step action/check/pace, doneCheck, teardown, report) and what no phase claimed. */
+  readonly timings?: PhaseTimings;
   /** JUnit verdict after gating. `pending-review` (#453): a self-heal proposed a Journey revision a person must review. */
   readonly verdict: "passed" | "failed" | "error" | "skipped" | "pending-review";
   /** #453: the proposed revision a `pending-review` Journey item produced (absent fields: the run did not name them). */

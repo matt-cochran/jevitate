@@ -74,6 +74,34 @@ Every string is redacted of the run's secret params. `jevitate report` turns `he
 unexplained breaks into defects (with the attempt table) and a pending proposal into a
 `journey-heal-pending` finding that is not counted as a defect.
 
+## Run timings (`timings`, #852)
+
+`journey run --json` and every run item in a `check.json` report where the run's wall time went:
+
+```json
+"timings": { "totalMs": 1012, "phases": { "prepare": 2, "browserOpen": 183, "stepAction": 93, "stepCheck": 68, "doneCheck": 594, "teardown": 16, "report": 9 }, "unattributedMs": 47 }
+```
+
+| Phase | What it covers |
+|---|---|
+| `prepare` | resolving the target, inputs, policy and heal setup, and loading the stored Journey |
+| `siteGate` | the site policy's gate: quiet hours, the minimum interval wait and the run budget |
+| `fixtures` | `--fixtures` setup and restore, and the `--before`/`--after` hooks |
+| `login` | a persona's session check, and its refresh |
+| `browserOpen` | opening a browser session: admission, launch, context and storage state |
+| `stepAction` | performing each step, without its postcondition |
+| `stepCheck` | each step's postcondition (`expect`, `waitFor`) |
+| `stepPace` | human-like pauses a site policy's `interaction` pacing adds |
+| `doneCheck` | the job's done-check readings (their own sessions count as `browserOpen` and `teardown`) |
+| `teardown` | closing browser sessions |
+| `report` | assembling the result and writing its evidence |
+
+- **Self time:** each phase is charged its own time only, so the phases never double-count.
+- **`unattributedMs`:** `totalMs` less all phases, meaning time no phase claimed.
+- **Absent phases:** a phase that did not run is absent.
+
+On a 3-step Journey with a done check, `unattributedMs` is under 5% of `totalMs`.
+
 ## Run tags
 
 Every command that produces a run result takes `--tag key=value` (repeatable): `explore`,

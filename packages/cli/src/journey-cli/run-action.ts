@@ -4,7 +4,7 @@ import type { Command } from "commander";
 import { existsSync } from "node:fs";
 import { FsJourneyStore, ParamValidationError } from "@jevitate/journey";
 import { MissingCredentialError, type GenerationPort, type UsageTracker } from "@jevitate/ai-core";
-import { DEFAULT_DONE_CHECK_POLICY, journeyExitCode, safeRunPolicy, type DoneCheckPolicy, type SelfHealMode } from "@jevitate/domain";
+import { DEFAULT_DONE_CHECK_POLICY, activePhaseRecorder, clock, journeyExitCode, PhaseRecorder, safeRunPolicy, timePhase, withPhaseRecorder, type DoneCheckPolicy, type SelfHealMode } from "@jevitate/domain";
 import { type ChangeScope, SiteGateRefusedError, type SelfHealer } from "@jevitate/runtime";
 import { type EmulationSpec } from "@jevitate/playwright";
 import { SecretFieldSpecError } from "@jevitate/explore";
@@ -389,6 +389,7 @@ async function executeJourneyRun(program: Command, deps: CliDeps, id: string, en
   const { doneCheckRun, doneCheckPolicy, selfHealMode } = policyBundle;
   try {
     const { result, fixtureDrift } = await replayJourney(program, deps, id, env, inputs, policyBundle, healBundle);
+    const reportStartedAt = clock.monotonicMs();
     if (result.runRecordError !== undefined) program.configureOutput().writeErr?.(`warning: ${result.runRecordError}\n`);
     if (result.evidenceError !== undefined) program.configureOutput().writeErr?.(`warning: ${result.evidenceError}\n`);
     if (fixtureDrift !== undefined && !json) program.configureOutput().writeErr?.(`warning: ${(fixtureDrift as FixtureDrift).message}\n`);
@@ -402,12 +403,17 @@ async function executeJourneyRun(program: Command, deps: CliDeps, id: string, en
     // #800: the job verdict (absent while the done-check hooks are not registered: the run is unchanged).
     const job = doneCheckRun.job;
     const doneCheckFailed = job?.attainment === "not-achieved" && !("failure" in result);
+    const recorder = activePhaseRecorder();
+    // #852: building the result after the replay (intent coverage, the job verdict) is `report`.
+    recorder?.add("report", clock.monotonicMs() - reportStartedAt);
+    recorder?.end();
     const envelope = ok({
       ...result,
       ...(job === undefined ? {} : { job }),
       ...(doneCheckFailed ? { failure: { kind: "done-check-failed", message: DONE_CHECK_FAILED_MESSAGE } } : {}),
       ...(intent === undefined ? {} : { intent }),
       ...(fixtureDrift === undefined ? {} : { fixtureDrift }),
+      ...(recorder === undefined ? {} : { timings: recorder.snapshot() }),
     });
     // #583: a declared prepare-only boundary decides the exit too — a run that sent a write is never
     // a pass (`submitted`), and only `prepared` keeps the run's own code.
@@ -474,14 +480,24 @@ function handleJourneyRunError(program: Command, err: unknown): void {
 }
 
 /** The `journey run` action handler body, moved out of `registerJourneyRun`. */
-export async function runJourneyRunAction(command: Command, program: Command, deps: CliDeps, id: string): Promise<void> {
-  const env = await resolveRunEnvironment(command, program, deps);
-  if (env === undefined) return;
-  const inputs = await resolveRunInputs(command, program, deps, id, env);
-  if (inputs === undefined) return;
-  const policyBundle = await resolveRunPolicy(program, deps, id, env, inputs);
-  if (policyBundle === undefined) return;
-  const healBundle = await resolveRunHeal(program, deps, env, inputs, policyBundle);
-  if (healBundle === undefined) return;
-  await executeJourneyRun(program, deps, id, env, inputs, policyBundle, healBundle);
+export function runJourneyRunAction(command: Command, program: Command, deps: CliDeps, id: string): Promise<void> {
+  // #852: the run's wall time by phase, reported as `timings` on the result.
+  return withPhaseRecorder(new PhaseRecorder(), () => runJourneyRunActionTimed(command, program, deps, id));
+}
+
+async function runJourneyRunActionTimed(command: Command, program: Command, deps: CliDeps, id: string): Promise<void> {
+  // #852: resolving the target, inputs, policy and heal setup is the run's `prepare` phase.
+  const prepared = await timePhase("prepare", async () => {
+    const env = await resolveRunEnvironment(command, program, deps);
+    if (env === undefined) return undefined;
+    const inputs = await resolveRunInputs(command, program, deps, id, env);
+    if (inputs === undefined) return undefined;
+    const policyBundle = await resolveRunPolicy(program, deps, id, env, inputs);
+    if (policyBundle === undefined) return undefined;
+    const healBundle = await resolveRunHeal(program, deps, env, inputs, policyBundle);
+    if (healBundle === undefined) return undefined;
+    return { env, inputs, policyBundle, healBundle };
+  });
+  if (prepared === undefined) return;
+  await executeJourneyRun(program, deps, id, prepared.env, prepared.inputs, prepared.policyBundle, prepared.healBundle);
 }

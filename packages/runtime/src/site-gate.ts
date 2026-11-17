@@ -1,6 +1,6 @@
 import type { Recording } from "@jevitate/recording";
 import type { ActivityRepository, BudgetRepository, SitePolicyRepository } from "@jevitate/application";
-import { Pacer, evaluateGate, makeRng, resolveThrottle, seedFrom, clock } from "@jevitate/domain";
+import { Pacer, evaluateGate, makeRng, resolveThrottle, seedFrom, clock, timePhase } from "@jevitate/domain";
 import { PaceInteractions } from "@jevitate/screenplay";
 import { flattenRecording, isWriteStep } from "./self-heal.js";
 
@@ -120,7 +120,9 @@ export async function enterSiteGate(deps: SiteGateDeps, req: SiteGateRequest): P
     if (!allowed) return { ok: false, reason: "budget", retryAfter: nextUtcMidnightAfter(nowIso()) };
   }
 
-  const pace = policy.interaction === undefined ? null : new PaceInteractions(policy.interaction, new Pacer(makeRng(seedFrom(req.runId, policy.version))), sleep);
+  // #852: a human-like pause the policy asks for is charged to `stepPace`.
+  const pacedSleep = (ms: number): Promise<void> => timePhase("stepPace", () => sleep(ms));
+  const pace = policy.interaction === undefined ? null : new PaceInteractions(policy.interaction, new Pacer(makeRng(seedFrom(req.runId, policy.version))), pacedSleep);
   return {
     ok: true,
     pace,
