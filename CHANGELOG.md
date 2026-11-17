@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.30.2] – 2026-11-17
+
+### Changed
+
+- **Journey runs wait less, with the same verdicts (#852).** A 3-step Journey with a done check went from about 5.6 s to 1.6–2.0 s, and from 2.4 s to 1.2 s without one.
+  - The done check's before reading, and the `--retry` reconcile reading, expects the check not to hold. It now reads the page once after the page settles (network and DOM quiet for 500 ms, bounded by 2 s) instead of polling for the full 3 s. A done state that the page renders after `load` is still seen.
+  - On the real clock, assertion re-checks wake on page activity: a DOM mutation, a finished request, a navigation. Interval polling remains the fallback, and a page that changes every frame is re-checked at most every 25 ms.
+  - A finished command closes the browsers nobody holds, instead of waiting out the pool's 1 s idle timer.
+- CI shards the browser test lane four ways and runs one mutation-proof file per leg (#858, #859). PR wall time is down from about 34 to about 24 minutes.
+
 ## [0.30.1] – 2026-11-16
 
 ### Fixed
