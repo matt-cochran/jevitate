@@ -1782,7 +1782,7 @@
   targetAllowlist: function
   UnknownOrUnpromotedMissionTargetError: class
 
-# @jevitate/playwright (165 exports)
+# @jevitate/playwright (166 exports)
   AdmissionRecord: interface
   AdmissionTimeoutError: class
   admissionViolation: function
@@ -1802,6 +1802,7 @@
   BrowserSession: interface
   classifyInstalled: function
   cleanupOrphanBrowsers: function
+  closeIdleSharedBrowsers: function
   closeSharedBrowserPool: function
   closestDeviceNames: function
   configureSharedBrowserPool: function

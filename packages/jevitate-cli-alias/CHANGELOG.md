@@ -1,5 +1,12 @@
 # jevitate
 
+## 0.30.2
+
+### Patch Changes
+
+- Updated dependencies [409a6db]
+  - @jevitate/cli@0.30.2
+
 ## 0.30.1
 
 ### Patch Changes

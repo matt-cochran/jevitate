@@ -308,7 +308,7 @@ export class PlaywrightDoneCheckPort implements BrowserPort {
         if (new URL(url).origin !== origin) throw new Error("off-origin");
         await session.page.goto(url, { waitUntil: "load" });
       },
-      evaluate: async (check) => {
+      evaluate: async (check, evalOpts) => {
         let parsed: ReturnType<typeof parseSuccessSpec>;
         try {
           parsed = parseSuccessSpec(check);
@@ -317,7 +317,20 @@ export class PlaywrightDoneCheckPort implements BrowserPort {
         }
         // Only state-naming kinds: a network or reload check is about the run's own page, never a done check.
         if (parsed.kind !== "page" && parsed.kind !== "http") return "unevaluable";
-        const [result] = await evaluateOutcomeChecks([parsed], { actor, page: session.page, capture: null, httpProbe: createHttpProbe({ allowlist: allowedOrigins }), timeoutMs, settleMs });
+        // #852: the `pre` reading expects the check NOT to hold yet. Polling it until `timeoutMs` only waits
+        // out a state that is not coming (E1: ~2.9 s of a 5.2 s run). Settle the page first (network and DOM
+        // quiet, bounded by `settleMs`), then read it once. A late-rendering "done" state is still seen: it
+        // lands before the page is quiet. The `post` reading keeps its bounded poll.
+        const pre = evalOpts?.at === "pre";
+        const [result] = await evaluateOutcomeChecks([parsed], {
+          actor,
+          page: session.page,
+          capture: null,
+          httpProbe: createHttpProbe({ allowlist: allowedOrigins }),
+          timeoutMs: pre ? 0 : timeoutMs,
+          settleMs,
+          ...(pre ? { settleBeforePage: true } : {}),
+        });
         if (result === undefined || result.unevaluable === true) return "unevaluable";
         return result.passed;
       },

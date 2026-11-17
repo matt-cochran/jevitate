@@ -28,8 +28,12 @@ export interface DoneCheckAuth {
 export interface DoneCheckSession {
   readonly id: string;
   navigate(url: string): Promise<void>;
-  /** Evaluates a resolved `--success`-syntax check against the current page: true, false, or `unevaluable`. */
-  evaluate(check: string): Promise<boolean | "unevaluable">;
+  /**
+   * Evaluates a resolved `--success`-syntax check against the current page: true, false, or `unevaluable`.
+   * #852: `at` says which reading this is. A `pre` reading answers "is the job already done?" and expects
+   * false, so it reads the SETTLED page once instead of polling for a state that is not supposed to hold.
+   */
+  evaluate(check: string, opts?: { readonly at?: "pre" | "post" }): Promise<boolean | "unevaluable">;
   close(): Promise<void>;
 }
 
@@ -106,7 +110,7 @@ export async function readDoneCheck(input: ReadDoneCheckInput): Promise<DoneRead
     }
     let result: boolean | "unevaluable";
     try {
-      result = await session.evaluate(check);
+      result = await session.evaluate(check, { at });
     } catch {
       return unknown("page-replaced", started, at);
     }

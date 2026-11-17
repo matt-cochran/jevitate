@@ -335,6 +335,20 @@ describe("BrowserPool", () => {
     await pool.close();
   });
 
+  test("#852: closeIdle closes a browser with no live lease now, keeps a leased one, and the pool still relaunches", async () => {
+    const l = launcher();
+    const pool = new BrowserPool<FakeContext, { tag: string }>({ signals: scripted([calm]), maxContexts: 2, idleCloseMs: 60_000 });
+    await (await pool.acquire("idle", l.launch, opts)).release();
+    const held = await pool.acquire("held", l.launch, opts);
+    await pool.closeIdle();
+    expect(l.browsers[0]?.closed).toBe(true);
+    expect(l.browsers[1]?.closed).toBe(false);
+    await held.release();
+    await (await pool.acquire("idle", l.launch, opts)).release();
+    expect(l.browsers).toHaveLength(3);
+    await pool.close();
+  });
+
   test("invalid maxContexts is rejected up front", () => {
     expect(() => new BrowserPool({ signals: scripted([calm]), maxContexts: 0 })).toThrow(RangeError);
   });
