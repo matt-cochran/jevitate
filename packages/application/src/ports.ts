@@ -22,4 +22,10 @@ export interface BudgetRepository {
 export interface ActivityRepository {
   lastAt(site: string, account: string, cls: string): Promise<string | null>;
   stamp(site: string, account: string, cls: string, nowIso: string): Promise<void>;
+  /**
+   * #854: atomically records `nowIso` as the latest activity, but only when there is none yet or the
+   * recorded one is at or before `notBeforeIso` (null: always). True when this call claimed it. Two
+   * runs that both read an old `lastAt` cannot both pass a min interval: only one claim succeeds.
+   */
+  claim(site: string, account: string, cls: string, nowIso: string, notBeforeIso: string | null): Promise<boolean>;
 }

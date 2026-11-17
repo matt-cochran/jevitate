@@ -21,6 +21,7 @@ function deps(policy: SitePolicy | null, o: { lastAt?: string | null; allowed?: 
   const activity: ActivityRepository = {
     lastAt: async () => o.lastAt ?? null,
     stamp: async (_s, _a, cls) => void stamped.push(cls),
+    claim: async () => true,
   };
   const d: SiteGateDeps = { policies, budgets, activity, nowIso: () => NOW, sleep: async (ms) => void slept.push(ms) };
   return { d, reserved, stamped, slept };
@@ -107,5 +108,75 @@ describe("site-policy gate for Journey runs", () => {
       }) as unknown as Recording;
     expect(throttleClassOf(rec(["assert"]))).toBe("read");
     expect(throttleClassOf(rec(["assert", "click"]))).toBe("write");
+  });
+});
+
+
+// #854: an in-memory activity store with the same atomic claim semantics as SQLite's.
+function sharedActivity(): ActivityRepository & { readonly at: Map<string, string> } {
+  const at = new Map<string, string>();
+  const key = (s: string, a: string, c: string) => `${s}|${a}|${c}`;
+  return {
+    at,
+    lastAt: async (s, a, c) => at.get(key(s, a, c)) ?? null,
+    stamp: async (s, a, c, now) => void at.set(key(s, a, c), now),
+    claim: async (s, a, c, now, notBefore) => {
+      const last = at.get(key(s, a, c));
+      if (last !== undefined && notBefore !== null && last > notBefore) return false;
+      at.set(key(s, a, c), now);
+      return true;
+    },
+  };
+}
+
+describe("#854 concurrent runs and the site-wide scope", () => {
+  const policies = (p: SitePolicy): SitePolicyRepository => ({ get: async () => p, set: async () => undefined });
+  const budgets = (): BudgetRepository & { used: Map<string, number> } => {
+    const used = new Map<string, number>();
+    return {
+      used,
+      reserve: async (_s, account, cls, limits) => {
+        const k = `${account}|${cls}`;
+        const n = used.get(k) ?? 0;
+        if (limits.hourlyLimit !== undefined && n >= limits.hourlyLimit) return { allowed: false };
+        used.set(k, n + 1);
+        return { allowed: true };
+      },
+    };
+  };
+
+  it("two runs that read the same old lastAt cannot both pass the min interval", async () => {
+    const activity = sharedActivity();
+    activity.at.set(`${SITE}|primary|write`, "2026-09-25T14:00:00.000Z");
+    const d: SiteGateDeps = { policies: policies({ version: "v1", throttles: { write: { minIntervalSeconds: 60 } } }), budgets: budgets(), activity, nowIso: () => NOW, sleep: async () => undefined };
+    const [a, b] = await Promise.all([enterSiteGate(d, req({ runId: "a" })), enterSiteGate(d, req({ runId: "b" }))]);
+    expect([a.ok, b.ok].filter(Boolean)).toHaveLength(1);
+    const refused = a.ok ? b : a;
+    expect(refused).toMatchObject({ ok: false, reason: "min_interval" });
+  });
+
+  it("siteThrottles cap the site across accounts: a second account is refused once the site budget is spent", async () => {
+    const activity = sharedActivity();
+    const b = budgets();
+    const policy: SitePolicy = { version: "v1", throttles: { write: { hourlyLimit: 5 } }, siteThrottles: { write: { hourlyLimit: 1 } } };
+    const d: SiteGateDeps = { policies: policies(policy), budgets: b, activity, nowIso: () => NOW, sleep: async () => undefined };
+    const first = await enterSiteGate(d, req({ account: "lane-1" }));
+    const second = await enterSiteGate(d, req({ account: "lane-2" }));
+    expect(first.ok).toBe(true);
+    expect(second).toMatchObject({ ok: false, reason: "budget" });
+    expect(b.used.get("*|write")).toBe(1);
+  });
+
+  it("a site-wide min interval holds across accounts, and done stamps both scopes", async () => {
+    const activity = sharedActivity();
+    const policy: SitePolicy = { version: "v1", siteThrottles: { write: { minIntervalSeconds: 600 } } };
+    const d: SiteGateDeps = { policies: policies(policy), budgets: budgets(), activity, nowIso: () => NOW, sleep: async () => undefined };
+    const first = await enterSiteGate(d, req({ account: "lane-1" }));
+    expect(first.ok).toBe(true);
+    if (first.ok) await first.done();
+    expect(activity.at.get(`${SITE}|lane-1|write`)).toBe(NOW);
+    expect(activity.at.get(`${SITE}|*|write`)).toBe(NOW);
+    const second = await enterSiteGate(d, req({ account: "lane-2" }));
+    expect(second).toMatchObject({ ok: false, reason: "min_interval" });
   });
 });
