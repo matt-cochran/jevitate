@@ -66,22 +66,30 @@ jobs:
     needs: reuse
     if: ${{ !cancelled() && ((github.base_ref != 'main' && github.ref != 'refs/heads/main') || (needs.reuse.result
       == 'success' && needs.reuse.outputs.hit == 'true')) }}
-    name: test (${{ matrix.suite }})
+    name: test (${{ matrix.suite }}${{ matrix.part && format(' {0}', matrix.part) || '' }})
     strategy:
       fail-fast: false
       matrix:
-        suite:
-        - unit
-        - browser
+        # #858: the browser lane is sharded by test file across runners (vitest --shard): every
+        # served test starts its own fixture server on a random port with its own temp dirs, so
+        # shards share no state. The Build gate folds every leg through needs.test.result.
+        include:
+        - suite: unit
+        - { suite: browser, part: 1/4 }
+        - { suite: browser, part: 2/4 }
+        - { suite: browser, part: 3/4 }
+        - { suite: browser, part: 4/4 }
         # The real-clock mutation-proof matrices: about 23 and 15 minutes each, on a 2-vCPU runner,
         # because a held request or a running job is real time. In the browser lane they took it from
-        # about 21 minutes to about 44, at its cap. Their own lane keeps both lanes well under it.
-        - browser-proofs
+        # about 21 minutes to about 44, at its cap. One leg per file keeps them off each other's CPU.
+        - { suite: browser-proofs, part: soundness }
+        - { suite: browser-proofs, part: control }
     runs-on: ${{ vars.CI_RUNNER_MODE == 'blacksmith' && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     timeout-minutes: 45
     env:
       REUSED: ${{ needs.reuse.outputs.hit == 'true' }}
       TEST_SUITE: ${{ matrix.suite }}
+      TEST_PART: ${{ matrix.part }}
     steps:
     - name: Reused a tested build of this tree
       if: env.REUSED == 'true'
@@ -136,18 +144,19 @@ jobs:
           proofs="packages/cli/src/journey-verify-soundness-served.test.ts packages/cli/src/journey-verify-control-served.test.ts"
           for f in $proofs; do test -f "$f" || { echo "missing proof file $f"; exit 1; }; done
           if [ "$TEST_SUITE" = browser-proofs ]; then
-            pnpm exec vitest run --project browser $proofs
+            pnpm exec vitest run --project browser "packages/cli/src/journey-verify-${TEST_PART}-served.test.ts"
           else
             excludes=""
             for f in $proofs; do excludes="$excludes --exclude $f"; done
-            pnpm exec vitest run --project browser packages apps $excludes
+            pnpm exec vitest run --project browser --shard="$TEST_PART" packages apps $excludes
           fi
         fi
+    # Tree-wide checks: once, in the unit leg, not in every shard.
     - name: Lint
-      if: env.REUSED != 'true'
+      if: env.REUSED != 'true' && matrix.suite == 'unit'
       run: pnpm lint
     - name: No-permissive-fallback gate
-      if: env.REUSED != 'true'
+      if: env.REUSED != 'true' && matrix.suite == 'unit'
       run: node scripts/check-no-permissive-fallback.mjs
   cross-platform-pool:
     needs: reuse
