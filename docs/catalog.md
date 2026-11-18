@@ -145,6 +145,51 @@ does not parse is reported as `job.done-check-unparseable` (a gap, a warning). M
 shows the linked job's check (`job.done.at`, `job.done.check`), and lint
 warns `missing-done-check` on a promoted Journey whose job has none.
 
+### The job's guidance (catalog contract v4, #874)
+
+A team often knows things about a job from outside Jevitate: a product spec, a requirements
+document, a glossary. `guidance` holds that knowledge in typed parts, so each part reaches a run the
+right way and none of it can decide a verdict:
+
+```json
+{
+  "id": "invite",
+  "trigger": "a colleague joins my team",
+  "motivation": "invite them by email",
+  "outcome": "work together from their first day",
+  "guidance": {
+    "aliases": [{ "term": "workspace", "uiTerms": ["piece"] }],
+    "expectedStates": ["the members page lists the invite as Pending"],
+    "claims": [
+      { "id": "invite-pending", "statement": "a new invite shows as Pending",
+        "check": { "version": 1, "at": "/members", "check": "textIncludes:role=table|Pending" } },
+      { "id": "one-seat", "statement": "an invite uses one free seat" }
+    ]
+  }
+}
+```
+
+| Part | How a run uses it |
+|---|---|
+| `aliases` (`{term, uiTerms[]}`, at most 30) | Navigation help: with `explore --job <id> --job-context` the model is told that a term may appear in the UI under other words. |
+| `expectedStates` (at most 20) | Navigation help: the screens or states the job passes through, told to the model with `--job-context`. |
+| `claims` (`{id, statement, check?}`, at most 20, unique ids) | Statements to check, **never told to the model**. After a `--job-context` run each gets one verdict in the result's `claims[]`: `confirmed`, `contradicted` or `not_observed`, with its `basis`. |
+
+A claim's `basis` says what decided it:
+
+- `check`: its own `check` (a done-check shape) was read by code in a fresh session after the run.
+  True confirms the claim, false contradicts it, and a reading that could not be taken is `not_observed`.
+- `model`: it has no check, so Jev judged it from the pages and controls the run observed. An answer
+  outside the three verdicts is `not_observed`.
+- `no-evidence`: no check and nothing observed (or no model allowed): `not_observed`, no model call.
+- `model-error`: the judgment call failed. The result records its `reason`.
+
+A `contradicted` claim is a divergence between the document and the product for a person to
+triage. It is noted on stderr and never changes the run's exit code; `--success` and the done
+check stay the only verdicts. `guidance` is part of the job's content hash, so editing it makes an
+approved job stale; a job without it keeps its hash. A `jobs.json` that uses `guidance` needs a
+contract v4 reader (`packages/cli/contracts/jevitate-catalog/v4/`).
+
 ## Linking a Journey
 
 Set the Journey's `metadata.job` to a job id and `metadata.persona` to a persona id. A
