@@ -83,6 +83,13 @@ export interface BrowserLaunchOptions {
    */
   extensions?: readonly UnpackedExtension[];
   /**
+   * #872: loopback `https` origins (`--accept-local-dev-cert`, already checked by
+   * `parseLocalDevCertOrigin`) whose current certificate is accepted although no CA trusts it.
+   * At launch each origin's public key is pinned with `--ignore-certificate-errors-spki-list`,
+   * so only those servers' certificates are accepted; every other host is validated as usual.
+   */
+  localDevCertOrigins?: readonly string[];
+  /**
    * #205: this run's resource limits (`--max-browsers`, `--max-browser-memory`) — override the
    * resource governor's defaults (see `ResourceGovernor`). Absent: the defaults/environment apply.
    */

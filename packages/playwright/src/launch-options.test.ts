@@ -273,3 +273,53 @@ describe("a persistent profile with a TMPDIR too long for Chromium's singleton s
     await expect(short.open({ ...base, persistentProfile: "/tmp/profile" })).rejects.toThrow("must not launch");
   });
 });
+
+describe("#872 localDevCertOrigins", () => {
+  const pinOf = async (origin: string): Promise<string> => (origin === "https://localhost:5173" ? "PIN=" : "OTHER=");
+
+  test("the pooled launch pins each local dev origin's key", async () => {
+    const { launch, calls } = capturingLauncher();
+    const port = new PlaywrightBrowserPort({ launch, platform: "darwin", pool: calmPool(), localDevCertPin: pinOf });
+    await expect(port.open({ ...base, localDevCertOrigins: ["https://localhost:5173"] })).rejects.toThrow("launch intercepted by test");
+    expect(calls[0]!.args).toEqual(["--ignore-certificate-errors-spki-list=PIN="]);
+  });
+
+  test("the pin follows the caller's own args", async () => {
+    const { launch, calls } = capturingLauncher();
+    const port = new PlaywrightBrowserPort({ launch, platform: "darwin", pool: calmPool(), localDevCertPin: pinOf });
+    await expect(
+      port.open({ ...base, args: ["--lang=de"], localDevCertOrigins: ["https://localhost:5173"] }),
+    ).rejects.toThrow("launch intercepted by test");
+    expect(calls[0]!.args).toEqual(["--lang=de", "--ignore-certificate-errors-spki-list=PIN="]);
+  });
+
+  test("no local dev origins → no pin switch", async () => {
+    const { launch, calls } = capturingLauncher();
+    const port = new PlaywrightBrowserPort({ launch, platform: "darwin", pool: calmPool(), localDevCertPin: pinOf });
+    await expect(port.open(base)).rejects.toThrow("launch intercepted by test");
+    expect(calls[0]!.args).toEqual([]);
+  });
+
+  test("an unreadable dev server fails before any browser launches", async () => {
+    const { launch, calls } = capturingLauncher();
+    const failing = async (): Promise<string> => {
+      throw new Error("could not read the certificate of https://localhost:5173: ECONNREFUSED");
+    };
+    const port = new PlaywrightBrowserPort({ launch, platform: "darwin", pool: calmPool(), localDevCertPin: failing });
+    await expect(port.open({ ...base, localDevCertOrigins: ["https://localhost:5173"] })).rejects.toThrow(/ECONNREFUSED/);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("a persistent (extension) launch pins the key too", async () => {
+    const calls: PersistentOptions[] = [];
+    const launchPersistentContext: typeof chromium.launchPersistentContext = async (_dir, options) => {
+      calls.push(options ?? {});
+      throw new Error("persistent launch intercepted by test");
+    };
+    const port = new PlaywrightBrowserPort({ launchPersistentContext, platform: "darwin", pool: calmPool(), localDevCertPin: pinOf });
+    await expect(
+      port.open({ ...base, persistentProfile: "/tmp/jevitate-test-profile", localDevCertOrigins: ["https://localhost:5173"] }),
+    ).rejects.toThrow("persistent launch intercepted by test");
+    expect(calls[0]!.args).toEqual(["--ignore-certificate-errors-spki-list=PIN="]);
+  });
+});
