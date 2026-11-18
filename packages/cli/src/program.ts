@@ -51,6 +51,7 @@ import { registerLogsCommands } from "./logs-cli.js";
 import { registerInboxCommands } from "./inbox-cli.js";
 import { registerAcceptanceAuditCommands } from "./acceptance-audit-cli.js";
 import { registerJourneezeHintCommands } from "./journeeze-hint-cli.js";
+import { resetRunEnvironment } from "./run-environment.js";
 
 export type { CliDeps, RecordCliDeps } from "./cli-shared.js";
 
@@ -63,6 +64,8 @@ export function versionString(engine: EngineInfo = currentEngineInfo(), tree: st
 }
 
 export function buildProgram(deps: CliDeps): Command {
+  // #872: a program starts with no recorded run environment (programs built in one process never share one).
+  resetRunEnvironment();
   const program = new Command();
   program.name("jevitate").description("Browser automation and testing in one tool: parameterized Journeys that do real work in your app, and autonomous exploration that turns discovered bugs into deterministic regression tests").version(versionString());
   // #218: the shared refusal path (cli-refusal.ts) needs to know which command is running.
