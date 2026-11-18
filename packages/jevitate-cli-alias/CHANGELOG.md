@@ -1,5 +1,30 @@
 # jevitate
 
+## 0.32.0
+
+### Minor Changes
+
+- 9de103b: Accept a local dev server's self-signed certificate (#872).
+  - **`--accept-local-dev-cert <origin>`:** a new repeatable flag on every command that opens a browser. Name an `https` origin on `localhost`, `127.0.0.0/8` or `[::1]`, and jevitate pins the public key that server presents at launch, so only its certificate is accepted. Every other host is validated as usual. A non-loopback or plain-`http` origin is a usage error (exit 64) before a browser starts.
+  - **Warning:** passing `--browser-arg --ignore-certificate-errors` now warns that it turns certificate checks off for every host, and points to the scoped flag.
+- bf3da93: `explore --job <id> --job-context` tells the model about the job (#873).
+  - **Opt-in mission brief:** the job's approved story, `context` and `constraints` from `.jevitate/jobs.json` are given to the model with the goal. `--job` alone is unchanged.
+  - **Mistake-proofed:** a draft or stale job is refused before any run (`E_EXPLORE_JOB`), a brief over 2000 characters is refused rather than truncated, and `--job-context` without `--job` is a usage error. The brief never satisfies `--success` or the done check.
+  - **Recorded:** the result carries `jobContext: {job, contentHash}`.
+- 050ef14: Catalog contract v4: a job's `guidance` (#874).
+  - **`guidance`** is a new optional job field with typed parts: `aliases` and `expectedStates` (navigation help, told to the model with `explore --job <id> --job-context`) and `claims` (statements to check, never told to the model). Every v3 file stays valid, and a job without `guidance` keeps its approval hash.
+  - **A verdict for every claim:** after a `--job-context` run the result's `claims[]` gives each claim `confirmed`, `contradicted` or `not_observed`, with its basis (`check`, `model`, `no-evidence` or `model-error`). A contradicted claim is a divergence to triage, noted on stderr, never a defect or an exit code.
+  - **Contract v4.0.0** is published under `packages/cli/contracts/jevitate-catalog/v4/`; v1 to v3 stay unchanged.
+
+### Patch Changes
+
+- 2b2d64b: A run that used `--accept-local-dev-cert` now records it (#872): its emitted and persisted results carry `localDevCerts`, the accepted origins, beside the run's tags and target. Absent when the flag was not used.
+- Updated dependencies [9de103b]
+- Updated dependencies [2b2d64b]
+- Updated dependencies [bf3da93]
+- Updated dependencies [050ef14]
+  - @jevitate/cli@0.32.0
+
 ## 0.31.0
 
 ### Minor Changes
