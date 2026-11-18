@@ -1,4 +1,4 @@
-import { clock, DEFAULT_DONE_CHECK_POLICY, type DoneCheckPolicy, type JourneyJobInput } from "@jevitate/domain";
+import { clock, timePhase, DEFAULT_DONE_CHECK_POLICY, type DoneCheckPolicy, type JourneyJobInput } from "@jevitate/domain";
 import { resolveDoneCheck, type DoneCheckSpec } from "@jevitate/journey";
 import {
   judgeDoneCheck,
@@ -76,7 +76,11 @@ export function httpCheckOnOrigin(check: string, origin: string): string | undef
 }
 
 /** Opens a new context, navigates to `spec.at`, evaluates `spec.check`, always closes the context. */
-export async function readDoneCheck(input: ReadDoneCheckInput): Promise<DoneReading> {
+export function readDoneCheck(input: ReadDoneCheckInput): Promise<DoneReading> {
+  return timePhase("doneCheck", () => readDoneCheckImpl(input));
+}
+
+async function readDoneCheckImpl(input: ReadDoneCheckInput): Promise<DoneReading> {
   const at = input.at ?? "post";
   const started = clock.monotonicMs();
   const values = { ...input.params, ...input.extracts };

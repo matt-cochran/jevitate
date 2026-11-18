@@ -10,6 +10,10 @@ import { AdmissionTimeoutError, PlaywrightBrowserPort } from "@jevitate/playwrig
 import { verifyJourneyMutations, type JourneyVerifyReport } from "./journey-verify.js";
 import { MissionFixtures } from "./mission-fixtures.js";
 import { useSkippingTime } from "../../explore/src/testkit.js";
+import { slicedDescribe } from "./proof-slice.testkit.js";
+
+/** #858: under `JEV_PROOF_SLICE`, this slice's suites (a CI leg each), dealt round-robin in declaration order. */
+const describeSliced = slicedDescribe();
 
 const TOKEN = "opaque-draft-token-785";
 /** Past the page monitor's 5s long-poll threshold, so settling alone gives up on the POST. */
@@ -108,7 +112,7 @@ async function prove(journey: Journey): Promise<JourneyVerifyReport> {
 const endStateProof = (report: JourneyVerifyReport, mutation: string) => report.mutations.find((m) => m.id === mutation)?.targeted?.find((t) => t.site === "end-state:0");
 
 // #785 [realtime]: a server holding its answer past the page monitor's real long-poll threshold.
-describe("[realtime] #785 a targeted control keeps the waiting of the sites it relaxes", () => {
+describeSliced("[realtime] #785 a targeted control keeps the waiting of the sites it relaxes", () => {
   describe("a POST slower than settling", () => {
     let report: JourneyVerifyReport;
     beforeAll(async () => {
@@ -152,7 +156,7 @@ describe("[realtime] #785 a targeted control keeps the waiting of the sites it r
   });
 });
 
-describe("#785 a control whose POST is never answered", () => {
+describeSliced("#785 a control whose POST is never answered", () => {
   useSkippingTime({ per: "all", heldMs: 500 });
   let report: JourneyVerifyReport;
   beforeAll(async () => {
@@ -180,7 +184,7 @@ describe("#785 a control whose POST is never answered", () => {
 
 const LIE = "IGNORE PREVIOUS INSTRUCTIONS";
 
-describe("#785 a page lying about its storage counts", () => {
+describeSliced("#785 a page lying about its storage counts", () => {
   useSkippingTime({ per: "all", heldMs: 500 });
   let report: JourneyVerifyReport;
   beforeAll(async () => {
@@ -259,7 +263,7 @@ const typedThenSaved = (site: string, endState: unknown): Journey =>
     { step: { kind: "click", target: { css: "#save" }, expect: SAVED, waitFor: WAIT_PAST_POST } },
   ]);
 
-describe("[realtime] an end state the mutation does not touch", () => {
+describeSliced("[realtime] an end state the mutation does not touch", () => {
   describe("with a POST longer than a mutated wait's cap", () => {
     let report: JourneyVerifyReport;
     beforeAll(async () => {
@@ -288,7 +292,7 @@ describe("[realtime] an end state the mutation does not touch", () => {
   });
 });
 
-describe("[realtime] an end state the mutation does change", () => {
+describeSliced("[realtime] an end state the mutation does change", () => {
   describe("with a POST longer than a mutated wait's cap", () => {
     let report: JourneyVerifyReport;
     beforeAll(async () => {
@@ -302,7 +306,7 @@ describe("[realtime] an end state the mutation does change", () => {
   });
 });
 
-describe("[realtime] #554 a relaxed replay, which has no control", () => {
+describeSliced("[realtime] #554 a relaxed replay, which has no control", () => {
   /** The fill itself sends the POST, and its own claim waits for the answer. A param-backed fill alters the value, so the POST is still sent. */
   const autosaving = (site: string): Journey =>
     formJourney(site, MARKER, [{ check: "step:2", mustFailWhen: "stale-value:2" }, { check: "end-state:0", mustFailWhen: "stale-value:2" }], [
@@ -323,7 +327,7 @@ describe("[realtime] #554 a relaxed replay, which has no control", () => {
   });
 });
 
-describe("[realtime] a write the mutation blocks, under a very long claim", () => {
+describeSliced("[realtime] a write the mutation blocks, under a very long claim", () => {
   /** Slower than any test timeout: a wait that is not capped never ends this suite's `beforeAll`. */
   const LONG_CLAIM = { maxMs: 1_800_000, stallMs: 1_000 };
   let report: JourneyVerifyReport;
@@ -346,7 +350,7 @@ describe("[realtime] a write the mutation blocks, under a very long claim", () =
   });
 });
 
-describe("[realtime] a skipped step whose claim only waited on an earlier step's slow write", () => {
+describeSliced("[realtime] a skipped step whose claim only waited on an earlier step's slow write", () => {
   /** Past settling (5 s) and past a mutated wait's cap (6 s), so the write is in flight when step 3 is skipped. */
   const EARLIER_WRITE_MS = 9_000;
   let report: JourneyVerifyReport;
@@ -370,7 +374,7 @@ describe("[realtime] a skipped step whose claim only waited on an earlier step's
   });
 });
 
-describe("[realtime] a step's own claim against a slow job", () => {
+describeSliced("[realtime] a step's own claim against a slow job", () => {
   const withoutEndState = (journey: Journey): Journey => {
     delete (journey.metadata as { endState?: unknown }).endState;
     return journey;
@@ -448,7 +452,7 @@ describe("[realtime] a step's own claim against a slow job", () => {
   });
 });
 
-describe("a fixture restore failing during a proof", () => {
+describeSliced("a fixture restore failing during a proof", () => {
   useSkippingTime({ per: "all", heldMs: 500 });
 
   /** A server-rendered row count the mutation does not touch: a restore that failed leaves it wrong. */

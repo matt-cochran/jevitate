@@ -1,6 +1,6 @@
 {
   "name": "jevitate",
-  "version": "0.30.2",
+  "version": "0.31.0",
   "description": "Bare-name alias for @jevitate/cli: browser automation and testing in one tool. Installs the `jevitate` command.",
   "type": "module",
   "license": "MIT",

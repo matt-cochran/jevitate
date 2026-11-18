@@ -6,7 +6,7 @@ import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { type UsageCounts } from "@jevitate/ai-core";
 import type { JobVerdict } from "@jevitate/adjudicator";
-import { clock, journeyMissionOutcome, type DoneCheckPolicy, type JourneyRunOutcome, JOURNEY_RUN_OUTCOMES } from "@jevitate/domain";
+import { clock, journeyMissionOutcome, PhaseRecorder, withPhaseRecorder, type DoneCheckPolicy, type PhaseTimings, type JourneyRunOutcome, JOURNEY_RUN_OUTCOMES } from "@jevitate/domain";
 import { consolidate, diffRuns, findingKey, type ConsolidatedDefect, type DiffEntry, type FindingIdentity, type FindingsDiff, type GateCase, type RunRecord } from "@jevitate/findings";
 import type { SelfHealer } from "@jevitate/runtime";
 import { approvalsReportVerified } from "./approval-provenance.js";
@@ -114,7 +114,7 @@ export interface CheckPreparation {
   readonly ctx: ExecContext;
   readonly now: () => number;
   readonly exceeded: string | undefined;
-  readonly executed: Array<{ item: Planned; ex: Executed | undefined; durationMs: number }>;
+  readonly executed: Array<{ item: Planned; ex: Executed | undefined; durationMs: number; timings?: PhaseTimings }>;
 }
 
 /**
@@ -164,7 +164,7 @@ export async function prepareCheckRun(opts: RunCheckOptions, inputs: CheckInputs
   };
   const now = opts.now ?? clock.now;
   let exceeded: string | undefined;
-  const executed: Array<{ item: Planned; ex: Executed | undefined; durationMs: number }> = [];
+  const executed: Array<{ item: Planned; ex: Executed | undefined; durationMs: number; timings?: PhaseTimings }> = [];
   return { testIdAttributes, doneCheckPolicy, meter, usage, ctx, now, exceeded, executed };
 }
 
@@ -238,14 +238,17 @@ export async function executeCheckItems(items: readonly Planned[], preparation: 
     }
     const t0 = now();
     let ex: Executed;
+    // #852: each item's wall time by phase, reported as `timings` on its check.json item.
+    const recorder = new PhaseRecorder();
     try {
-      ex = await execute(item, ctx, meter.remainingActions());
+      ex = await withPhaseRecorder(recorder, () => execute(item, ctx, meter.remainingActions()));
     } catch (e) {
       ex = { status: "error", actions: 0, error: { type: e instanceof Error ? e.name : "error", message: errorMessage(e) } };
     }
+    recorder.end();
     const over = meter.charge(ex.actions, await usage());
     if (over !== undefined) exceeded ??= over;
-    executed.push({ item, ex, durationMs: now() - t0 });
+    executed.push({ item, ex, durationMs: now() - t0, timings: recorder.snapshot() });
   }
   return exceeded;
 }

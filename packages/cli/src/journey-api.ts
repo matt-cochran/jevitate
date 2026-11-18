@@ -10,7 +10,7 @@ import { anchorRuleMode, assertAnchorRules, journeyAnchorIssues, refLintFindings
 import { journeyCatalogGate, loadCatalog, resolveCatalogDir } from "./catalog-api.js";
 import { journeyDoneCheckFindings } from "./catalog-refs.js";
 import type { JevSetup } from "./jev-advisor.js";
-import { clock, contentHash } from "@jevitate/domain";
+import { clock, contentHash, timePhase } from "@jevitate/domain";
 import { dirname } from "node:path";
 import { findProjectDir, type LayoutDeps } from "./project-dir.js";
 import { resolveMissionFixture } from "@jevitate/explore";
@@ -306,7 +306,8 @@ export async function runJourneyProgrammatically(opts: RunJourneyProgrammaticall
   const store = new FsJourneyStore(opts.dir);
   const registry = new JourneyRegistry(store);
 
-  const stored = await registry.get(opts.id);
+  // #852: loading the stored Journey is `prepare`; writing its evidence after the run is `report`.
+  const stored = await timePhase("prepare", () => registry.get(opts.id));
   if (!stored) {
     throw new UnknownJourneyError(`unknown journey '${opts.id}'`);
   }
@@ -321,7 +322,7 @@ export async function runJourneyProgrammatically(opts: RunJourneyProgrammaticall
     if (problem !== undefined && err !== null && typeof err === "object") (err as { evidenceError?: string }).evidenceError = problem;
     throw err;
   }
-  const problem = evidence?.finish(undefined, result);
+  const problem = await timePhase("report", async () => evidence?.finish(undefined, result));
   const withReceipts = evidence === undefined ? result : { ...result, writes: evidence.writer.receipts() };
   return problem === undefined ? withReceipts : { ...withReceipts, evidenceError: problem };
 }

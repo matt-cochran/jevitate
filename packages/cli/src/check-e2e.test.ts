@@ -132,6 +132,10 @@ describe("jevitate check — served suite (#137)", () => {
       expect(r).toMatchObject({ verdict: "fail", exitCode: 1, targetBuild: "sha-abc" });
       // H5: the Journey item carries its job verdict (no done check: unverified, no-check).
       expect(r.items[0]?.job).toEqual({ attainment: "unverified", basis: "no-check" });
+      // #852: a run item reports its wall time by phase; a replayed Journey opens a browser and runs steps.
+      expect(r.items[0]?.timings?.phases.browserOpen).toBeGreaterThanOrEqual(0);
+      expect(r.items[0]?.timings?.phases.stepAction).toBeGreaterThanOrEqual(0);
+      expect(r.items[0]?.timings?.totalMs).toBeGreaterThanOrEqual(0);
       expect(r.items.map((i) => [i.kind, i.name, i.verdict])).toEqual([
         ["journey", "imports-page", "passed"],
         ["mission", "invariants", "failed"],

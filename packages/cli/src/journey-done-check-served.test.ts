@@ -148,7 +148,7 @@ afterEach(() => {
 });
 
 interface Run {
-  readonly data: { outcome?: string; job?: { attainment: string; basis: string }; failure?: { kind: string } };
+  readonly data: { outcome?: string; job?: { attainment: string; basis: string }; failure?: { kind: string }; timings?: unknown };
   readonly code: number;
   /** Everything the run wrote (stdout and stderr), less the replay's own `output` (see `noMarker`). */
   readonly text: string;
@@ -300,6 +300,18 @@ describe("[realtime] #852 the before reading of a client-rendered done page read
     const r = await run("save-item-late");
     expect(r.data.job).toEqual({ attainment: "unverified", basis: "already-true" });
     expect(r.code).toBe(0);
+  });
+
+  it("#852: the result's timings account for the run: phases plus unattributed equal the total, and no phase claims more", async () => {
+    app.broken = false;
+    const r = await run("save-item-late");
+    const t = (r.data as { timings?: { totalMs: number; phases: Record<string, number>; unattributedMs: number } }).timings;
+    expect(t).toBeDefined();
+    const claimed = Object.values(t!.phases).reduce((a, b) => a + b, 0);
+    // Rounding is per phase, so allow 1 ms per phase.
+    expect(Math.abs(claimed + t!.unattributedMs - t!.totalMs)).toBeLessThanOrEqual(Object.keys(t!.phases).length + 1);
+    expect(claimed).toBeLessThanOrEqual(t!.totalMs + Object.keys(t!.phases).length);
+    for (const phase of ["browserOpen", "stepAction", "stepCheck", "doneCheck", "teardown"]) expect(t!.phases[phase], phase).toBeGreaterThan(0);
   });
 
   it("#852: a client-rendered done state that becomes true during the run is achieved", async () => {
