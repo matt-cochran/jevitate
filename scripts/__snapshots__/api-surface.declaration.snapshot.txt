@@ -2253,7 +2253,7 @@
   ShortenReport: interface
   ShortenVerdict: type-alias
 
-# @jevitate/runtime (74 exports)
+# @jevitate/runtime (75 exports)
   anchorValues: function
   assertProofUntouched: function
   assertRecordedProofUntouched: function
@@ -2317,6 +2317,7 @@
   SentinelInput: interface
   SentinelJudgment: interface
   SentinelResult: interface
+  SITE_WIDE_ACCOUNT: variable
   SiteGateDeps: interface
   SiteGateRefusal: type-alias
   SiteGateRefusedError: class

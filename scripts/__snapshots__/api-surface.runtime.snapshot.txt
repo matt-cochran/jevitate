@@ -1413,7 +1413,7 @@
   reproduceFailureAt: function
   shortenRecording: function
 
-# @jevitate/runtime (33 exports)
+# @jevitate/runtime (34 exports)
   DEFAULT_HEAL_BUDGET: object
   EMPTY_CHANGE_SCOPE: object
   HealBudgetMeter: class
@@ -1421,6 +1421,7 @@
   PolicyEnforcementError: class
   SENTINEL_NOTE_UNAVAILABLE: const (string)
   SENTINEL_TASKS: array
+  SITE_WIDE_ACCOUNT: const (string)
   Secret: class
   SecretOriginMismatchError: class
   SecretUnresolvableError: class

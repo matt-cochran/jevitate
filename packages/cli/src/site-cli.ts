@@ -87,6 +87,11 @@ export function registerSiteCommands(program: Command, deps: CliDeps): void {
         file: string;
         json?: boolean;
       }>();
+      // #854: `*` is the reserved key site-wide throttles are kept under, never a real account.
+      if (account === "*") {
+        emitJson(program, fail("E_INVALID_POLICY", "account '*' is reserved for site-wide throttles (siteThrottles); use a real account id"));
+        return;
+      }
       let policy: SitePolicy;
       try {
         const raw = await readFile(file, "utf8");
