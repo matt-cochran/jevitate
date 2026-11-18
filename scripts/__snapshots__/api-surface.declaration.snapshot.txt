@@ -1343,7 +1343,7 @@
   VisualVerdict: interface
   waitForOutcome: function
 
-# @jevitate/journey (341 exports)
+# @jevitate/journey (346 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1457,6 +1457,9 @@
   GtwrCharacteristic: type-alias
   GtwrRule: interface
   GtwrSetCharacteristic: type-alias
+  GuidanceAliasSchema: variable
+  GuidanceClaim: type-alias
+  GuidanceClaimSchema: variable
   HandbackBoundary: interface
   HandbackEvidence: interface
   HandbackFacts: interface
@@ -1496,6 +1499,8 @@
   JOB_PRIORITIES: variable
   JOB_PROVENANCES: variable
   JOB_STAGES: variable
+  JobGuidance: type-alias
+  JobGuidanceSchema: variable
   JobKind: type-alias
   JobProvenance: type-alias
   JobReview: type-alias

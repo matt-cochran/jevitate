@@ -1,5 +1,6 @@
 import { loadCatalog } from "./catalog-api.js";
 import { findJob } from "./catalog.js";
+import type { GuidanceClaim, JobGuidance } from "@jevitate/journey";
 
 /**
  * #873: `explore --job <id> --job-context` — the approved job's story, `context` and `constraints`
@@ -18,6 +19,8 @@ export interface JobContextInput {
   readonly story: string;
   readonly context?: readonly string[] | undefined;
   readonly constraints?: readonly string[] | undefined;
+  /** #874: only the navigation parts (aliases, expected states) reach the brief; claims never do. */
+  readonly guidance?: Pick<JobGuidance, "aliases" | "expectedStates"> | undefined;
 }
 
 export type JobContextBrief = { readonly ok: true; readonly brief: string } | { readonly ok: false; readonly message: string };
@@ -29,6 +32,12 @@ export function jobContextBrief(job: JobContextInput): JobContextBrief {
   const constraints = (job.constraints ?? []).filter((c) => c.trim() !== "");
   if (context.length > 0) parts.push(`job context: ${context.join(" | ")}`);
   if (constraints.length > 0) parts.push(`job constraints (respect them): ${constraints.join(" | ")}`);
+  const aliases = job.guidance?.aliases ?? [];
+  if (aliases.length > 0) {
+    parts.push(`UI vocabulary: ${aliases.map((a) => `"${a.term}" may appear as ${a.uiTerms.map((u) => `"${u}"`).join(" or ")}`).join("; ")}`);
+  }
+  const states = job.guidance?.expectedStates ?? [];
+  if (states.length > 0) parts.push(`screens the job passes through: ${states.join(" | ")}`);
   const brief = parts.join("; ");
   if (brief.length > JOB_CONTEXT_MAX_CHARS) {
     return {
@@ -40,7 +49,14 @@ export function jobContextBrief(job: JobContextInput): JobContextBrief {
 }
 
 export type PreparedJobContext =
-  | { readonly ok: true; readonly jobId: string; readonly brief: string; readonly contentHash: string }
+  | {
+      readonly ok: true;
+      readonly jobId: string;
+      readonly brief: string;
+      readonly contentHash: string;
+      /** #874: the job's claims, checked after the run (never part of the brief). */
+      readonly claims: readonly GuidanceClaim[];
+    }
   | { readonly ok: false; readonly code: string; readonly message: string };
 
 /** Resolves `--job-context` for `--job <id>` from the project catalog; refused unless the job is approved. */
@@ -76,7 +92,7 @@ export async function prepareJobContext(req: {
       message: `--job-context: job '${id}' changed since its approval, so its context is not used: re-review it first (jevitate job review ${id})`,
     };
   }
-  const brief = jobContextBrief({ story: job.story, context: job.job.context, constraints: job.job.constraints });
+  const brief = jobContextBrief({ story: job.story, context: job.job.context, constraints: job.job.constraints, guidance: job.job.guidance });
   if (!brief.ok) return { ok: false, code: "E_EXPLORE_JOB", message: `--job-context: ${brief.message}` };
-  return { ok: true, jobId: id, brief: brief.brief, contentHash: job.contentHash };
+  return { ok: true, jobId: id, brief: brief.brief, contentHash: job.contentHash, claims: job.job.guidance?.claims ?? [] };
 }

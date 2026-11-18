@@ -147,6 +147,33 @@ export const DesiredOutcomeSchema = z
 export type DesiredOutcome = z.infer<typeof DesiredOutcomeSchema>;
 
 /**
+ * #874 (contract v4): what a team knows about a job from outside jevitate (a spec, a requirements
+ * document, a glossary), typed so each part reaches the model the right way:
+ *  - `aliases` and `expectedStates` are NAVIGATION help (with `explore --job-context`);
+ *  - `claims` are statements to CHECK, never told to the model as fact: after a run each gets a
+ *    verdict (`confirmed` / `contradicted` / `not_observed`) and the basis that decided it — its
+ *    own `check` (a done-check shape, read by code) when it has one, else a model judgment.
+ * Nothing here can set, satisfy or relax `--success` or the done check.
+ */
+export const GuidanceAliasSchema = z.object({ term: catalogText(100), uiTerms: z.array(catalogText(100)).min(1).max(5) }).strict();
+export const GuidanceClaimSchema = z
+  .object({ id: CatalogIdSchema, statement: catalogText(300), check: DoneCheckSpecSchema.optional() })
+  .strict();
+export const JobGuidanceSchema = z
+  .object({
+    aliases: z.array(GuidanceAliasSchema).max(30).optional(),
+    expectedStates: z.array(catalogText(200)).max(20).optional(),
+    claims: z
+      .array(GuidanceClaimSchema)
+      .max(20)
+      .refine((cs) => new Set(cs.map((c) => c.id)).size === cs.length, { message: "claims: duplicate id" })
+      .optional(),
+  })
+  .strict();
+export type JobGuidance = z.infer<typeof JobGuidanceSchema>;
+export type GuidanceClaim = z.infer<typeof GuidanceClaimSchema>;
+
+/**
  * #433: one job in `.jevitate/jobs.json` — a job story `{id, trigger, motivation, outcome}`, the
  * personas it serves, an optional priority, and (#465) the optional jtbd fields above. A job missing any of the three story parts is refused.
  * The test-campaign planning fields (`goal`, `success`, `preconditions`, `mutates`, `order`,
@@ -183,6 +210,8 @@ export const JobSchema = z
     extensions: ExtensionsSchema.optional(),
     // #800 (0.30.0 §3): the job done check. Shape only here; `lintDoneCheck` refuses secret and path-bound references.
     done: DoneCheckSpecSchema.optional(),
+    // #874 (contract v4): typed outside knowledge — navigation help and claims to check.
+    guidance: JobGuidanceSchema.optional(),
   })
   .strict()
   .refine((j) => new Set(j.personas ?? []).size === (j.personas ?? []).length, { message: "personas: duplicate id", path: ["personas"] });
