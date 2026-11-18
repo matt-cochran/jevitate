@@ -5,6 +5,7 @@ import type { Command } from "commander";
 import type { JsonEnvelope } from "./envelope.js";
 import { currentRunMetadata, stampRunMetadata } from "./run-metadata.js";
 import { EXIT_CODES, exitCodeForEnvelope, isUsageErrorCode } from "./exit-codes.js";
+import { hasRunEnvironment } from "./run-environment.js";
 
 /**
  * Human vs machine output for the CLI (#210). One rule for every command that has both:
@@ -34,7 +35,8 @@ export interface EmitOptions<T> {
 
 export function emitEnvelope<T>(program: Command, envelope: JsonEnvelope<T>, opts: EmitOptions<T>): void {
   // #426: a tagged run's envelope carries its tags and structured target, like its persisted result.
-  if (envelope.ok && currentRunMetadata() !== undefined) envelope = { ...envelope, data: stampRunMetadata(envelope.data) as T };
+  // #872: a run that accepted a local dev certificate says so even outside a tagged scope.
+  if (envelope.ok && (currentRunMetadata() !== undefined || hasRunEnvironment())) envelope = { ...envelope, data: stampRunMetadata(envelope.data) as T };
   const out = program.configureOutput();
   if (opts.json) {
     out.writeOut?.(`${JSON.stringify(envelope)}\n`);

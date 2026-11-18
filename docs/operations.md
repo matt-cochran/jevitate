@@ -350,7 +350,8 @@ jevitate explore --url https://localhost:5173/ --accept-local-dev-cert https://l
   other host the page talks to, third-party scripts included, is validated as usual.
 - A server that cannot be reached at launch fails the run before a browser starts. A dev server
   that regenerates its certificate gets the new key pinned on the next run.
-- Each accepted origin is noted on stderr.
+- Each accepted origin is noted on stderr and recorded in the run's result as `localDevCerts`
+  (emitted JSON and persisted results alike), so a run that relied on it says so in its evidence.
 
 Avoid `--browser-arg --ignore-certificate-errors`: it turns certificate checks off for every host
 the run touches, and jevitate warns when it is passed.

@@ -64,6 +64,7 @@ import { parseGeolocation, parseViewport, resolveEmulation, type EmulationSpec }
 import { nonNegativeIntArg, positiveIntArg } from "./cli-args.js";
 import { resourceLimitsFromFlags, withResourcePreflight, type GovernanceFlags } from "./resource-preflight.js";
 import { HEADED_DEFAULT_SLOW_MO_MS, assertHeadedDisplay, headedFromEnv, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
+import { recordAcceptedLocalDevCert } from "./run-environment.js";
 
 /** Injectable wiring for the `record` command (all optional; real defaults). */
 export interface RecordCliDeps {
@@ -331,6 +332,7 @@ export function localDevCertArg(value: string, prev: readonly string[] | undefin
     throw new InvalidArgumentError(err instanceof Error ? err.message : String(err));
   }
   if (before.includes(origin)) return [...before];
+  recordAcceptedLocalDevCert(origin);
   process.stderr.write(localDevCertNotice(origin));
   return [...before, origin];
 }
