@@ -1130,7 +1130,7 @@
   isHttpOrigin: function
   targetAllowlist: function
 
-# @jevitate/playwright (102 exports)
+# @jevitate/playwright (107 exports)
   AdmissionTimeoutError: class
   BrowserCrashedError: class
   BrowserNotInstalledError: class
@@ -1155,6 +1155,7 @@
   INSTALL_COMMAND: const (string)
   InvalidGeolocationError: class
   LinuxResourceSignals: class
+  LocalDevCertError: class
   MachineBrowserSlots: class
   NavigationGuard: class
   OWNER_MARKER_SWITCH: const (string)
@@ -1198,9 +1199,11 @@
   governanceFromEnv: function
   installBrowser: function
   installPlan: function
+  isLoopbackHost: function
   isTransientSlotError: function
   jevitateBrowsers: function
   knownDeviceNames: function
+  localDevCertLaunchArgs: function
   markedBrowsers: function
   measureOwnBrowserMemory: function
   orphanReason: function
@@ -1209,6 +1212,7 @@
   pageResourceLimit: function
   pageUnresponsiveMsFromEnv: function
   parseGeolocation: function
+  parseLocalDevCertOrigin: function
   parseMeminfoBytes: function
   parseOwnerMarker: function
   parsePsiAvg10: function
@@ -1229,6 +1233,7 @@
   sharedBrowserPool: function
   sharedResourceGovernor: function
   singletonSocketPathRefusal: function
+  spkiPinOf: function
   systemProcessTable: function
   terminateOwnBrowsersSync: function
   throttleDecision: function

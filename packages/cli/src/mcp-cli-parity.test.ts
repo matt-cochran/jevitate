@@ -261,6 +261,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       "--browser-executable": OMIT.browserBin,
       "--browser-channel": OMIT.browserBin,
       "--browser-arg": OMIT.browserBin,
+      "--accept-local-dev-cert": OMIT.localDevCert,
     },
   },
   verify_fix: {
@@ -306,6 +307,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       "--browser-executable": OMIT.browserBin,
       "--browser-channel": OMIT.browserBin,
       "--browser-arg": OMIT.browserBin,
+      "--accept-local-dev-cert": OMIT.localDevCert,
     },
   },
   queue_exploration: {
