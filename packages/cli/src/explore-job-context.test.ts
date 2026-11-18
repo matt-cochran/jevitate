@@ -158,3 +158,50 @@ describe("jobContextBrief", () => {
     expect(brief.ok ? "accepted" : brief.message).toMatch(/longer than/);
   });
 });
+
+describe("#874 guidance in --job-context", () => {
+  const GUIDED = {
+    ...JOB,
+    guidance: {
+      aliases: [{ term: "workspace", uiTerms: ["piece", "draft"] }],
+      expectedStates: ["the team page lists the invite as Pending"],
+      claims: [{ id: "one-seat", statement: "an invite uses exactly one free seat" }],
+    },
+  };
+
+  it("tells the model the UI words for the job's terms", async () => {
+    writeJobs([approved(GUIDED)]);
+    await cli([...RUN, "--job", "invite-teammate", "--job-context"]);
+    expect(calls[0]?.missionBrief).toContain('"workspace" may appear as "piece" or "draft"');
+  });
+
+  it("tells the model the states the job passes through", async () => {
+    writeJobs([approved(GUIDED)]);
+    await cli([...RUN, "--job", "invite-teammate", "--job-context"]);
+    expect(calls[0]?.missionBrief).toContain("the team page lists the invite as Pending");
+  });
+
+  it("never tells the model a claim (claims are checked, not given)", async () => {
+    writeJobs([approved(GUIDED)]);
+    await cli([...RUN, "--job", "invite-teammate", "--job-context"]);
+    expect(calls[0]?.missionBrief).not.toContain("exactly one free seat");
+  });
+
+  it("the result carries one verdict per claim", async () => {
+    writeJobs([approved(GUIDED)]);
+    const r = await cli([...RUN, "--job", "invite-teammate", "--job-context"]);
+    expect(JSON.parse(r.out).data.claims.map((c: { id: string }) => c.id)).toEqual(["one-seat"]);
+  });
+
+  it("a claim never changes the run's exit code", async () => {
+    writeJobs([approved(GUIDED)]);
+    const r = await cli([...RUN, "--job", "invite-teammate", "--job-context"]);
+    expect(r.exitCode ?? 0).toBe(0);
+  });
+
+  it("a job without claims reports no claims section", async () => {
+    writeJobs([approved(JOB)]);
+    const r = await cli([...RUN, "--job", "invite-teammate", "--job-context"]);
+    expect("claims" in JSON.parse(r.out).data).toBe(false);
+  });
+});

@@ -15,6 +15,8 @@ import { GoalRunFlagError, successWhenFromFlags } from "../goal-run-flags.js";
 import { resolveCatalogDir } from "../catalog-api.js";
 import { exploreDoneCheckPolicy, jobCheckRunOptions, prepareJobDoneCheck, ProjectConfigError, type ExploreJobCheck } from "../explore-job-done-check.js";
 import { prepareJobContext, type PreparedJobContext } from "../explore-job-context.js";
+import { claimCheckReader, evaluateClaims, evidenceFromTranscript, type ClaimResult } from "../explore-job-claims.js";
+import { readFileSync } from "node:fs";
 import type { DoneCheckPolicy } from "@jevitate/domain";
 import type { ExploreRunContext } from "./shared.js";
 
@@ -222,9 +224,30 @@ export async function runGoalStrategy(ctx: ExploreRunContext): Promise<void> {
       warn(`warning: this pass was judged by the model's goal check alone, so the job is unverified (add --success or --job <id> to verify it)${result.exitCode === EXIT_CODES.inconclusive ? "; exiting 2 (doneCheckPolicy require)" : ""}\n`);
     }
     // 0 succeeded · 1 assertion not met · 2 the run broke (inconclusive/crashed).
+    // #874: every guidance claim gets one verdict; a contradicted claim is a divergence to triage, never a defect or an exit code.
+    let claims: ClaimResult[] | undefined;
+    if (jobContext !== undefined && jobContext.claims.length > 0) {
+      claims = await evaluateClaims(jobContext.claims, {
+        readCheck: claimCheckReader({
+          startUrl: url,
+          storageState: primaryStorageState,
+          params: Object.fromEntries(Object.entries(o.param).filter(([, v]) => !o.secret.includes(v) && !v.includes("${"))),
+          sessionPortFactory: deps.explore?.browserPortFactory,
+        }),
+        judge,
+        evidence: evidenceFromTranscript(transcriptEntries(result.transcriptPath)),
+      });
+      for (const c of claims.filter((c) => c.verdict === "contradicted")) {
+        warn(`divergence: the run contradicts claim '${c.id}' of job '${jobContext.jobId}' (${c.basis}): ${c.statement} — triage it; it does not change the exit code\n`);
+      }
+    }
     const evidenced = await withEvidence(result);
     emitExplore(
-      ok(jobContext === undefined ? evidenced : { ...evidenced, jobContext: { job: jobContext.jobId, contentHash: jobContext.contentHash } }),
+      ok(
+        jobContext === undefined
+          ? evidenced
+          : { ...evidenced, jobContext: { job: jobContext.jobId, contentHash: jobContext.contentHash }, ...(claims === undefined ? {} : { claims }) },
+      ),
       result.exitCode,
     );
   } catch (err) {
@@ -239,5 +262,16 @@ export async function runGoalStrategy(ctx: ExploreRunContext): Promise<void> {
   } finally {
     // Every exit path restores the fixture state (a no-op when the mission already did).
     await fx?.restore();
+  }
+}
+
+/** #874: the run's transcript entries (pages and controls seen), or none when it was not written. */
+function transcriptEntries(path: string | undefined): { url?: string; controls?: string[] }[] {
+  if (path === undefined) return [];
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    return Array.isArray(parsed) ? (parsed as { url?: string; controls?: string[] }[]) : [];
+  } catch {
+    return [];
   }
 }
