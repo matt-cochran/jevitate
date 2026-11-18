@@ -270,7 +270,8 @@
   ProfileManager: class
   ProfileStatus: interface
 
-# @jevitate/domain (184 exports)
+# @jevitate/domain (191 exports)
+  activePhaseRecorder: function
   assertInsideRoot: function
   assertRunTag: function
   assertSafeName: function
@@ -399,6 +400,10 @@
   parseRunTagSpecs: function
   PersistedMissionResult: type-alias
   PersistedMissionResultSchema: variable
+  Phase: type-alias
+  PhaseRecorder: class
+  PHASES: variable
+  PhaseTimings: interface
   PlannedStep: type-alias
   QuietHours: type-alias
   realClock: variable
@@ -446,6 +451,7 @@
   targetsFor: function
   ThrottlePolicy: type-alias
   TimedStep: interface
+  timePhase: function
   TimerHandle: type-alias
   TimeSkippingClock: class
   TimeSkippingOptions: interface
@@ -454,6 +460,7 @@
   UnsafeNameError: class
   urlSchemeOf: function
   validateRunTags: function
+  withPhaseRecorder: function
   worstOutcome: function
 
 # @jevitate/explore (722 exports)
@@ -2246,7 +2253,7 @@
   ShortenReport: interface
   ShortenVerdict: type-alias
 
-# @jevitate/runtime (74 exports)
+# @jevitate/runtime (75 exports)
   anchorValues: function
   assertProofUntouched: function
   assertRecordedProofUntouched: function
@@ -2310,6 +2317,7 @@
   SentinelInput: interface
   SentinelJudgment: interface
   SentinelResult: interface
+  SITE_WIDE_ACCOUNT: variable
   SiteGateDeps: interface
   SiteGateRefusal: type-alias
   SiteGateRefusedError: class

@@ -39,6 +39,12 @@ export const SitePolicySchema = z.object({
   version: z.string().min(1),
   interaction: Interaction.optional(),
   throttles: z.record(z.string(), Throttle).optional(),
+  /**
+   * #854: throttles across EVERY account on the site (per class), on top of each account's own
+   * `throttles`. Runs split across accounts (parallel lanes) share these: N accounts never get N times
+   * the site's budget.
+   */
+  siteThrottles: z.record(z.string(), Throttle).optional(),
   quietHours: z
     .object({
       timezone: z

@@ -1651,7 +1651,9 @@ jevitate site policy get https://app.example.com
 - `throttles` apply per class. A Journey with any write step (a click, a fill) is `write`; a Journey
   that only reads is `read`. `minIntervalSeconds` spaces runs out (a shortfall of up to 5 seconds is
   waited out); `hourlyLimit` and `dailyLimit` cap how many runs start.
+- `siteThrottles` (#854) has the same shape as `throttles`. It applies across **every** account on the site, on top of each account's own `throttles`. Use it when runs are split across accounts (parallel lanes), so that N accounts never get N times the site's budget. For example, `"siteThrottles": { "write": { "minIntervalSeconds": 10, "hourlyLimit": 30 } }`. Site-wide activity and budgets are kept under the reserved account `*`, so `--account '*'` is refused.
 - `quietHours` are windows, in a timezone, when no run may start. Windows may wrap past midnight.
+- A min interval is claimed atomically (#854): two runs that start together cannot both pass it. The second waits out a short shortfall (up to 5 seconds) or is refused with `min_interval`.
 
 `journey run`, `source run`, `check` Journey items and MCP `run_journey` apply the whole policy. A
 run that is inside quiet hours, too soon after the last one, or over its budget is refused before

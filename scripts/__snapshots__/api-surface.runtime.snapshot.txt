@@ -174,7 +174,7 @@
 # @jevitate/daemon (1 exports)
   ProfileManager: class
 
-# @jevitate/domain (116 exports)
+# @jevitate/domain (121 exports)
   DEFAULT_DONE_CHECK_POLICY: const (string)
   DEFAULT_HEAP_GROWTH_RULE: object
   DEFAULT_JEVITATE_REPO: const (string)
@@ -205,8 +205,10 @@
   MISSION_RESULT_SCHEMA_VERSION: const (number)
   MUTATION_PROOF_VERDICTS: array
   MissionResultSchema: object
+  PHASES: array
   Pacer: class
   PersistedMissionResultSchema: object
+  PhaseRecorder: class
   RESULT_GOAL_OUTCOMES: array
   RESULT_MISSION_OUTCOMES: array
   RESULT_STRATEGIES: array
@@ -226,6 +228,7 @@
   StartupAttemptsSchema: object
   TimeSkippingClock: class
   UnsafeNameError: class
+  activePhaseRecorder: function
   assertInsideRoot: function
   assertRunTag: function
   assertSafeName: function
@@ -288,8 +291,10 @@
   startedOutcome: function
   startupAttemptsOf: function
   targetsFor: function
+  timePhase: function
   urlSchemeOf: function
   validateRunTags: function
+  withPhaseRecorder: function
   worstOutcome: function
 
 # @jevitate/explore (462 exports)
@@ -1408,7 +1413,7 @@
   reproduceFailureAt: function
   shortenRecording: function
 
-# @jevitate/runtime (33 exports)
+# @jevitate/runtime (34 exports)
   DEFAULT_HEAL_BUDGET: object
   EMPTY_CHANGE_SCOPE: object
   HealBudgetMeter: class
@@ -1416,6 +1421,7 @@
   PolicyEnforcementError: class
   SENTINEL_NOTE_UNAVAILABLE: const (string)
   SENTINEL_TASKS: array
+  SITE_WIDE_ACCOUNT: const (string)
   Secret: class
   SecretOriginMismatchError: class
   SecretUnresolvableError: class

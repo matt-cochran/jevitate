@@ -16,6 +16,7 @@ import { runJourneyProgrammatically } from "./journey-api.js";
 import { planJourneyVerification, verifyJourneyMutations, type JourneyVerifyReport, type VerifyJourneyOptions } from "./journey-verify.js";
 import { MissionFixtures } from "./mission-fixtures.js";
 import { composeObservers } from "./run-screenshots.js";
+import { sliced, slicedDescribe } from "./proof-slice.testkit.js";
 
 /**
  * The soundness matrix of `journey verify --mutate`: mutation kind × job timing × what the site really
@@ -87,6 +88,8 @@ const ROWS = MATRIX.flatMap(([kind, relation, ...cells]) => COLUMNS.map((timing,
 
 /** How many proofs of this file run at once. */
 const PROOF_POOL = 8;
+/** #858: under `JEV_PROOF_SLICE`, this slice's proofs (a CI leg each); the single-proof suites go round-robin. */
+const describeSliced = slicedDescribe();
 /** With this set, every proof appends what each replay took, by kind and step, as one JSON line. */
 const COST_LOG = process.env["JEV_PROOF_COST_LOG"];
 
@@ -339,15 +342,18 @@ function reading(proof: { journey: Journey; report: JourneyVerifyReport } | Erro
 
 const siteOf = (relation: Relation): string => (relation === "own-dependent" || relation === "own-earlier" ? "step:4" : "end-state:0");
 
+/** This slice's proofs of the matrix, and the rows that read them. */
+const MATRIX_KEYS = sliced([...new Set(ROWS.map((r) => proofKey(r.kind, r.relation, r.timing)))]);
+const MATRIX_ROWS = ROWS.filter((r) => MATRIX_KEYS.includes(proofKey(r.kind, r.relation, r.timing)));
+
 describe("[realtime] the soundness matrix", () => {
   let proofs: Map<string, { journey: Journey; report: JourneyVerifyReport } | Error>;
 
   beforeAll(async () => {
-    const keys = [...new Set(ROWS.map((r) => proofKey(r.kind, r.relation, r.timing)))];
-    proofs = await pool(keys, PROOF_POOL, proveOne);
+    proofs = await pool(MATRIX_KEYS, PROOF_POOL, proveOne);
   }, 3_600_000);
 
-  it.each(ROWS)("$kind, $relation site, $timing job: $expected", ({ kind, relation, timing, expected }) => {
+  it.each(MATRIX_ROWS)("$kind, $relation site, $timing job: $expected", ({ kind, relation, timing, expected }) => {
     expect(reading(proofs.get(proofKey(kind, relation, timing)), mutationOf(kind), siteOf(relation))).toBe(expected);
   });
 });
@@ -528,11 +534,13 @@ const FINDINGS: readonly { readonly name: string; readonly jobMs: number; readon
   },
 ];
 
+const MY_FINDINGS = sliced(FINDINGS);
+
 describe("[realtime] the review's findings", () => {
   let proofs: Map<string, { journey: Journey; report: JourneyVerifyReport } | Error>;
 
   beforeAll(async () => {
-    proofs = await pool(FINDINGS.map((f) => f.name), PROOF_POOL, async (name) => {
+    proofs = await pool(MY_FINDINGS.map((f) => f.name), PROOF_POOL, async (name) => {
       const finding = FINDINGS.find((f) => f.name === name)!;
       const served = await serveProbe(finding.jobMs, [], { done: false });
       const journey = finding.journey(served.origin);
@@ -551,14 +559,14 @@ describe("[realtime] the review's findings", () => {
     });
   }, 1_800_000);
 
-  it.each(FINDINGS)("$name: $expected", ({ name, site, expected }) => {
+  it.each(MY_FINDINGS)("$name: $expected", ({ name, site, expected }) => {
     const proof = proofs.get(name);
     if (proof === undefined || proof instanceof Error) throw proof ?? new Error("no proof");
     expect(`${proof.report.assertions.find((a) => a.site === site)?.verdict}, ${proof.report.verdict}`).toBe(expected);
   });
 });
 
-describe("[realtime] a job that outlasts the whole base replay and lands in a later one", () => {
+describeSliced("[realtime] a job that outlasts the whole base replay and lands in a later one", () => {
   /** A row count no fixture resets: each Save adds a row, 2.5 s later, on a job with no open request. */
   let report: JourneyVerifyReport;
   let close: () => Promise<void> = async () => undefined;
@@ -588,7 +596,7 @@ describe("[realtime] a job that outlasts the whole base replay and lands in a la
   });
 });
 
-describe("[realtime] a job that runs slower after the base replay than in it", () => {
+describeSliced("[realtime] a job that runs slower after the base replay than in it", () => {
   /** The F1 shape: Ack answers when Start's job ends, and the end state reads only that job. */
   let report: JourneyVerifyReport;
   let close: () => Promise<void> = async () => undefined;
@@ -1254,11 +1262,13 @@ const attachHangsPort = (): BrowserPort => {
   };
 };
 
+const MY_ROWS_EXPERIMENT = sliced(ROWS_EXPERIMENT);
+
 describe("[realtime] the experiment's rows", () => {
   let proofs: Map<string, { journey: Journey; report: JourneyVerifyReport } | Error>;
 
   beforeAll(async () => {
-    proofs = await pool(ROWS_EXPERIMENT.map((r) => r.name), PROOF_POOL, async (name) => {
+    proofs = await pool(MY_ROWS_EXPERIMENT.map((r) => r.name), PROOF_POOL, async (name) => {
       const row = ROWS_EXPERIMENT.find((r) => r.name === name)!;
       const seen = new Set<string>();
       const ctx: RowContext = {
@@ -1292,7 +1302,7 @@ describe("[realtime] the experiment's rows", () => {
   }, 1_800_000);
 
   // Named in full, so a stated limit's row says so wherever it is listed.
-  for (const { name, verdict, reading: site, reason, under, passedUnder } of ROWS_EXPERIMENT) {
+  for (const { name, verdict, reading: site, reason, under, passedUnder } of MY_ROWS_EXPERIMENT) {
     it(`${name}: ${verdict}`, () => {
       const proof = proofs.get(name);
       if (proof === undefined || proof instanceof Error) throw proof ?? new Error("no proof");

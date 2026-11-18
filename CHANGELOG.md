@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.31.0] – 2026-11-18
+
+### Added
+
+- **Run timings (#852).** `journey run --json` and every run item in `check.json` report `timings`: the run's wall time by phase (`prepare`, `siteGate`, `fixtures`, `login`, `browserOpen`, `stepAction`, `stepCheck`, `stepPace`, `doneCheck`, `teardown`, `report`). Each phase is charged its own time only, so the phases never double-count. `unattributedMs` is what no phase claimed, under 5% of a 3-step Journey with a done check. See [Run timings](docs/results.md#run-timings-timings-852).
+- **`siteThrottles` (#854).** A new optional site policy field with the same shape as `throttles`. It caps a site across all its accounts, so runs split over several accounts no longer each get the full budget. Its activity is kept under the reserved account `*`, and `site policy set --account '*'` is refused.
+
+### Fixed
+
+- **Parallel runs cannot both pass a site's min interval (#854).** The interval is claimed atomically: of two runs that start together, the second waits out a short shortfall or is refused with `min_interval`.
+
+### Changed
+
+- CI deals the real-clock mutation-proof files over five legs (#858, #866). The proofs contended inside one test process, and a proof run alone took a fifth of its pooled time. PR wall time is down from about 24 to about 12 minutes.
+
 ## [0.30.2] – 2026-11-17
 
 ### Changed

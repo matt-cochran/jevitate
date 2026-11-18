@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { Recording } from "@jevitate/recording";
 import type { Ability } from "@jevitate/screenplay";
 import { SiteGateRefusedError, enterSiteGate, throttleClassOf, type SiteGateDeps } from "@jevitate/runtime";
-import { clock as sysClock } from "@jevitate/domain";
+import { clock as sysClock, timePhase } from "@jevitate/domain";
 
 /**
  * The site-policy gate's repositories (`jevitate site policy set`), opened from the policy database
@@ -59,13 +59,13 @@ export async function gateJourney(
 ): Promise<JourneyGate> {
   if (siteGate === undefined) return UNGATED;
   const site = sitePolicyKey(recording.site);
-  const gate = await enterSiteGate(siteGate, {
+  const gate = await timePhase("siteGate", () => enterSiteGate(siteGate, {
     site,
     account: opts.account ?? "primary",
     throttleClass: throttleClassOf(recording),
     runId: opts.runId ?? randomUUID(),
     enforceLimits: opts.enforceLimits,
-  });
+  }));
   if (!gate.ok) throw new SiteGateRefusedError(site, gate.reason, gate.retryAfter);
   return { abilities: gate.pace === null ? [] : [gate.pace], done: gate.done };
 }
