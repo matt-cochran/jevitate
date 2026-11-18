@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord } from "@jevitate/domain";
 import type { RunTags } from "@jevitate/domain";
 import type { RunModeRecord } from "./run-surface-mode.js";
+import { runEnvironmentFields } from "./run-environment.js";
 
 /**
  * #426 run metadata: the `--tag key=value` tags a run was given, and (for a run a sweep or a persona
@@ -61,6 +62,9 @@ export function stampRunMetadata<T>(result: T, meta: RunMetadata | undefined = c
   const out: Record<string, unknown> = { ...result };
   const tags = { ...(meta?.tags ?? {}), ...(isRecord(result.tags) ? (result.tags as Record<string, string>) : {}) };
   if (Object.keys(tags).length > 0) out.tags = tags;
+  // #872: the local dev server origins whose self-signed certificate this run accepted.
+  const { localDevCerts } = runEnvironmentFields();
+  if (localDevCerts !== undefined) out.localDevCerts = localDevCerts;
   // 0.30.0 §5: the mode the run decided; a result that already records its own `run` keeps it.
   if (meta?.runMode !== undefined && !isRecord(result.run)) out.run = meta.runMode();
   if (isRecord(result.target)) {

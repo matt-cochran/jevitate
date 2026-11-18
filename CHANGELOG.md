@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.32.0] – 2026-11-18
+
+### Added
+
+- **`--accept-local-dev-cert <origin>` (#872).** A new repeatable flag on every command that opens a browser. Name an `https` origin on `localhost`, `127.0.0.0/8` or `[::1]`, and jevitate pins the public key that server presents at launch, so only its certificate is accepted; every other host is validated as usual. A non-loopback or plain-`http` origin is a usage error (exit 64) before a browser starts. A run that used it records the accepted origins as `localDevCerts` in its emitted and persisted results.
+- **`explore --job <id> --job-context` (#873).** Opt-in: the job's approved story, `context` and `constraints` from `.jevitate/jobs.json` are given to the model with the goal. A draft or stale job is refused before any run (`E_EXPLORE_JOB`), a brief over 2000 characters is refused rather than truncated, and the brief never satisfies `--success` or the done check. The result carries `jobContext: {job, contentHash}`. `--job` alone is unchanged.
+- **Catalog contract v4: job `guidance` (#874).** A new optional job field: `aliases` and `expectedStates` (navigation help, told to the model under `--job-context`) and `claims` (statements to check, never told to the model). After a `--job-context` run, the result's `claims[]` gives each claim `confirmed`, `contradicted` or `not_observed` with its basis (`check`, `model`, `no-evidence` or `model-error`). A contradicted claim is a divergence to triage, never a defect or an exit code. Every v3 file stays valid, and a job without `guidance` keeps its approval hash. Contract v4.0.0 is published under `packages/cli/contracts/jevitate-catalog/v4/`.
+
+### Changed
+
+- Passing `--browser-arg --ignore-certificate-errors` now warns that it turns certificate checks off for every host, and points to `--accept-local-dev-cert` (#872).
+
 ## [0.31.0] – 2026-11-18
 
 ### Added

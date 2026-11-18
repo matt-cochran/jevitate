@@ -92,11 +92,12 @@ export const OMIT = {
   reviewRendering: "#432: review_journey returns the schema-checked JSON sheet; the Markdown/text renderings and writing them to a file are for people at the CLI",
   nonInteractiveApproval:
     "#437: the scripted-setup escape hatch for a CLI approval is the operator's choice, never a request's: an MCP approval needs no hatch — it is always recorded with provenance channel `mcp` (an agent's approval), which `check --require-approvals` fails unless the operator allows `mcp`",
+  localDevCert: "#872: accepting a server's self-signed certificate narrows TLS validation for the run: the operator's launch setting (like the browser binary and switches), never an MCP argument",
   hostLoad: "#205: starting a browser run on a STARVED host (overriding E_HOST_STARVED) can take the machine other people's work runs on down with it: the operator's call, never a request's",
 } as const;
 
 export const HOOK_FLAGS = { "--before": OMIT.hooks, "--after": OMIT.hooks, "--allow-shell-hooks": OMIT.hooks, "--hook-timeout-ms": OMIT.hooks } as const;
-export const BROWSER_FLAGS = { "--browser-executable": OMIT.browserBin, "--browser-channel": OMIT.browserBin, "--browser-arg": OMIT.browserBin, "--ignore-host-load": OMIT.hostLoad } as const;
+export const BROWSER_FLAGS = { "--browser-executable": OMIT.browserBin, "--browser-channel": OMIT.browserBin, "--browser-arg": OMIT.browserBin, "--accept-local-dev-cert": OMIT.localDevCert, "--ignore-host-load": OMIT.hostLoad } as const;
 export const JSON_FLAG = { "--json": OMIT.json } as const;
 /** #585: --project / --journeys-dir pick a store, which over MCP is always the server's (as --dir). */
 export const LOCATION_FLAGS = { "--project": OMIT.storeDir, "--journeys-dir": OMIT.storeDir } as const;

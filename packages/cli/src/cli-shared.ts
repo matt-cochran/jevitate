@@ -37,7 +37,7 @@ import {
   jevProviderOverride,
 } from "@jevitate/ai-core";
 import { loadLocalCredentials } from "./credentials-file.js";
-import { PlaywrightBrowserPort, readUnpackedExtension, type UnpackedExtension } from "@jevitate/playwright";
+import { PlaywrightBrowserPort, parseLocalDevCertOrigin, readUnpackedExtension, type UnpackedExtension } from "@jevitate/playwright";
 import { realVerifyFetch } from "./key-report.js";
 import { preflightRunKeys } from "./run-key-preflight.js";
 import { CastActor, BrowseTheWeb, type Actor } from "@jevitate/screenplay";
@@ -64,6 +64,7 @@ import { parseGeolocation, parseViewport, resolveEmulation, type EmulationSpec }
 import { nonNegativeIntArg, positiveIntArg } from "./cli-args.js";
 import { resourceLimitsFromFlags, withResourcePreflight, type GovernanceFlags } from "./resource-preflight.js";
 import { HEADED_DEFAULT_SLOW_MO_MS, assertHeadedDisplay, headedFromEnv, sessionLaunchOptions, type BrowserRunOptions } from "./browser-run-options.js";
+import { recordAcceptedLocalDevCert } from "./run-environment.js";
 
 /** Injectable wiring for the `record` command (all optional; real defaults). */
 export interface RecordCliDeps {
@@ -314,6 +315,44 @@ export interface BrowserLaunchFlags extends GovernanceFlags {
   browserArg: string[];
   /** #256: `--extension <dir>` (repeatable), each already read and checked by `extensionArg`. */
   extension?: readonly UnpackedExtension[];
+  /** #872: `--accept-local-dev-cert <origin>` (repeatable), each already checked by `localDevCertArg`. */
+  acceptLocalDevCert?: readonly string[];
+}
+
+/**
+ * #872: the `--accept-local-dev-cert <origin>` argParser — an https origin on a loopback host, or a
+ * usage error (exit 64) before anything runs. The same origin twice is kept once.
+ */
+export function localDevCertArg(value: string, prev: readonly string[] | undefined): string[] {
+  const before = prev ?? [];
+  let origin: string;
+  try {
+    origin = parseLocalDevCertOrigin(value);
+  } catch (err) {
+    throw new InvalidArgumentError(err instanceof Error ? err.message : String(err));
+  }
+  if (before.includes(origin)) return [...before];
+  recordAcceptedLocalDevCert(origin);
+  process.stderr.write(localDevCertNotice(origin));
+  return [...before, origin];
+}
+
+/** #872: the stderr notice that a run accepts a local dev server's self-signed certificate. */
+export function localDevCertNotice(origin: string): string {
+  return `notice: accepting the self-signed certificate of ${origin} (--accept-local-dev-cert): only the key it presents at launch (its current key) is trusted; every other host is validated as usual\n`;
+}
+
+/**
+ * #872: warnings for `--browser-arg` switches that weaken TLS for every host the run touches. The
+ * scoped alternative for a local dev server is `--accept-local-dev-cert <origin>`.
+ */
+export function browserArgWarnings(args: readonly string[]): string[] {
+  return args
+    .filter((a) => a === "--ignore-certificate-errors" || a.startsWith("--ignore-certificate-errors="))
+    .map(
+      (a) =>
+        `warning: --browser-arg ${a} turns certificate checks off for EVERY host the run touches; for a local dev server's self-signed certificate use --accept-local-dev-cert <origin>, which accepts only that server's key\n`,
+    );
 }
 
 /**
@@ -351,7 +390,16 @@ export function withBrowserLaunchFlags(cmd: Command): Command {
     .option(
       "--browser-arg <arg>",
       "extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage",
-      (v, prev: string[]) => [...prev, v],
+      (v, prev: string[]) => {
+        for (const w of browserArgWarnings([v])) process.stderr.write(w);
+        return [...prev, v];
+      },
+      [] as string[],
+    )
+    .option(
+      "--accept-local-dev-cert <origin>",
+      "#872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual",
+      localDevCertArg,
       [] as string[],
     )
     .option(
@@ -369,6 +417,7 @@ export function browserLaunchFromFlags(o: BrowserLaunchFlags): BrowserLaunchOpti
     ...(o.browserChannel !== undefined ? { channel: o.browserChannel } : {}),
     ...(o.browserArg.length > 0 ? { args: [...o.browserArg] } : {}),
     ...(o.extension !== undefined && o.extension.length > 0 ? { extensions: [...o.extension] } : {}),
+    ...(o.acceptLocalDevCert !== undefined && o.acceptLocalDevCert.length > 0 ? { localDevCertOrigins: [...o.acceptLocalDevCert] } : {}),
   };
   const resources = resourceLimitsFromFlags(o);
   if (resources !== undefined) launch.resources = resources;

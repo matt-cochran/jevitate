@@ -261,6 +261,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       "--browser-executable": OMIT.browserBin,
       "--browser-channel": OMIT.browserBin,
       "--browser-arg": OMIT.browserBin,
+      "--accept-local-dev-cert": OMIT.localDevCert,
     },
   },
   verify_fix: {
@@ -306,6 +307,7 @@ const NATIVE_FLAGS: Readonly<Record<string, { readonly path: string; readonly ar
       "--browser-executable": OMIT.browserBin,
       "--browser-channel": OMIT.browserBin,
       "--browser-arg": OMIT.browserBin,
+      "--accept-local-dev-cert": OMIT.localDevCert,
     },
   },
   queue_exploration: {
@@ -486,5 +488,13 @@ describe("#800: run_exploration takes the job whose done check verifies the goal
     const params = spec.command.params as Record<string, { flag?: string }>;
     expect(params["job"]?.flag).toBe("--job");
     expect(params["requireDoneCheck"]?.flag).toBe("--require-done-check");
+  });
+});
+
+describe("#873: run_exploration takes --job-context with --job", () => {
+  it("exposes jobContext (--job-context), as `explore` does", () => {
+    const spec = CLI_TOOL_SPECS.find((t) => t.name === "run_exploration")!;
+    const params = spec.command.params as Record<string, { flag?: string }>;
+    expect(params["jobContext"]?.flag).toBe("--job-context");
   });
 });

@@ -11,9 +11,10 @@ import { z } from "zod";
 import { CatalogLoader } from "./catalog.js";
 import { CATALOG_CONTRACT_IDENTITY } from "./catalog-contract-identity.js";
 
-const ROOT = fileURLToPath(new URL("../contracts/jevitate-catalog/v3", import.meta.url));
+const ROOT = fileURLToPath(new URL("../contracts/jevitate-catalog/v4", import.meta.url));
 const V1_ROOT = fileURLToPath(new URL("../contracts/jevitate-catalog/v1", import.meta.url));
 const V2_ROOT = fileURLToPath(new URL("../contracts/jevitate-catalog/v2", import.meta.url));
+const V3_ROOT = fileURLToPath(new URL("../contracts/jevitate-catalog/v3", import.meta.url));
 const SCHEMAS = join(ROOT, "schemas");
 const FIXTURES = join(ROOT, "fixtures");
 const read = (path: string): any => JSON.parse(readFileSync(path, "utf8"));
@@ -24,7 +25,7 @@ const files = (dir: string): string[] => readdirSync(dir, { withFileTypes: true 
 });
 const generated = (schema: Parameters<typeof z.toJSONSchema>[0], id: string, title: string): object => ({
   ...z.toJSONSchema(schema, { target: "draft-2020-12", unrepresentable: "any" }),
-  $id: `https://jevitate.com/schemas/catalog/v3/${id}`,
+  $id: `https://jevitate.com/schemas/catalog/v4/${id}`,
   title,
 });
 
@@ -68,11 +69,20 @@ describe("the published Jevitate repository-catalog contract", () => {
     });
   });
 
+  it("preserves the immutable v3.0.0 contract for previous-major consumers", () => {
+    expectImmutable(V3_ROOT, "72943422cd04100bda79be09d984e69833cd077b5bfed781709559917962783d", {
+      kind: "jevitate.catalog-contract",
+      version: "3.0.0",
+      package: "@jevitate/cli",
+      compatibility: { repositoryCatalogMajor: 1, approvalHash: "jevitate-content-hash-v2" },
+    });
+  });
+
   it("has an exact manifest for every published contract file", () => {
     const manifest = read(join(ROOT, "manifest.json"));
     expect(manifest).toMatchObject({
       kind: "jevitate.catalog-contract",
-      version: "3.0.0",
+      version: "4.0.0",
       package: "@jevitate/cli",
       source: {
         repository: "https://github.com/matt-cochran/jevitate.git",
@@ -102,8 +112,8 @@ describe("the published Jevitate repository-catalog contract", () => {
   });
 
   it("publishes the exact Job and Journey schemas implemented by the runtime", () => {
-    expect(read(join(SCHEMAS, "job.schema.json"))).toEqual(generated(JobSchema, "job.schema.json", "Jevitate job v3"));
-    expect(read(join(SCHEMAS, "journey.schema.json"))).toEqual(generated(JourneySchema, "journey.schema.json", "Jevitate Journey v3"));
+    expect(read(join(SCHEMAS, "job.schema.json"))).toEqual(generated(JobSchema, "job.schema.json", "Jevitate job v4"));
+    expect(read(join(SCHEMAS, "journey.schema.json"))).toEqual(generated(JourneySchema, "journey.schema.json", "Jevitate Journey v4"));
   });
 
   it("accepts the positive fixtures and refuses the closed-schema negative fixtures", () => {
@@ -117,7 +127,9 @@ describe("the published Jevitate repository-catalog contract", () => {
     expect(jobs(read(join(FIXTURES, "valid/jobs.json")))).toBe(true);
     expect(journey(read(join(FIXTURES, "valid/journey.json")))).toBe(true);
     expect(personas(read(join(FIXTURES, "valid/personas.json")))).toBe(true);
+    expect(jobs(read(join(FIXTURES, "valid/jobs-guidance.json")))).toBe(true);
     expect(jobs(read(join(FIXTURES, "invalid/jobs-unknown-field.json")))).toBe(false);
+    expect(jobs(read(join(FIXTURES, "invalid/jobs-guidance-unknown-field.json")))).toBe(false);
     expect(journey(read(join(FIXTURES, "invalid/journey-unknown-field.json")))).toBe(false);
   });
 
@@ -128,19 +140,39 @@ describe("the published Jevitate repository-catalog contract", () => {
       ajv.addSchema(read(join(root, "schemas/job.schema.json")));
       return { jobs: ajv.compile(read(join(root, "schemas/jobs.schema.json"))), journey: ajv.compile(read(join(root, "schemas/journey.schema.json"))) };
     };
-    const v3 = validators(ROOT);
+    const v3 = validators(V3_ROOT);
     const v2 = validators(V2_ROOT);
-    const jobsDone = read(join(FIXTURES, "valid/jobs-done.json"));
-    const typedJourney = read(join(FIXTURES, "valid/journey-typed-parameters.json"));
+    const v3Fixtures = join(V3_ROOT, "fixtures");
+    const jobsDone = read(join(v3Fixtures, "valid/jobs-done.json"));
+    const typedJourney = read(join(v3Fixtures, "valid/journey-typed-parameters.json"));
     expect(v3.jobs(jobsDone)).toBe(true);
     expect(v3.journey(typedJourney)).toBe(true);
     expect(v2.jobs(jobsDone)).toBe(false);
     expect(v2.journey(typedJourney)).toBe(false);
     // A file without the additions is valid under both, so a v3 reader may accept files written for v2.
-    expect(v2.jobs(read(join(FIXTURES, "valid/jobs.json")))).toBe(true);
-    expect(v2.journey(read(join(FIXTURES, "valid/journey.json")))).toBe(true);
+    expect(v2.jobs(read(join(v3Fixtures, "valid/jobs.json")))).toBe(true);
+    expect(v2.journey(read(join(v3Fixtures, "valid/journey.json")))).toBe(true);
     expect(JobSchema.safeParse(jobsDone[0]).success).toBe(true);
     expect(JourneySchema.safeParse(typedJourney).success).toBe(true);
+  });
+
+  it("v4 is a contract major: the closed v3 Job schema refuses `guidance`, which v4 accepts (#874)", () => {
+    const Ajv = Ajv2020 as unknown as typeof Ajv2020.default;
+    const jobsValidator = (root: string) => {
+      const ajv = new Ajv({ allErrors: true, strict: false, validateFormats: false });
+      ajv.addSchema(read(join(root, "schemas/job.schema.json")));
+      return ajv.compile(read(join(root, "schemas/jobs.schema.json")));
+    };
+    const withGuidance = read(join(FIXTURES, "valid/jobs-guidance.json"));
+    expect(jobsValidator(ROOT)(withGuidance)).toBe(true);
+    expect(jobsValidator(V3_ROOT)(withGuidance)).toBe(false);
+    // A file without guidance is valid under both, so a v4 reader may accept files written for v3.
+    expect(jobsValidator(V3_ROOT)(read(join(FIXTURES, "valid/jobs.json")))).toBe(true);
+    expect(JobSchema.safeParse(withGuidance[0]).success).toBe(true);
+  });
+
+  it("v4 keeps v3's approval-hash vectors, so approvals of jobs without guidance stay valid", () => {
+    expect(readFileSync(join(ROOT, "approval-hash-vectors.json"), "utf8")).toBe(readFileSync(join(V3_ROOT, "approval-hash-vectors.json"), "utf8"));
   });
 
   it("the runtime loader accepts the same valid persona and job fixtures", async () => {

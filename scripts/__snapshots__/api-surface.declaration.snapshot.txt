@@ -1343,7 +1343,7 @@
   VisualVerdict: interface
   waitForOutcome: function
 
-# @jevitate/journey (341 exports)
+# @jevitate/journey (346 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1457,6 +1457,9 @@
   GtwrCharacteristic: type-alias
   GtwrRule: interface
   GtwrSetCharacteristic: type-alias
+  GuidanceAliasSchema: variable
+  GuidanceClaim: type-alias
+  GuidanceClaimSchema: variable
   HandbackBoundary: interface
   HandbackEvidence: interface
   HandbackFacts: interface
@@ -1496,6 +1499,8 @@
   JOB_PRIORITIES: variable
   JOB_PROVENANCES: variable
   JOB_STAGES: variable
+  JobGuidance: type-alias
+  JobGuidanceSchema: variable
   JobKind: type-alias
   JobProvenance: type-alias
   JobReview: type-alias
@@ -1789,7 +1794,7 @@
   targetAllowlist: function
   UnknownOrUnpromotedMissionTargetError: class
 
-# @jevitate/playwright (166 exports)
+# @jevitate/playwright (171 exports)
   AdmissionRecord: interface
   AdmissionTimeoutError: class
   admissionViolation: function
@@ -1867,12 +1872,15 @@
   installPlan: function
   InstallState: type-alias
   InvalidGeolocationError: class
+  isLoopbackHost: function
   isTransientSlotError: function
   jevitateBrowsers: function
   knownDeviceNames: function
   LinuxResourceSignals: class
   LinuxSignalDeps: interface
   LivenessPage: interface
+  LocalDevCertError: class
+  localDevCertLaunchArgs: function
   MachineBrowserSlots: class
   MachineSlotLease: interface
   MachineSlotsOptions: interface
@@ -1898,6 +1906,7 @@
   pageResourceLimit: function
   pageUnresponsiveMsFromEnv: function
   parseGeolocation: function
+  parseLocalDevCertOrigin: function
   parseMeminfoBytes: function
   parseOwnerMarker: function
   parsePsiAvg10: function
@@ -1944,6 +1953,7 @@
   SlotHolder: interface
   SlotState: interface
   SpawnFn: type-alias
+  spkiPinOf: function
   systemProcessTable: function
   terminateOwnBrowsersSync: function
   throttleDecision: function

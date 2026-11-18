@@ -48,6 +48,25 @@ in a fresh browser context once before the run and again after it, so it also ca
 "advisory"` in `.jevitate/project.json` keeps every unverified pass at `0`. The run warns on stderr when a
 pass was judged by the model alone. See [did the job get done?](./outcomes.md#did-the-job-get-done).
 
+### Telling the run about the job: `--job-context` (#873)
+
+`--job <id>` reads the job's done check but tells the model nothing about the job. Add
+`--job-context` to also give the model the job's approved story, `context` and `constraints`
+(from `.jevitate/jobs.json`) as the run's mission brief:
+
+```bash
+jevitate explore --url http://localhost:3000/ --goal "invite a teammate" --success "urlIncludes:/team" \
+  --job invite-teammate --job-context --real
+```
+
+- **Opt-in.** `--job` alone is unchanged.
+- **Approved content only.** A draft job, or one that changed since its approval, is refused before
+  any run (`E_EXPLORE_JOB`), naming the `jevitate job review` command to run.
+- **Bounded.** A brief over 2000 characters is refused, never truncated.
+- **Navigation only.** The brief helps the model find its way. It never satisfies or relaxes
+  `--success` or the done check, which stay the only verdicts.
+- The result records what was supplied: `jobContext: {job, contentHash}`.
+
 ## HTTP end-state checks
 
 Some writes have no effect on the app's own UI: a password reset sends an email. When a dev

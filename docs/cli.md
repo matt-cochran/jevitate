@@ -397,6 +397,7 @@ CI regression gate: run a suite of Journeys, invariants, goals and missions with
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-local-dev-cert <origin>` | #872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual | `[]` |  |  |  |
 | `--allow-channels <list>` | #437: with --require-approvals, the approval channels that pass (comma list of tty, non-interactive, mcp, ci, pr-review; default tty). #469: pr-review is recorded only by jevitate after it verifies an approving review of the merged PR through the forge API — never set by a caller |  |  |  |  |
 | `--app-version <label>` | #479: the app's release/version label the check ran against, stamped next to the build id (1-64 of [A-Za-z0-9._+-]); also JEVITATE_APP_VERSION |  |  |  |  |
 | `--baseline <run|tag|last>` | only findings NOT in this baseline gate (a run, a `baseline tag`, or `last`) |  |  |  |  |
@@ -488,6 +489,7 @@ the one human approval of a DRAFT demo: shows the Journey and its annotations, r
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
 | `--accept-findings <reason>` | #433: approve although pre-approval findings need an acknowledgment, recording the reason in approval.acceptedFindings |  |  |  |  |
+| `--accept-local-dev-cert <origin>` | #872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual | `[]` |  |  |  |
 | `--accept-unvetted <reason>` | #433: approve although the Journey's linked job/persona is not approved, recording the reason in approval.waivers |  |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow-shell-hooks` | opt in to running --before/--after (operator commands; never model-chosen) | `false` |  |  |  |
@@ -534,6 +536,7 @@ explore a named non-production environment toward <aspect> (checked by --success
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-local-dev-cert <origin>` | #872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual | `[]` |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow-shell-hooks` | opt in to running --before/--after (operator commands; never model-chosen) | `false` |  |  |  |
 | `--before <cmd>` | operator shell hook run before the mission and every replay (needs --allow-shell-hooks); may print {vars, secret} |  |  |  |  |
@@ -619,6 +622,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-local-dev-cert <origin>` | #872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual | `[]` |  |  |  |
 | `--action-deltas` | opt-in (#303; every --strategy, not --feature): record what each action changed on the page — an accessibility snapshot before and after, announcements, the action's requests — redacted, with a code verdict per step (no-change \| relevant-change \| inconclusive) used by the goal loop's no-progress check and a persistence re-check after writes (goal), and as defect evidence (adversarial, coverage); adds `delta` to every transcript step (and Recording step, goal) and `actionDeltas` to the result. Costs about 50-100 ms per action on a small page, 0.3-0.5 s on a large one |  |  |  |  |
 | `--actor <name=storageState>` | multi-actor mission (#147, goal only; repeatable): the FIRST actor is the primary (the only one the model drives, from its own storageState); every other actor is an observer in its OWN fresh context that only runs the --invariants' cross-actor checks (capture + probe as:/deniedAs) — never clicks or types. Replaces --storage-state | `[]` |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
@@ -670,6 +674,7 @@ goal-directed exploration -> a deterministic Recording (authoring/test plane)
 | `--jev-provider <provider>` | with --real: which key judgment (Jev) uses — typesafe (TYPESAFE_API_KEY) or openrouter (OPENROUTER_API_KEY, Jev through OpenRouter). Default: JEVITATE_JEV_PROVIDER, else the TypeSafe key when both are set |  |  |  |  |
 | `--jevitate-repo <owner/name>` | where jevitate engine findings are filed (default matt-cochran/jevitate) |  |  |  |  |
 | `--job <id>` | (--strategy goal) #800: verify the goal against this job's done check from the project's jobs.json (jobs[].done), read in a fresh browser context after the model's done (and once before the run). The result carries job: {attainment, basis}; a check that reads false is not-achieved |  |  |  |  |
+| `--job-context` | (--strategy goal, with --job) #873: tell the model the job's approved story, context and constraints (its mission brief). Opt-in; refused for a draft or stale job and over 2000 characters. Never satisfies --success or the done check. The result records the job's content hash as jobContext |  |  |  |  |
 | `--job-wait-ms <ms>` | goal and usability: while the page shows an in-progress status ("Simulating…", aria-busy, a job "is running"), waits keep waiting with backoff — and a model 'blocked' is deferred — up to this budget (default: --reply-ceiling-ms, 180000); it also bounds a busy indicator the app visibly keeps working behind (live progress, a job poll) or declares (aria-busy, when this flag is set) before it is a hang, and a wait the page documents ("usually takes a minute") can raise it |  |  |  |  |
 | `--journeys-dir <path>` | with --from-journey: the journeys directory (default: the repo's .jevitate/journeys; outside a repo ~/.jevitate/journeys) |  |  |  |  |
 | `--json` | emit the JSON envelope (default: a human summary) |  |  |  |  |
@@ -749,6 +754,7 @@ Jev-driving authors a promotable Journey (authoring plane); never auto-promoted
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-local-dev-cert <origin>` | #872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual | `[]` |  |  |  |
 | `--action-deltas` | opt-in (#303; every --strategy, not --feature): record what each action changed on the page — an accessibility snapshot before and after, announcements, the action's requests — redacted, with a code verdict per step (no-change \| relevant-change \| inconclusive) used by the goal loop's no-progress check and a persistence re-check after writes (goal), and as defect evidence (adversarial, coverage); adds `delta` to every transcript step (and Recording step, goal) and `actionDeltas` to the result. Costs about 50-100 ms per action on a small page, 0.3-0.5 s on a large one |  |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow <origin>` | authorized origin (repeatable); REPLACES the default allowlist when given (the URL's own origin is used only when --allow is omitted entirely) -- include the URL's own origin explicitly if you still need it | `[]` |  |  |  |
@@ -1053,6 +1059,7 @@ continue a held run a person approved (#793), from the step it was held at — t
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-local-dev-cert <origin>` | #872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual | `[]` |  |  |  |
 | `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
@@ -1362,6 +1369,7 @@ draft each step's objective/expected result (and the goal/success criteria when 
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-local-dev-cert <origin>` | #872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual | `[]` |  |  |  |
 | `--action-deltas` | opt-in (#303): record what each replayed step changed and draft its expected result from that delta (by code, redacted) — the model is asked only for what the delta cannot say |  |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow-shell-hooks` | opt in to running --before/--after (operator commands; never model-chosen) | `false` |  |  |  |
@@ -1429,6 +1437,7 @@ jevitate journey chain [options]
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-local-dev-cert <origin>` | #872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual | `[]` |  |  |  |
 | `--allow <origin>` | an extra origin the replay may reach, e.g. the API of a split-origin app (repeatable; added to the recorded site, the environment's origins and the Journey's metadata.allowedOrigins) | `[]` |  |  |  |
 | `--allow-draft` | also run Journeys that are not promoted (authoring); without it both must be promoted |  |  |  |  |
 | `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
@@ -1472,6 +1481,7 @@ replay a Journey as a narrated demo (goal, step objectives as captions, target h
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-local-dev-cert <origin>` | #872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual | `[]` |  |  |  |
 | `--action-deltas` | opt-in (#303): record each replayed step's delta, and caption each step with what it changed when its Recording was made (an "observed:" line in the subtitles and the guide) |  |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow-shell-hooks` | opt in to running --before/--after (operator commands; never model-chosen) | `false` |  |  |  |
@@ -1605,6 +1615,7 @@ one-time repo rewrite, CLI only. #467: --step-ids mints a stable step id on ever
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-local-dev-cert <origin>` | #872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual | `[]` |  |  |  |
 | `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
@@ -1729,6 +1740,7 @@ report a Journey's (or a linked pair's) technical readiness: static checks, and 
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-local-dev-cert <origin>` | #872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual | `[]` |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow-shell-hooks` | opt in to running --before/--after (operator commands; never model-chosen) | `false` |  |  |  |
 | `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
@@ -1804,6 +1816,7 @@ jevitate journey run [options] <id>
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-local-dev-cert <origin>` | #872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual | `[]` |  |  |  |
 | `--action-deltas` | opt-in (#303): record what each replayed step changed on the page (redacted, a code verdict per step) and compare it with the delta its Recording stored — returned as actionDeltas |  |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow <origin>` | an extra origin the replay may reach, e.g. the API of a split-origin app (repeatable; added to the recorded site, the environment's origins and the Journey's metadata.allowedOrigins) | `[]` |  |  |  |
@@ -1871,6 +1884,7 @@ authoring time: search for a shorter path to the same job by removing steps (no 
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-local-dev-cert <origin>` | #872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual | `[]` |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow <origin>` | an extra origin the replay may reach, e.g. the API of a split-origin app (repeatable; added to the recorded site, the environment's origins and the Journey's metadata.allowedOrigins) | `[]` |  |  |  |
 | `--allow-shell-hooks` | opt in to running --before/--after (operator commands; never model-chosen) | `false` |  |  |  |
@@ -1919,6 +1933,7 @@ preview or prove that each Journey assertion fails when its outcome is absent
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-local-dev-cert <origin>` | #872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual | `[]` |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow <origin>` | an extra origin the replay may reach, e.g. the API of a split-origin app (repeatable; added to the recorded site, the environment's origins and the Journey's metadata.allowedOrigins) | `[]` |  |  |  |
 | `--allow-shell-hooks` | opt in to running --before/--after (operator commands; never model-chosen) | `false` |  |  |  |
@@ -2038,6 +2053,7 @@ re-check every ledger entry (or the named ones) with verify-fix, from the ledger
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-local-dev-cert <origin>` | #872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual | `[]` |  |  |  |
 | `--allow-log-cmd` | re-checking a server-log entry whose source is cmd:<command> needs this too | `false` |  |  |  |
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
@@ -2076,6 +2092,7 @@ jevitate load run [options] <journeyId>
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-local-dev-cert <origin>` | #872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual | `[]` |  |  |  |
 | `--authorized-origin <origin>` | allowed load-test target origin (repeatable) — required, fails closed if omitted | `[]` |  |  |  |
 | `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
@@ -2295,6 +2312,7 @@ run queued missions (queue_exploration) through their strategy's runner, then qu
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-local-dev-cert <origin>` | #872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual | `[]` |  |  |  |
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
@@ -2695,6 +2713,7 @@ jevitate regression capture [options]
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-local-dev-cert <origin>` | #872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual | `[]` |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow-shell-hooks` | opt in to running --before/--after (operator commands; never model-chosen) | `false` |  |  |  |
 | `--attempts <n>` | reproduction attempts before labeling flaky | `3` |  |  |  |
@@ -2742,6 +2761,7 @@ jevitate regression run [options] <id>
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-local-dev-cert <origin>` | #872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual | `[]` |  |  |  |
 | `--attempts <n>` | fresh-context replays for a declared-invariant oracle (default 3) |  |  |  |  |
 | `--base-url <origin>` | run against this origin (an ad-hoc environment; with --env, replaces its baseUrl) |  |  |  |  |
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
@@ -2978,6 +2998,7 @@ run a Journey from a trusted remote source through the run-gate
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-local-dev-cert <origin>` | #872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual | `[]` |  |  |  |
 | `--browser-arg <arg>` | extra Chromium switch (repeatable); extends the Linux defaults --no-sandbox --disable-dev-shm-usage | `[]` |  |  |  |
 | `--browser-channel <name>` | Playwright browser channel to launch, e.g. chrome \| msedge |  |  |  |  |
 | `--browser-executable <path>` | launch this Chromium binary instead of Playwright's pinned one |  |  |  |  |
@@ -3045,6 +3066,7 @@ run many explore missions — one per target in a targets file (.tsv or .json: i
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-local-dev-cert <origin>` | #872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual | `[]` |  |  |  |
 | `--allow-control <regex>` | exempt a control whose name matches from the soft 'may cost money' heuristic only (repeatable, #428) (forwarded to every mission, as explore's) | `[]` |  |  |  |
 | `--allow-destructive` | let missions click session-ending, destructive and paid controls (a --deny pattern still holds) (forwarded to every mission, as explore's) |  |  |  |  |
 | `--allow-log-cmd` | a --log-source cmd:<command> may run as a subprocess (forwarded to every mission, as explore's) |  |  |  |  |
@@ -3154,6 +3176,7 @@ replay a defect's repro from a mission result (or the ledger); passes only if th
 
 | Flags | Description | Default | Choices | Required | Env |
 | --- | --- | --- | --- | --- | --- |
+| `--accept-local-dev-cert <origin>` | #872: accept the self-signed certificate of this local dev server (repeatable; an https origin on localhost, 127.0.0.0/8 or [::1], e.g. https://localhost:5173). Its current public key is pinned at launch, so only that server's certificate is accepted; every other host is validated as usual | `[]` |  |  |  |
 | `--action-deltas` | opt-in (#303): record what each replayed step changed and compare the defect step's delta with the one the Recording stored — a mismatch is evidence on each attempt (never the verdict) |  |  |  |  |
 | `--after <cmd>` | operator shell hook run after the mission and every replay (needs --allow-shell-hooks) |  |  |  |  |
 | `--allow <origin...>` | #484: replay with these origins instead of the allow list stored with the result (explicit only; recorded on the report) |  |  |  |  |

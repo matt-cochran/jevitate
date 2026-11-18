@@ -331,6 +331,31 @@ flags:
 jevitate journey run checkout --browser-channel chrome --browser-arg=--lang=de
 ```
 
+### A local dev server with a self-signed certificate (#872)
+
+A dev server that serves HTTPS with a self-signed certificate (for example Vite with
+`@vitejs/plugin-basic-ssl`) is refused by the browser: the run ends `inconclusive` with
+`target unreachable (ERR_CERT_AUTHORITY_INVALID)`. Name the server with
+`--accept-local-dev-cert <origin>` (repeatable):
+
+```bash
+jevitate explore --url https://localhost:5173/ --accept-local-dev-cert https://localhost:5173 \
+  --goal "…" --success "…" --real
+```
+
+- Only `https` origins on a loopback host (`localhost`, `127.0.0.0/8`, `[::1]`) are accepted. Any
+  other origin is a usage error (exit 64) before a browser starts.
+- At launch, jevitate reads the public key the server presents and pins it
+  (`--ignore-certificate-errors-spki-list`). Only that server's certificate is accepted. Every
+  other host the page talks to, third-party scripts included, is validated as usual.
+- A server that cannot be reached at launch fails the run before a browser starts. A dev server
+  that regenerates its certificate gets the new key pinned on the next run.
+- Each accepted origin is noted on stderr and recorded in the run's result as `localDevCerts`
+  (emitted JSON and persisted results alike), so a run that relied on it says so in its evidence.
+
+Avoid `--browser-arg --ignore-certificate-errors`: it turns certificate checks off for every host
+the run touches, and jevitate warns when it is passed.
+
 ## Demo mode: watching a run
 
 Headless is the default everywhere, `check` and CI included; demo mode is opt-in (#245). The flags

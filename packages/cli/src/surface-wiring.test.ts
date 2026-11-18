@@ -107,6 +107,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "goal-strategy.ts runExploration": { hostHealth: SEAM, successAssertion: "the CLI passes --success as successChecks", nowIso: SEAM, targetTrust: TRUST_FROM_RUN_MODE },
   // #369: every explore-author-journey take is explore's goal run — what authoring leaves out, and why.
   "explore-author.ts runExploration": {
+    missionBrief: "#873: a take is adjudicated by its own --success checks; `explore --job <id> --job-context` tells the model the job",
     targetTrust: TRUST_FROM_RUN_MODE,
     hostHealth: SEAM,
     nowIso: SEAM,
@@ -319,6 +320,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
 
   // ── mission run queue (MCP queue_exploration) ───────────────────────────────────────────────
   "mission-queue-runner.ts runExploration": {
+    missionBrief: "#873: a queued mission resolves its job when it runs; telling the model the job (`explore --job-context`) is not queued yet",
     targetTrust: TRUST_FROM_RUN_MODE,
     renderWaitMs: "#837: queued MissionRequest has no per-run render bound; queued goals keep the engine default, while direct explore/author and suite goal items accept the bounded override",
     blockOffAllowlistNavigation: QUEUE_NARROW,
@@ -381,6 +383,7 @@ const OMISSIONS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
 
   // ── check suites ────────────────────────────────────────────────────────────────────────────
   "check-execute-items.ts runExploration": {
+    missionBrief: "#873: a suite item does not take --job (suite-explore-options): a direct `explore --job <id> --job-context` tells the model its job",
     targetTrust: TRUST_FROM_RUN_MODE,
     doneCheck: "#800: a suite item takes no --job (suite-explore-options excludes it); a suite gates on its items' --success checks",
     doneCheckBasis: "#800: a suite item takes no --job (suite-explore-options excludes it); a suite gates on its items' --success checks",

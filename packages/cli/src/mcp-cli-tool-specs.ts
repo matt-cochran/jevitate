@@ -450,6 +450,8 @@ export const CLI_TOOL_SPECS: readonly CliToolSpec[] = [
         allowVacuousChecks: b("--allow-vacuous-checks"),
         // 0.30.0 (#800): the job whose done check (jobs.json, read in a fresh context) verifies the goal run.
         job: s("--job"),
+        // #873: tell the model the job's approved story/context/constraints (needs job; draft/stale refused).
+        jobContext: b("--job-context"),
         requireDoneCheck: b("--require-done-check"),
         actionDeltas: b("--action-deltas"),
         feature: s("--feature"),
