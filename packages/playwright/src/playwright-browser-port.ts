@@ -12,6 +12,7 @@ import { sharedResourceGovernor, type GovernorTicket, type ResourceGovernor, typ
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { timePhase } from "@jevitate/domain";
 
 /**
  * Chromium switches applied on Linux regardless of caller args. They are the
@@ -285,6 +286,10 @@ export class PlaywrightBrowserPort implements BrowserPort {
   }
 
   async open(opts: OpenOptions): Promise<BrowserSession> {
+    return timePhase("browserOpen", () => this.#open(opts));
+  }
+
+  async #open(opts: OpenOptions): Promise<BrowserSession> {
     // allowedOrigins are the session's authorized origins: they scope the geolocation grant; they are
     // not a network guard unless `blockOffAllowlistNavigation` (#521) arms the navigation guard, and
     // even then subresources load from any origin. The acting origin is checked by the caller after
@@ -428,14 +433,16 @@ export class PlaywrightBrowserPort implements BrowserPort {
       probeReachable: this.#probe,
       probeOriginReadiness: this.#originProbe,
       drainBlockedNavigations: () => navGuard?.drain() ?? [],
-      async close() {
-        watchdog?.stop();
-        try {
-          await context.close();
-        } finally {
-          if (tempProfile !== undefined) await rm(tempProfile, { recursive: true, force: true }).catch(() => undefined);
-        }
-      },
+      // #852: closing the session (its context, and a temporary profile) is the run's `teardown`.
+      close: () =>
+        timePhase("teardown", async () => {
+          watchdog?.stop();
+          try {
+            await context.close();
+          } finally {
+            if (tempProfile !== undefined) await rm(tempProfile, { recursive: true, force: true }).catch(() => undefined);
+          }
+        }),
     };
   }
 
@@ -524,14 +531,16 @@ function governed(session: BrowserSession, governor: ResourceGovernor, ticket: G
   return {
     ...session,
     // The session's own close keeps its semantics (idempotent, a crash surfaced); unwatch/release are idempotent.
-    async close() {
-      unwatch();
-      try {
-        await session.close();
-      } finally {
-        ticket.release();
-      }
-    },
+    // #852: closing the session (context close, lease and governor ticket release) is `teardown`.
+    close: () =>
+      timePhase("teardown", async () => {
+        unwatch();
+        try {
+          await session.close();
+        } finally {
+          ticket.release();
+        }
+      }),
   };
 }
 

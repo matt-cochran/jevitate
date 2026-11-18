@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { aggregateOf, formatUsageLine, type UsageCounts } from "@jevitate/ai-core";
-import type { DoneCheckPolicy } from "@jevitate/domain";
+import type { DoneCheckPolicy, PhaseTimings } from "@jevitate/domain";
 import { renderJUnit, renderReportMarkdown, renderSarif, type ConsolidatedDefect, type DiffEntry, type FindingsDiff, type GateCase, type RunRecord } from "@jevitate/findings";
 import { loadCatalog } from "./catalog-api.js";
 import { findJob, type Catalog } from "./catalog.js";
@@ -26,6 +26,8 @@ export interface ExecutedItem {
   readonly item: Planned;
   readonly ex: Executed | undefined;
   readonly durationMs: number;
+  /** #852: where the item's wall time went, by phase (absent for an item that did not run). */
+  readonly timings?: PhaseTimings;
 }
 
 /** The consolidated defect maps and gating set an item report reads. */
@@ -70,13 +72,14 @@ export async function addOutcomeTargets(items: CheckItemReport[], executed: Read
 
 /** One executed item's report: its status, gating findings, verdict and every optional detail. */
 export function buildItemReport(entry: ExecutedItem, idx: number, ctx: ItemReportContext): CheckItemReport {
-  const { item, ex, durationMs } = entry;
+  const { item, ex, durationMs, timings } = entry;
   const base = {
     target: item.t.target.name,
     kind: item.kind,
     name: item.name,
     ...(item.strategy === undefined ? {} : { strategy: item.strategy }),
     durationMs,
+    ...(timings === undefined ? {} : { timings }),
   };
   if (ex === undefined) return { ...base, status: "skipped", actions: 0, verdict: "skipped", gating: [] };
   const run = ex.resultPath === undefined ? undefined : ctx.runOf.get(ex.resultPath);

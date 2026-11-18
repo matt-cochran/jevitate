@@ -60,6 +60,7 @@ import { checkAssertion, pollUntil, textIncludesCI, PostconditionFailed } from "
 import { descriptorToTarget } from "./descriptor.js";
 import type { StepOutcome } from "./outcome.js";
 import { waitForOutcome, type StepWait } from "./outcome-wait.js";
+import { timePhase } from "@jevitate/domain";
 
 /**
  * NOTE (deferred to a future milestone, documentation-only): every step
@@ -278,7 +279,12 @@ async function anchoredElementReason(actor: Actor, a: Assertion): Promise<string
  * it (#409), the outcome wait (`waitForOutcome`) — reported through `hooks.onWait` whatever its
  * ending, and a `PostconditionFailed` naming how it ended when the expectation never held.
  */
-async function postcondition(
+/** #852: a step's postcondition, timed as `stepCheck` (inside the step's `stepAction`). */
+function postcondition(...args: Parameters<typeof postconditionImpl>): Promise<void> {
+  return timePhase("stepCheck", () => postconditionImpl(...args));
+}
+
+async function postconditionImpl(
   actor: Actor,
   a: Assertion,
   wait: OutcomeWait | undefined,
@@ -356,7 +362,12 @@ async function uploadFile(
  * `runStep(actor, rec, vars, globalIndex)` per step, passing the
  * recording-global flat step index.
  */
-export async function runStep(
+/** #852: one step, timed as `stepAction`; its postcondition is charged to `stepCheck`. */
+export function runStep(...args: Parameters<typeof runStepImpl>): Promise<StepOutcome> {
+  return timePhase("stepAction", () => runStepImpl(...args));
+}
+
+async function runStepImpl(
   actor: Actor,
   rec: RecordedStep,
   vars: Map<string, string>,
