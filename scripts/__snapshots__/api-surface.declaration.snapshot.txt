@@ -1789,7 +1789,7 @@
   targetAllowlist: function
   UnknownOrUnpromotedMissionTargetError: class
 
-# @jevitate/playwright (166 exports)
+# @jevitate/playwright (171 exports)
   AdmissionRecord: interface
   AdmissionTimeoutError: class
   admissionViolation: function
@@ -1867,12 +1867,15 @@
   installPlan: function
   InstallState: type-alias
   InvalidGeolocationError: class
+  isLoopbackHost: function
   isTransientSlotError: function
   jevitateBrowsers: function
   knownDeviceNames: function
   LinuxResourceSignals: class
   LinuxSignalDeps: interface
   LivenessPage: interface
+  LocalDevCertError: class
+  localDevCertLaunchArgs: function
   MachineBrowserSlots: class
   MachineSlotLease: interface
   MachineSlotsOptions: interface
@@ -1898,6 +1901,7 @@
   pageResourceLimit: function
   pageUnresponsiveMsFromEnv: function
   parseGeolocation: function
+  parseLocalDevCertOrigin: function
   parseMeminfoBytes: function
   parseOwnerMarker: function
   parsePsiAvg10: function
@@ -1944,6 +1948,7 @@
   SlotHolder: interface
   SlotState: interface
   SpawnFn: type-alias
+  spkiPinOf: function
   systemProcessTable: function
   terminateOwnBrowsersSync: function
   throttleDecision: function
