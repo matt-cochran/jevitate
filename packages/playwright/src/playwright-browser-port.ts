@@ -7,6 +7,7 @@ import { emulationContextOptions, resolveEmulation } from "./emulation.js";
 import { probeOriginReadiness, probeReachable, type OriginReadiness } from "./reachability.js";
 import { ExtensionLoadError, extensionLaunchArgs, extensionOrigin, type UnpackedExtension } from "./extensions.js";
 import { ownerMarkerArg } from "./browser-processes.js";
+import { localDevCertLaunchArgs, spkiPinOf } from "./local-dev-cert.js";
 import { NavigationGuard, type BlockedNavigation } from "./nav-guard.js";
 import { sharedResourceGovernor, type GovernorTicket, type ResourceGovernor, type ResourceLimits } from "./resource-governor.js";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -212,6 +213,8 @@ export interface PlaywrightBrowserPortDeps {
   readonly originProbe?: (url: string) => Promise<OriginReadiness>;
   /** #205: the resource governor every session is admitted by (default: the process-wide `sharedResourceGovernor()`). */
   readonly governor?: ResourceGovernor;
+  /** #872: testing seam for reading a local dev origin's certificate pin (default `spkiPinOf`, a live TLS handshake). */
+  readonly localDevCertPin?: (origin: string) => Promise<string>;
 }
 
 /**
@@ -271,9 +274,11 @@ export class PlaywrightBrowserPort implements BrowserPort {
   readonly #probe: (url: string) => Promise<string | null>;
   readonly #originProbe: (url: string) => Promise<OriginReadiness>;
   readonly #governor: ResourceGovernor | undefined;
+  readonly #localDevCertPin: (origin: string) => Promise<string>;
 
   constructor(deps: PlaywrightBrowserPortDeps = {}) {
     this.#governor = deps.governor;
+    this.#localDevCertPin = deps.localDevCertPin ?? ((origin) => spkiPinOf(origin));
     this.#liveness = deps.liveness ?? {};
     this.#openTimeoutMs = deps.openTimeoutMs ?? DEFAULT_OPEN_TIMEOUT_MS;
     this.#launch = deps.launch ?? ((options) => chromium.launch(marked(options)));
@@ -322,9 +327,11 @@ export class PlaywrightBrowserPort implements BrowserPort {
         throw err;
       }
     }
+    // #872: the pin is part of the launch configuration, so a pinned browser is never shared with an unpinned one.
+    const pinArgs = await localDevCertLaunchArgs(opts.localDevCertOrigins ?? [], this.#localDevCertPin);
     const launchOptions = {
       headless: opts.headless,
-      args: resolveLaunchArgs(opts.args, this.#platform),
+      args: resolveLaunchArgs([...(opts.args ?? []), ...pinArgs], this.#platform),
       ...(opts.executablePath !== undefined ? { executablePath: opts.executablePath } : {}),
       ...(opts.channel !== undefined ? { channel: opts.channel } : {}),
       ...(opts.slowMo !== undefined && opts.slowMo > 0 ? { slowMo: opts.slowMo } : {}),
@@ -383,12 +390,13 @@ export class PlaywrightBrowserPort implements BrowserPort {
     // #256: the headless shell (Playwright's default headless binary) cannot load extensions; the
     // full Chromium build in new-headless mode can. An explicit channel/executable is kept as given.
     const channel = opts.channel ?? (extensions.length > 0 && opts.headless && opts.executablePath === undefined ? "chromium" : undefined);
+    const pinArgs = await localDevCertLaunchArgs(opts.localDevCertOrigins ?? [], this.#localDevCertPin);
     let context: BrowserContext;
     try {
       context = await this.#launchPersistent(dir, {
         headless: opts.headless,
         baseURL: opts.baseUrl,
-        args: resolveLaunchArgs([...(opts.args ?? []), ...extensionLaunchArgs(extensions)], this.#platform),
+        args: resolveLaunchArgs([...(opts.args ?? []), ...pinArgs, ...extensionLaunchArgs(extensions)], this.#platform),
         ...(extensions.length > 0 ? { ignoreDefaultArgs: ["--disable-extensions"] } : {}),
         ...(opts.executablePath !== undefined ? { executablePath: opts.executablePath } : {}),
         ...(channel !== undefined ? { channel } : {}),

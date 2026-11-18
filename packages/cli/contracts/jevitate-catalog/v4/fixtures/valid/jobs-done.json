@@ -1,0 +1,16 @@
+[
+  {
+    "id": "review-work",
+    "trigger": "work is ready",
+    "motivation": "review it",
+    "outcome": "ship with confidence",
+    "personas": [
+      "owner"
+    ],
+    "done": {
+      "version": 1,
+      "at": "/work",
+      "check": "textIncludes:testId=status|Reviewed"
+    }
+  }
+]

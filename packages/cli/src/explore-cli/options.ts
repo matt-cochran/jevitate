@@ -94,6 +94,7 @@ export function declareExploreCommand(program: Command): Command {
     .addOption(GOAL_RUN_OPTIONS.successWhen())
     .addOption(GOAL_RUN_OPTIONS.allowVacuousChecks())
     .option("--job <id>", "(--strategy goal) #800: verify the goal against this job's done check from the project's jobs.json (jobs[].done), read in a fresh browser context after the model's done (and once before the run). The result carries job: {attainment, basis}; a check that reads false is not-achieved")
+    .option("--job-context", "(--strategy goal, with --job) #873: tell the model the job's approved story, context and constraints (its mission brief). Opt-in; refused for a draft or stale job and over 2000 characters. Never satisfies --success or the done check. The result records the job's content hash as jobContext")
     .option("--require-done-check", "(--strategy goal) #800: a pass no done check verified (no --job, or an unreadable or already-true check) exits 2 even when project.json doneCheckPolicy is advisory; a pass verified only by --success counts as unverified too")
     .addOption(GOAL_RUN_OPTIONS.actionDeltas())
     .option("--feature <name>", "run the capability-scoped feature-testing mission (instead of --goal/--success)")

@@ -50,6 +50,8 @@ export interface RunExplorationOptions {
   readonly hostHealth?: HostHealthSampler;
   readonly url: string;
   readonly goal: string;
+  /** #873 (`--job-context`): the approved job's brief, told to the model with the goal; never a success check. */
+  readonly missionBrief?: string;
   /** A success assertion on the final page. With `successChecks`, every one must hold. */
   readonly successAssertion?: Assertion;
   /** More independent checks (`--success`, repeatable): page, reloadThen, requestMade, responseStatus. */
@@ -614,6 +616,7 @@ function goalMissionTargetInputs(
   session: GoalRunSession,
 ) {
   return {
+    ...(opts.missionBrief === undefined ? {} : { missionBrief: opts.missionBrief }),
     // #543: http checks request through the allowlist-bound probe; `${setup.x}` from the fixtures.
     ...((opts.successChecks ?? []).some((c) => c.kind === "http")
       ? { httpProbe: createHttpProbe({ allowlist: opts.allowlist }), httpRefs: httpCheckRefs(setup.fx === undefined ? {} : { bindings: setup.fx.bindings() }) }

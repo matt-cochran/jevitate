@@ -853,7 +853,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (207 exports)
+# @jevitate/journey (210 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -900,6 +900,8 @@
   FsJourneyStore: class
   GTWR_RULES: array
   GTWR_SET_CHARACTERISTICS: array
+  GuidanceAliasSchema: object
+  GuidanceClaimSchema: object
   HANDOFF_CONTRACT_RE: object
   HANDOFF_FIELD_TYPES: array
   HEAL_REJECTION_CODES: array
@@ -909,6 +911,7 @@
   JOB_PROVENANCES: array
   JOB_STAGES: array
   JevLayerSchema: object
+  JobGuidanceSchema: object
   JobReviewSchema: object
   JobSchema: object
   JobStepSchema: object
@@ -1127,7 +1130,7 @@
   isHttpOrigin: function
   targetAllowlist: function
 
-# @jevitate/playwright (102 exports)
+# @jevitate/playwright (107 exports)
   AdmissionTimeoutError: class
   BrowserCrashedError: class
   BrowserNotInstalledError: class
@@ -1152,6 +1155,7 @@
   INSTALL_COMMAND: const (string)
   InvalidGeolocationError: class
   LinuxResourceSignals: class
+  LocalDevCertError: class
   MachineBrowserSlots: class
   NavigationGuard: class
   OWNER_MARKER_SWITCH: const (string)
@@ -1195,9 +1199,11 @@
   governanceFromEnv: function
   installBrowser: function
   installPlan: function
+  isLoopbackHost: function
   isTransientSlotError: function
   jevitateBrowsers: function
   knownDeviceNames: function
+  localDevCertLaunchArgs: function
   markedBrowsers: function
   measureOwnBrowserMemory: function
   orphanReason: function
@@ -1206,6 +1212,7 @@
   pageResourceLimit: function
   pageUnresponsiveMsFromEnv: function
   parseGeolocation: function
+  parseLocalDevCertOrigin: function
   parseMeminfoBytes: function
   parseOwnerMarker: function
   parsePsiAvg10: function
@@ -1226,6 +1233,7 @@
   sharedBrowserPool: function
   sharedResourceGovernor: function
   singletonSocketPathRefusal: function
+  spkiPinOf: function
   systemProcessTable: function
   terminateOwnBrowsersSync: function
   throttleDecision: function

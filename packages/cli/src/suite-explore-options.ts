@@ -207,12 +207,14 @@ export const SUITE_DEDICATED_EXPLORE_OPTIONS: Readonly<Record<string, DedicatedO
 
 export const SUITE_EXCLUDED_EXPLORE_OPTIONS: Readonly<Record<string, string>> = {
   job: "#800: a suite item's goal is verified by its own success checks; a job's done check (explore --goal --job) is read by a direct run until suites carry jobs",
+  jobContext: "#873: goes with --job, which a suite item does not take: a direct run tells the model its job",
   requireDoneCheck: "#800: the done-check policy is per project (project.json doneCheckPolicy) and per direct run, not per suite item",
   allowSecretCmd: "#324: a cmd: secret source runs an operator command at type time — explore --secret-field with --allow-secret-cmd only, never from a suite file",
   secretCmdAttempts: "#359: the bound on a cmd: secret source's command runs — goes with --allow-secret-cmd, which is never a suite option",
   browserExecutable: "a check launches every item's browser the same way: pass --browser-executable to `jevitate check`",
   browserChannel: "a check launches every item's browser the same way: pass --browser-channel to `jevitate check`",
   browserArg: "a check launches every item's browser the same way: pass --browser-arg to `jevitate check`",
+  acceptLocalDevCert: "#872: a check launches every item's browser the same way: pass --accept-local-dev-cert to `jevitate check`",
   extension: "#256: a check launches every item's browser the same way: pass --extension to `jevitate check` (a suite item with its own `allow` lists the chrome-extension://<id> origin itself)",
   maxBrowsers: "#205: resource governance is per check, not per item: pass --max-browsers to `jevitate check`",
   maxBrowserMemory: "#205: resource governance is per check, not per item: pass --max-browser-memory to `jevitate check`",
