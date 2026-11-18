@@ -89,6 +89,8 @@ export type ExploreOpts = {
     allowVacuousChecks?: boolean;
     /** 0.30.0 (#800): `--job <id>` — the job whose done check verifies the goal run. */
     job?: string;
+    /** #873: `--job-context` — the approved job's story/context/constraints as the run's mission brief. */
+    jobContext?: boolean;
     /** 0.30.0 (#800): `--require-done-check`. */
     requireDoneCheck?: boolean;
     actionDeltas?: boolean;

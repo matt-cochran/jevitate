@@ -14,6 +14,7 @@ import { resolveJourneyPrefix } from "../journey-prefix.js";
 import { GoalRunFlagError, successWhenFromFlags } from "../goal-run-flags.js";
 import { resolveCatalogDir } from "../catalog-api.js";
 import { exploreDoneCheckPolicy, jobCheckRunOptions, prepareJobDoneCheck, ProjectConfigError, type ExploreJobCheck } from "../explore-job-done-check.js";
+import { prepareJobContext, type PreparedJobContext } from "../explore-job-context.js";
 import type { DoneCheckPolicy } from "@jevitate/domain";
 import type { ExploreRunContext } from "./shared.js";
 
@@ -131,6 +132,17 @@ export async function runGoalStrategy(ctx: ExploreRunContext): Promise<void> {
       return;
     }
   }
+  // #873: `--job-context` — the approved job's brief, refused before the done check's first reading or any run.
+  let jobContext: Extract<PreparedJobContext, { ok: true }> | undefined;
+  if (o.jobContext === true) {
+    const prepared = await prepareJobContext({ jobId: o.job, catalogDir, journeysDir: resolveJourneysDir(deps, o.journeysDir) });
+    if (!prepared.ok) {
+      await fx?.restore();
+      emitExplore(fail(prepared.code, prepared.message));
+      return;
+    }
+    jobContext = prepared;
+  }
   // `--job <id>`: the job's done check, read in fresh contexts (before the run, and after each proposed done).
   let jobCheck: ExploreJobCheck | undefined;
   if (o.job !== undefined) {
@@ -162,6 +174,7 @@ export async function runGoalStrategy(ctx: ExploreRunContext): Promise<void> {
       ...(o.requireDoneCheck === true ? { requireDoneCheck: true } : {}),
       url,
       goal,
+      ...(jobContext === undefined ? {} : { missionBrief: jobContext.brief }),
       successChecks,
       ...(successWhen === undefined ? {} : { successWhen }),
       ...(o.allowVacuousChecks === true ? { allowVacuousChecks: true } : {}),
@@ -209,7 +222,11 @@ export async function runGoalStrategy(ctx: ExploreRunContext): Promise<void> {
       warn(`warning: this pass was judged by the model's goal check alone, so the job is unverified (add --success or --job <id> to verify it)${result.exitCode === EXIT_CODES.inconclusive ? "; exiting 2 (doneCheckPolicy require)" : ""}\n`);
     }
     // 0 succeeded · 1 assertion not met · 2 the run broke (inconclusive/crashed).
-    emitExplore(ok(await withEvidence(result)), result.exitCode);
+    const evidenced = await withEvidence(result);
+    emitExplore(
+      ok(jobContext === undefined ? evidenced : { ...evidenced, jobContext: { job: jobContext.jobId, contentHash: jobContext.contentHash } }),
+      result.exitCode,
+    );
   } catch (err) {
     if (emitJourneyFailure(err)) return;
     if (err instanceof UnauthorizedExploreTargetError) {
