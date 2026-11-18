@@ -391,6 +391,7 @@ const OPTION_SPEC = (params: Readonly<Record<string, CliParam>>): CliToolSpec =>
  */
 const BROWSER_TARGET_OPTIONS: Readonly<Record<string, string>> = {
   browserArg: "--browser-arg",
+  acceptLocalDevCert: "--accept-local-dev-cert",
   browserExecutable: "--browser-executable",
   browserChannel: "--browser-channel",
 };
