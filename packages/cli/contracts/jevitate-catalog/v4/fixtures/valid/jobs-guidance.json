@@ -1,0 +1,39 @@
+[
+  {
+    "id": "review-work",
+    "trigger": "work is ready",
+    "motivation": "review it",
+    "outcome": "ship with confidence",
+    "personas": [
+      "owner"
+    ],
+    "guidance": {
+      "aliases": [
+        {
+          "term": "workspace",
+          "uiTerms": [
+            "piece"
+          ]
+        }
+      ],
+      "expectedStates": [
+        "the review queue lists the work as Reviewed"
+      ],
+      "claims": [
+        {
+          "id": "reviewed-status",
+          "statement": "reviewed work shows the status Reviewed",
+          "check": {
+            "version": 1,
+            "at": "/work",
+            "check": "textIncludes:testId=status|Reviewed"
+          }
+        },
+        {
+          "id": "one-reviewer",
+          "statement": "one reviewer is enough to ship"
+        }
+      ]
+    }
+  }
+]

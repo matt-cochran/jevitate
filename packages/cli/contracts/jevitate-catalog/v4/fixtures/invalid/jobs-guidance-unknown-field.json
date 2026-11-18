@@ -1,0 +1,20 @@
+[
+  {
+    "id": "review-work",
+    "trigger": "work is ready",
+    "motivation": "review it",
+    "outcome": "ship with confidence",
+    "personas": [
+      "owner"
+    ],
+    "guidance": {
+      "claims": [
+        {
+          "id": "c1",
+          "statement": "s",
+          "verdict": "confirmed"
+        }
+      ]
+    }
+  }
+]
