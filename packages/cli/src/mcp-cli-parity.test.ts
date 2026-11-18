@@ -490,3 +490,11 @@ describe("#800: run_exploration takes the job whose done check verifies the goal
     expect(params["requireDoneCheck"]?.flag).toBe("--require-done-check");
   });
 });
+
+describe("#873: run_exploration takes --job-context with --job", () => {
+  it("exposes jobContext (--job-context), as `explore` does", () => {
+    const spec = CLI_TOOL_SPECS.find((t) => t.name === "run_exploration")!;
+    const params = spec.command.params as Record<string, { flag?: string }>;
+    expect(params["jobContext"]?.flag).toBe("--job-context");
+  });
+});

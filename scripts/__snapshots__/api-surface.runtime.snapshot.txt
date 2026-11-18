@@ -853,7 +853,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (207 exports)
+# @jevitate/journey (210 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -900,6 +900,8 @@
   FsJourneyStore: class
   GTWR_RULES: array
   GTWR_SET_CHARACTERISTICS: array
+  GuidanceAliasSchema: object
+  GuidanceClaimSchema: object
   HANDOFF_CONTRACT_RE: object
   HANDOFF_FIELD_TYPES: array
   HEAL_REJECTION_CODES: array
@@ -909,6 +911,7 @@
   JOB_PROVENANCES: array
   JOB_STAGES: array
   JevLayerSchema: object
+  JobGuidanceSchema: object
   JobReviewSchema: object
   JobSchema: object
   JobStepSchema: object
