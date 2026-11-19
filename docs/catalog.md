@@ -190,6 +190,26 @@ check stay the only verdicts. `guidance` is part of the job's content hash, so e
 approved job stale; a job without it keeps its hash. A `jobs.json` that uses `guidance` needs a
 contract v4 reader (`packages/cli/contracts/jevitate-catalog/v4/`).
 
+### Reading claim verdicts: run-result contract v1
+
+External tools that consume run results read the verdicts through the run-result contract v1,
+shipped in the CLI package under `contracts/jevitate-run-result/v1/` beside the catalog contract.
+After `explore --job <id> --job-context`, the verdicts are in **both** the `--json` envelope
+`{v, ok, data}` and the saved `<recording>.result.json` `{missionOutcome, exitCode, result}` (its
+path is `data.resultPath`; MCP `get_mission_result` returns it), with the same fields, built by one
+function. The result (`data`, or the saved `result`) carries `schemaVersion` (1), `strategy`
+(`goal`), `jobContext` (`{job, contentHash}`: the job id and the content hash of the approved job
+the run used) and `claims[]` (`{id, statement, verdict, basis, reason?}`, absent when the job has no
+claims); the envelope's `v` is 1. A run without `--job-context` carries neither field and its saved
+result is written once, unchanged. The contract holds JSON Schemas for the envelope, the saved
+result and one claim, generated from the runtime schema, with conformance fixtures and a SHA-256
+manifest that records the source commit. The result is open (its other fields pass through,
+outside the contract); a claim and the job context are closed.
+
+**Stability.** Like the catalog contract, a published run-result contract never changes. A field a
+v1 validator would refuse, or a changed meaning of a named field, is a new contract major published
+beside v1; consumers vendor one exact released package and verify its manifest.
+
 ## Linking a Journey
 
 Set the Journey's `metadata.job` to a job id and `metadata.persona` to a persona id. A

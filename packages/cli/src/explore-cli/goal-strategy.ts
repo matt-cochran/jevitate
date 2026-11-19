@@ -15,7 +15,7 @@ import { GoalRunFlagError, successWhenFromFlags } from "../goal-run-flags.js";
 import { resolveCatalogDir } from "../catalog-api.js";
 import { exploreDoneCheckPolicy, jobCheckRunOptions, prepareJobDoneCheck, ProjectConfigError, type ExploreJobCheck } from "../explore-job-done-check.js";
 import { prepareJobContext, type PreparedJobContext } from "../explore-job-context.js";
-import { claimCheckReader, evaluateClaims, evidenceFromTranscript, type ClaimResult } from "../explore-job-claims.js";
+import { claimCheckReader, claimVerdictFields, evaluateClaims, saveClaimVerdicts, evidenceFromTranscript, type ClaimResult } from "../explore-job-claims.js";
 import { readFileSync } from "node:fs";
 import type { DoneCheckPolicy } from "@jevitate/domain";
 import type { ExploreRunContext } from "./shared.js";
@@ -241,15 +241,11 @@ export async function runGoalStrategy(ctx: ExploreRunContext): Promise<void> {
         warn(`divergence: the run contradicts claim '${c.id}' of job '${jobContext.jobId}' (${c.basis}): ${c.statement} — triage it; it does not change the exit code\n`);
       }
     }
+    // One builder for both places the verdicts go: the saved result and the --json envelope.
+    const verdictFields = jobContext === undefined ? undefined : claimVerdictFields(jobContext, claims);
+    if (verdictFields !== undefined) saveClaimVerdicts(result.resultPath, verdictFields);
     const evidenced = await withEvidence(result);
-    emitExplore(
-      ok(
-        jobContext === undefined
-          ? evidenced
-          : { ...evidenced, jobContext: { job: jobContext.jobId, contentHash: jobContext.contentHash }, ...(claims === undefined ? {} : { claims }) },
-      ),
-      result.exitCode,
-    );
+    emitExplore(ok(verdictFields === undefined ? evidenced : { ...evidenced, ...verdictFields }), result.exitCode);
   } catch (err) {
     if (emitJourneyFailure(err)) return;
     if (err instanceof UnauthorizedExploreTargetError) {

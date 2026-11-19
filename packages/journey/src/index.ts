@@ -21,3 +21,4 @@ export * from "./anchor-suggest.js";
 export * from "./proof-hash.js";
 export * from "./handoff.js";
 export * from "./done-check.js";
+export * from "./run-result-claims.js";

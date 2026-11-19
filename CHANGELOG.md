@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file. The format is b
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version bump may include
 behaviour changes).
 
+## [0.32.1] – 2026-11-19
+
+### Added
+
+- **Run-result contract v1 for claim verdicts (#883).** `packages/cli/contracts/jevitate-run-result/v1/` publishes JSON Schemas, fixtures and a SHA-256 manifest for the claim-verdict part of an `explore --job <id> --job-context` result: `jobContext {job, contentHash}` and `claims[]` (`id`, `statement`, `verdict` confirmed|contradicted|not_observed, `basis` check|model|no-evidence|model-error, optional `reason`). It is generated from the runtime schema, for external tools that consume run results.
+
+### Changed
+
+- **Saved results carry claim verdicts (#883).** After claims are evaluated, the saved `<recording>.result.json` gets the same `jobContext` and `claims` as the `--json` envelope, so MCP `get_mission_result` returns them. Runs without `--job-context` are unchanged.
+
 ## [0.32.0] – 2026-11-18
 
 ### Added

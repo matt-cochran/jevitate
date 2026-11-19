@@ -1,7 +1,10 @@
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Answer, JudgmentPort, JudgmentState, Question } from "@jevitate/ai-core";
 import type { GuidanceClaim } from "@jevitate/journey";
-import { evaluateClaims, evidenceFromTranscript, type ClaimEvidence } from "./explore-job-claims.js";
+import { claimVerdictFields, evaluateClaims, evidenceFromTranscript, saveClaimVerdicts, type ClaimEvidence } from "./explore-job-claims.js";
 
 /** #874 — every guidance claim gets exactly one verdict after a `--job-context` run, with its basis. */
 
@@ -112,5 +115,48 @@ describe("evidenceFromTranscript", () => {
 
   it("an empty transcript is no evidence", () => {
     expect(evidenceFromTranscript([])).toBeNull();
+  });
+});
+
+describe("saveClaimVerdicts — the saved result gets the envelope's claim-verdict fields", () => {
+  const saved = { missionOutcome: "clean", exitCode: 0, result: { schemaVersion: 1, strategy: "goal", missionOutcome: "clean", exitCode: 0, resultPath: "x" } };
+  const fields = claimVerdictFields({ jobId: "invite", contentHash: "a".repeat(64) }, [{ id: "one-seat", statement: "an invite uses one free seat", verdict: "confirmed", basis: "check" }]);
+  const withFile = (fn: (path: string, dir: string) => void): void => {
+    const dir = mkdtempSync(join(tmpdir(), "jev-save-claims-"));
+    try {
+      const path = join(dir, "explore-1.result.json");
+      writeFileSync(path, `${JSON.stringify(saved, null, 2)}\n`);
+      fn(path, dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it("adds jobContext and claims to the saved result, keeping every other field", () => {
+    withFile((path) => {
+      saveClaimVerdicts(path, fields);
+      expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ ...saved, result: { ...saved.result, ...fields } });
+    });
+  });
+
+  it("keeps the journal's formatting (two-space JSON, trailing newline)", () => {
+    withFile((path) => {
+      saveClaimVerdicts(path, fields);
+      expect(readFileSync(path, "utf8")).toBe(`${JSON.stringify({ ...saved, result: { ...saved.result, ...fields } }, null, 2)}\n`);
+    });
+  });
+
+  it("writes through a temp file and a rename: no temp file is left behind", () => {
+    withFile((path, dir) => {
+      saveClaimVerdicts(path, fields);
+      expect(readdirSync(dir)).toEqual(["explore-1.result.json"]);
+    });
+  });
+
+  it("a saved file without a result object is refused, not overwritten", () => {
+    withFile((path) => {
+      writeFileSync(path, "[]\n");
+      expect(() => saveClaimVerdicts(path, fields)).toThrow(/not a saved run result/);
+    });
   });
 });
