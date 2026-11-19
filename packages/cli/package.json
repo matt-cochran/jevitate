@@ -81,6 +81,7 @@
   "scripts": {
     "build": "node scripts/generate-build-info.mjs && tsc --build",
     "bundle": "node ./build.mjs",
-    "contract:generate": "pnpm --filter @jevitate/journey build && node scripts/generate-jevitate-catalog-contract.mjs"
+    "contract:generate": "pnpm --filter @jevitate/journey build && node scripts/generate-jevitate-catalog-contract.mjs",
+    "contract:generate:run-result": "pnpm --filter @jevitate/journey build && node scripts/generate-jevitate-run-result-contract.mjs"
   }
 }

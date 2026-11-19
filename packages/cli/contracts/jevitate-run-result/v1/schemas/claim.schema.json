@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "statement": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "confirmed",
+        "contradicted",
+        "not_observed"
+      ]
+    },
+    "basis": {
+      "type": "string",
+      "enum": [
+        "check",
+        "model",
+        "no-evidence",
+        "model-error"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "statement",
+    "verdict",
+    "basis"
+  ],
+  "additionalProperties": false,
+  "$id": "https://jevitate.com/schemas/run-result/v1/claim.schema.json",
+  "title": "Jevitate claim verdict v1"
+}
