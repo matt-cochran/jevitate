@@ -1,0 +1,61 @@
+{
+  "kind": "jevitate.run-result-contract",
+  "version": "1.0.0",
+  "package": "@jevitate/cli",
+  "source": {
+    "repository": "https://github.com/matt-cochran/jevitate.git",
+    "commit": "76c6b8cf7ee648dfbd3de8800dc4b2f81f8bd191",
+    "packageVersionAtCommit": "0.32.0"
+  },
+  "compatibility": {
+    "jsonEnvelopeVersion": 1,
+    "resultSchemaVersion": 1
+  },
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 2420,
+      "sha256": "0ea719994063feaa2c2f7c89b8badbe35f7e647075032ccb67c5ad716fb48eb0"
+    },
+    {
+      "path": "fixtures/invalid/claim-missing-basis.json",
+      "bytes": 385,
+      "sha256": "7b19deb06bf8a077e947a098d1c963c79799f8a943c7695f6955d1d156cbb68e"
+    },
+    {
+      "path": "fixtures/invalid/claim-unknown-field.json",
+      "bytes": 438,
+      "sha256": "ace174f8a643ca6c25d414a68cd5be9e32b34fcb208f287c4b69fbf8d2006ef9"
+    },
+    {
+      "path": "fixtures/invalid/claim-unknown-verdict.json",
+      "bytes": 421,
+      "sha256": "93e2848f71231d34707c3ca91da312a6d3a2f8b698f684a424759b469f446245"
+    },
+    {
+      "path": "fixtures/valid/claims-with-other-result-fields.json",
+      "bytes": 493,
+      "sha256": "0e88c2c130a391d3ecae54af4c4bd1c8604ed3ec3a70af01f8f7c35a20455c9d"
+    },
+    {
+      "path": "fixtures/valid/claims.json",
+      "bytes": 1591,
+      "sha256": "15aa50a7583d12e85ac9a250741c26b21dd84bc9f3e59f81a7be5476ff9620ff"
+    },
+    {
+      "path": "fixtures/valid/no-claims.json",
+      "bytes": 229,
+      "sha256": "94f13591a0e2b0640964e00c890e123428cddf1c622662c2bd3580ecced8aa22"
+    },
+    {
+      "path": "schemas/claim.schema.json",
+      "bytes": 853,
+      "sha256": "16ab3442dc2a8ab4b7a8e23a681b8f33ddcf13d9893bd6192e6e61af82844aa2"
+    },
+    {
+      "path": "schemas/run-result.schema.json",
+      "bytes": 2474,
+      "sha256": "2b785a0260f12bc6126be654f1ed2435d18681f64677a23e7d21468b84fc3d3e"
+    }
+  ]
+}
