@@ -4,7 +4,7 @@
   "package": "@jevitate/cli",
   "source": {
     "repository": "https://github.com/matt-cochran/jevitate.git",
-    "commit": "76c6b8cf7ee648dfbd3de8800dc4b2f81f8bd191",
+    "commit": "37536ecd4579ae2bbef10efc68b24c0546ba4d60",
     "packageVersionAtCommit": "0.32.0"
   },
   "compatibility": {
@@ -14,8 +14,8 @@
   "files": [
     {
       "path": "README.md",
-      "bytes": 2420,
-      "sha256": "0ea719994063feaa2c2f7c89b8badbe35f7e647075032ccb67c5ad716fb48eb0"
+      "bytes": 2678,
+      "sha256": "eb0a7d149504547833197f265d49d3dfbfddeac7f46dc2b579d39661e92e4e4b"
     },
     {
       "path": "fixtures/invalid/claim-missing-basis.json",
@@ -33,6 +33,16 @@
       "sha256": "93e2848f71231d34707c3ca91da312a6d3a2f8b698f684a424759b469f446245"
     },
     {
+      "path": "fixtures/invalid/saved-result-claim-unknown-verdict.json",
+      "bytes": 495,
+      "sha256": "fb8810fc686d9ce45a1236e1f3b87da8e85732432c50f4b0086c8b43350f3a02"
+    },
+    {
+      "path": "fixtures/invalid/saved-result-unknown-field.json",
+      "bytes": 1681,
+      "sha256": "e3eecf85a7642e127d7d3a06b030a5c26e5f1aeb8c3bf415465d82652dc21fc1"
+    },
+    {
       "path": "fixtures/valid/claims-with-other-result-fields.json",
       "bytes": 493,
       "sha256": "0e88c2c130a391d3ecae54af4c4bd1c8604ed3ec3a70af01f8f7c35a20455c9d"
@@ -48,6 +58,16 @@
       "sha256": "94f13591a0e2b0640964e00c890e123428cddf1c622662c2bd3580ecced8aa22"
     },
     {
+      "path": "fixtures/valid/saved-result-no-claims.json",
+      "bytes": 303,
+      "sha256": "59a7cc3df2396f7fe34ffaa5d5a25ae4ed04586069611d00554d45eecac13850"
+    },
+    {
+      "path": "fixtures/valid/saved-result.json",
+      "bytes": 1665,
+      "sha256": "4df5c2afabf61557d11cb177923aba552293773b14554ac619b81d889f9ce4d9"
+    },
+    {
       "path": "schemas/claim.schema.json",
       "bytes": 853,
       "sha256": "16ab3442dc2a8ab4b7a8e23a681b8f33ddcf13d9893bd6192e6e61af82844aa2"
@@ -56,6 +76,11 @@
       "path": "schemas/run-result.schema.json",
       "bytes": 2474,
       "sha256": "2b785a0260f12bc6126be654f1ed2435d18681f64677a23e7d21468b84fc3d3e"
+    },
+    {
+      "path": "schemas/saved-result.schema.json",
+      "bytes": 2689,
+      "sha256": "0814a1b2315cf64af623424cd9f0d8678a166e85862d3b56f68da258e1bf51bb"
     }
   ]
 }

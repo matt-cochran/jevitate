@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "missionOutcome": {
+      "type": "string",
+      "enum": [
+        "clean",
+        "defects-found",
+        "hang",
+        "intermittent",
+        "inconclusive",
+        "crashed"
+      ]
+    },
+    "exitCode": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "result": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "number",
+          "const": 1
+        },
+        "strategy": {
+          "type": "string",
+          "const": "goal"
+        },
+        "jobContext": {
+          "type": "object",
+          "properties": {
+            "job": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+            },
+            "contentHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "job",
+            "contentHash"
+          ],
+          "additionalProperties": false
+        },
+        "claims": {
+          "maxItems": 20,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+              },
+              "statement": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              },
+              "verdict": {
+                "type": "string",
+                "enum": [
+                  "confirmed",
+                  "contradicted",
+                  "not_observed"
+                ]
+              },
+              "basis": {
+                "type": "string",
+                "enum": [
+                  "check",
+                  "model",
+                  "no-evidence",
+                  "model-error"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "statement",
+              "verdict",
+              "basis"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "strategy",
+        "jobContext"
+      ],
+      "additionalProperties": {}
+    }
+  },
+  "required": [
+    "missionOutcome",
+    "exitCode",
+    "result"
+  ],
+  "additionalProperties": false,
+  "$id": "https://jevitate.com/schemas/run-result/v1/saved-result.schema.json",
+  "title": "Jevitate saved run result v1 (claim verdicts)"
+}

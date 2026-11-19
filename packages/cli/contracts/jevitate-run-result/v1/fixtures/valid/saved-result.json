@@ -1,0 +1,65 @@
+{
+  "missionOutcome": "clean",
+  "exitCode": 0,
+  "result": {
+    "schemaVersion": 1,
+    "strategy": "goal",
+    "jobContext": {
+      "job": "invite",
+      "contentHash": "3f1c0a9e5b7d2c4e6f8a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e"
+    },
+    "claims": [
+      {
+        "id": "invite-pending",
+        "statement": "a new invite shows as Pending",
+        "verdict": "confirmed",
+        "basis": "check"
+      },
+      {
+        "id": "invite-email",
+        "statement": "the invite email names the team",
+        "verdict": "contradicted",
+        "basis": "check"
+      },
+      {
+        "id": "invite-expiry",
+        "statement": "an invite expires after seven days",
+        "verdict": "not_observed",
+        "basis": "check"
+      },
+      {
+        "id": "one-seat",
+        "statement": "an invite uses one free seat",
+        "verdict": "confirmed",
+        "basis": "model"
+      },
+      {
+        "id": "owner-only",
+        "statement": "only an owner can invite",
+        "verdict": "contradicted",
+        "basis": "model"
+      },
+      {
+        "id": "resend",
+        "statement": "a pending invite can be resent",
+        "verdict": "not_observed",
+        "basis": "model"
+      },
+      {
+        "id": "audit-log",
+        "statement": "every invite is written to the audit log",
+        "verdict": "not_observed",
+        "basis": "no-evidence"
+      },
+      {
+        "id": "revoke",
+        "statement": "a pending invite can be revoked",
+        "verdict": "not_observed",
+        "basis": "model-error",
+        "reason": "the judgment call timed out"
+      }
+    ],
+    "missionOutcome": "clean",
+    "exitCode": 0
+  }
+}
