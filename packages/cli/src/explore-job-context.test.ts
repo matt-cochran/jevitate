@@ -21,7 +21,11 @@ vi.mock("./explore-goal.js", async (importOriginal) => {
     ...real,
     runExploration: vi.fn(async (opts: RunExplorationOptions): Promise<RunExplorationResult> => {
       calls.push(opts);
+      // A real run's journal writes its result before the claims are evaluated (the CLI adds them to it).
+      const resultPath = join(dir, `explore-${calls.length}.result.json`);
+      writeFileSync(resultPath, `${JSON.stringify({ missionOutcome: "clean", exitCode: 0, result: { strategy: "goal", resultPath } }, null, 2)}\n`);
       return {
+        resultPath,
         goalOutcome: "succeeded",
         outcome: "succeeded",
         defectOutcome: { status: "none", byKind: {} },

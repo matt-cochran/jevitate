@@ -1343,7 +1343,7 @@
   VisualVerdict: interface
   waitForOutcome: function
 
-# @jevitate/journey (346 exports)
+# @jevitate/journey (358 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1414,6 +1414,12 @@
   checkJobStory: function
   checkPersona: function
   checkStatement: function
+  CLAIM_BASES: variable
+  CLAIM_VERDICTS: variable
+  ClaimBasis: type-alias
+  ClaimResult: type-alias
+  ClaimResultSchema: variable
+  ClaimVerdict: type-alias
   classifyHandback: function
   classifyReplay: function
   controlCanChangeVerdict: function
@@ -1656,7 +1662,13 @@
   ReviewVerifySchema: variable
   ReviewWriteRequestSchema: variable
   runDeclaredTargetedProof: function
+  RunJobContext: type-alias
+  RunJobContextSchema: variable
+  RunResultClaimVerdicts: type-alias
+  RunResultClaimVerdictsEnvelopeSchema: variable
+  RunResultClaimVerdictsSchema: variable
   runTargetedProof: function
+  SavedRunResultClaimVerdictsSchema: variable
   secretNamedValues: function
   secretParamNames: function
   secretParamValues: function
