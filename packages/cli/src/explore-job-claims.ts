@@ -1,5 +1,5 @@
 import type { Answer, JudgmentPort } from "@jevitate/ai-core";
-import { isDoneCheckIssues, parseDoneCheck, type DoneCheckSpec, type GuidanceClaim } from "@jevitate/journey";
+import { CLAIM_VERDICTS, isDoneCheckIssues, parseDoneCheck, type ClaimResult, type ClaimVerdict, type DoneCheckSpec, type GuidanceClaim, type RunResultClaimVerdicts } from "@jevitate/journey";
 import type { BrowserPort as SessionPort } from "@jevitate/playwright";
 import { PlaywrightDoneCheckPort } from "./journey-done-check-hook.js";
 import { readDoneCheck } from "./journey-done-check.js";
@@ -17,16 +17,18 @@ import { readDoneCheck } from "./journey-done-check.js";
  *  - basis `no-evidence`: no check and nothing observed (or no model allowed): not_observed, no call.
  *  - basis `model-error`: the judgment call failed; recorded with its reason, never hidden.
  */
-export const CLAIM_VERDICTS = ["confirmed", "contradicted", "not_observed"] as const;
-export type ClaimVerdict = (typeof CLAIM_VERDICTS)[number];
-export type ClaimBasis = "check" | "model" | "no-evidence" | "model-error";
+export type { ClaimResult } from "@jevitate/journey";
 
-export interface ClaimResult {
-  readonly id: string;
-  readonly statement: string;
-  readonly verdict: ClaimVerdict;
-  readonly basis: ClaimBasis;
-  readonly reason?: string;
+/**
+ * The claim-verdict fields a `--job-context` run adds to its result (`jobContext`, and `claims`
+ * when the job has any), typed by the published run-result contract's source schema
+ * (`RunResultClaimVerdictsSchema`, @jevitate/journey).
+ */
+export function claimVerdictFields(
+  job: { readonly jobId: string; readonly contentHash: string },
+  claims: readonly ClaimResult[] | undefined,
+): Pick<RunResultClaimVerdicts, "jobContext" | "claims"> {
+  return { jobContext: { job: job.jobId, contentHash: job.contentHash }, ...(claims === undefined ? {} : { claims: [...claims] }) };
 }
 
 /** What the run observed, for model-judged claims: the pages it saw and the controls on them. */

@@ -15,7 +15,7 @@ import { GoalRunFlagError, successWhenFromFlags } from "../goal-run-flags.js";
 import { resolveCatalogDir } from "../catalog-api.js";
 import { exploreDoneCheckPolicy, jobCheckRunOptions, prepareJobDoneCheck, ProjectConfigError, type ExploreJobCheck } from "../explore-job-done-check.js";
 import { prepareJobContext, type PreparedJobContext } from "../explore-job-context.js";
-import { claimCheckReader, evaluateClaims, evidenceFromTranscript, type ClaimResult } from "../explore-job-claims.js";
+import { claimCheckReader, claimVerdictFields, evaluateClaims, evidenceFromTranscript, type ClaimResult } from "../explore-job-claims.js";
 import { readFileSync } from "node:fs";
 import type { DoneCheckPolicy } from "@jevitate/domain";
 import type { ExploreRunContext } from "./shared.js";
@@ -246,7 +246,7 @@ export async function runGoalStrategy(ctx: ExploreRunContext): Promise<void> {
       ok(
         jobContext === undefined
           ? evidenced
-          : { ...evidenced, jobContext: { job: jobContext.jobId, contentHash: jobContext.contentHash }, ...(claims === undefined ? {} : { claims }) },
+          : { ...evidenced, ...claimVerdictFields(jobContext, claims) },
       ),
       result.exitCode,
     );
