@@ -1,6 +1,9 @@
 import type { Answer, JudgmentPort } from "@jevitate/ai-core";
 import { CLAIM_VERDICTS, isDoneCheckIssues, parseDoneCheck, type ClaimResult, type ClaimVerdict, type DoneCheckSpec, type GuidanceClaim, type RunResultClaimVerdicts } from "@jevitate/journey";
 import type { BrowserPort as SessionPort } from "@jevitate/playwright";
+import { randomUUID } from "node:crypto";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { PlaywrightDoneCheckPort } from "./journey-done-check-hook.js";
 import { readDoneCheck } from "./journey-done-check.js";
 
@@ -29,6 +32,32 @@ export function claimVerdictFields(
   claims: readonly ClaimResult[] | undefined,
 ): Pick<RunResultClaimVerdicts, "jobContext" | "claims"> {
   return { jobContext: { job: job.jobId, contentHash: job.contentHash }, ...(claims === undefined ? {} : { claims: [...claims] }) };
+}
+
+/**
+ * Adds the claim-verdict fields to a run's saved `<recording>.result.json` (written by the mission
+ * journal before the claims were evaluated), so the saved `result` carries exactly what the `--json`
+ * envelope's `data` does. Written through a temp file in the same directory and a rename, keeping
+ * the journal's formatting. A file that is not a saved run result is refused, never overwritten.
+ */
+export function saveClaimVerdicts(resultPath: string, fields: Pick<RunResultClaimVerdicts, "jobContext" | "claims">): void {
+  const saved: unknown = JSON.parse(readFileSync(resultPath, "utf8"));
+  if (!isPlainObject(saved) || !isPlainObject(saved.result)) {
+    throw new Error(`${resultPath} is not a saved run result ({missionOutcome, exitCode, result})`);
+  }
+  const updated = { ...saved, result: { ...saved.result, ...fields } };
+  const tmp = join(dirname(resultPath), `.${basename(resultPath)}.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(tmp, `${JSON.stringify(updated, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+    renameSync(tmp, resultPath);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 /** What the run observed, for model-judged claims: the pages it saw and the controls on them. */

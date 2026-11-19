@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MISSION_RESULT_SCHEMA_VERSION } from "@jevitate/domain";
-import { ClaimResultSchema, RunResultClaimVerdictsEnvelopeSchema, RunResultClaimVerdictsSchema } from "@jevitate/journey";
+import { ClaimResultSchema, RunResultClaimVerdictsEnvelopeSchema, RunResultClaimVerdictsSchema, SavedRunResultClaimVerdictsSchema } from "@jevitate/journey";
 import Ajv2020 from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -27,10 +27,16 @@ const generated = (schema: Parameters<typeof z.toJSONSchema>[0], id: string, tit
 const validators = () => {
   const Ajv = Ajv2020 as unknown as typeof Ajv2020.default;
   const ajv = new Ajv({ allErrors: true, strict: false, validateFormats: false });
-  return { envelope: ajv.compile(read(join(SCHEMAS, "run-result.schema.json"))), claim: ajv.compile(read(join(SCHEMAS, "claim.schema.json"))) };
+  return {
+    envelope: ajv.compile(read(join(SCHEMAS, "run-result.schema.json"))),
+    saved: ajv.compile(read(join(SCHEMAS, "saved-result.schema.json"))),
+    claim: ajv.compile(read(join(SCHEMAS, "claim.schema.json"))),
+  };
 };
 const VALID = ["claims.json", "no-claims.json", "claims-with-other-result-fields.json"];
 const INVALID = ["claim-unknown-verdict.json", "claim-missing-basis.json", "claim-unknown-field.json"];
+const VALID_SAVED = ["saved-result.json", "saved-result-no-claims.json"];
+const INVALID_SAVED = ["saved-result-claim-unknown-verdict.json", "saved-result-unknown-field.json"];
 
 describe("the published Jevitate run-result contract v1 (claim verdicts)", () => {
   it("has an exact manifest for every published contract file", () => {
@@ -60,6 +66,32 @@ describe("the published Jevitate run-result contract v1 (claim verdicts)", () =>
   it("publishes the exact run-result and claim schemas implemented by the runtime", () => {
     expect(read(join(SCHEMAS, "run-result.schema.json"))).toEqual(generated(RunResultClaimVerdictsEnvelopeSchema, "run-result.schema.json", "Jevitate run result v1 (claim verdicts)"));
     expect(read(join(SCHEMAS, "claim.schema.json"))).toEqual(generated(ClaimResultSchema, "claim.schema.json", "Jevitate claim verdict v1"));
+  });
+
+  it("publishes the exact saved-result schema implemented by the runtime", () => {
+    expect(read(join(SCHEMAS, "saved-result.schema.json"))).toEqual(generated(SavedRunResultClaimVerdictsSchema, "saved-result.schema.json", "Jevitate saved run result v1 (claim verdicts)"));
+  });
+
+  it.each(VALID_SAVED)("accepts the valid saved-result fixture %s", (name) => {
+    expect(validators().saved(read(join(FIXTURES, "valid", name)))).toBe(true);
+  });
+
+  it.each(VALID_SAVED)("the runtime schema accepts the valid saved-result fixture %s", (name) => {
+    expect(SavedRunResultClaimVerdictsSchema.safeParse(read(join(FIXTURES, "valid", name))).success).toBe(true);
+  });
+
+  it.each(INVALID_SAVED)("refuses the invalid saved-result fixture %s", (name) => {
+    expect(validators().saved(read(join(FIXTURES, "invalid", name)))).toBe(false);
+  });
+
+  it.each(INVALID_SAVED)("the runtime schema refuses the invalid saved-result fixture %s", (name) => {
+    expect(SavedRunResultClaimVerdictsSchema.safeParse(read(join(FIXTURES, "invalid", name))).success).toBe(false);
+  });
+
+  it("the saved result holds the same claim-verdict fields as the envelope's data", () => {
+    const saved = read(join(FIXTURES, "valid/saved-result.json")).result;
+    const envelope = read(join(FIXTURES, "valid/claims.json")).data;
+    expect({ jobContext: saved.jobContext, claims: saved.claims }).toEqual({ jobContext: envelope.jobContext, claims: envelope.claims });
   });
 
   it("the contract's envelope and result versions are the ones the CLI emits", () => {

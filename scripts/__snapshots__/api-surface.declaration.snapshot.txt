@@ -1343,7 +1343,7 @@
   VisualVerdict: interface
   waitForOutcome: function
 
-# @jevitate/journey (357 exports)
+# @jevitate/journey (358 exports)
   AcceptedFindings: interface
   AcceptedFindingsSchema: variable
   addAnchor: function
@@ -1668,6 +1668,7 @@
   RunResultClaimVerdictsEnvelopeSchema: variable
   RunResultClaimVerdictsSchema: variable
   runTargetedProof: function
+  SavedRunResultClaimVerdictsSchema: variable
   secretNamedValues: function
   secretParamNames: function
   secretParamValues: function

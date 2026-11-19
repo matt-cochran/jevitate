@@ -853,7 +853,7 @@
   textIncludesCI: function
   waitForOutcome: function
 
-# @jevitate/journey (216 exports)
+# @jevitate/journey (217 exports)
   ANCHORED_STRATEGIES: array
   ANCHOR_BOUNDARIES: array
   ANCHOR_NAME_MAX: const (number)
@@ -960,6 +960,7 @@
   RunResultClaimVerdictsEnvelopeSchema: object
   RunResultClaimVerdictsSchema: object
   SWEEP_MODES: array
+  SavedRunResultClaimVerdictsSchema: object
   TARGET_OPS: array
   TARGET_UNITS: array
   addAnchor: function

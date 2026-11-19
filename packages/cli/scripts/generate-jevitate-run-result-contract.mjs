@@ -3,7 +3,7 @@ import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync }
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { ClaimResultSchema, RunResultClaimVerdictsEnvelopeSchema } from "../../journey/dist/index.js";
+import { ClaimResultSchema, RunResultClaimVerdictsEnvelopeSchema, SavedRunResultClaimVerdictsSchema } from "../../journey/dist/index.js";
 
 // The run-result contract v1: the claim-verdict part of an `explore --job <id> --job-context` result,
 // generated from its runtime source of truth (@jevitate/journey `run-result-claims.ts`).
@@ -79,25 +79,30 @@ const readme = [
   "",
   "## Where the fields are",
   "",
-  "The command prints one JSON envelope on stdout, `{v, ok, data}`, described by",
-  "`schemas/run-result.schema.json`:",
+  "The verdicts are in two places, with the same fields, built by one function:",
   "",
-  "- `v` is the envelope version (1); `ok` is `true` for a run that produced a result.",
-  "- `data.schemaVersion` is the result schema version (1) and `data.strategy` is `goal`.",
-  "- `data.jobContext` is `{job, contentHash}`: the catalog job id the run was told about and the",
-  "  content hash of the approved job it used, so a verdict is placed on that exact job version.",
-  "- `data.claims[]` holds one verdict per `guidance.claims[]` entry of that job, in order",
+  "- The JSON envelope the command prints on stdout, `{v, ok, data}`",
+  "  (`schemas/run-result.schema.json`). `v` is the envelope version (1); `ok` is `true` for a run that",
+  "  produced a result.",
+  "- The saved `<recording>.result.json`, `{missionOutcome, exitCode, result}`",
+  "  (`schemas/saved-result.schema.json`), whose path the envelope gives as `data.resultPath`. `result`",
+  "  holds the same fields as the envelope's `data`.",
+  "",
+  "In both, the result (`data` or `result`) carries:",
+  "",
+  "- `schemaVersion`, the result schema version (1), and `strategy`, which is `goal`.",
+  "- `jobContext`, `{job, contentHash}`: the catalog job id the run was told about and the content hash",
+  "  of the approved job it used, so a verdict is placed on that exact job version.",
+  "- `claims[]`, one verdict per `guidance.claims[]` entry of that job, in order",
   "  (`schemas/claim.schema.json`): `id` and `statement` as the job states them, `verdict`",
   "  (`confirmed`, `contradicted` or `not_observed`), `basis` (`check`, `model`, `no-evidence` or",
   "  `model-error`) and, with `model-error`, a `reason`. `claims` is absent when the job has no claims.",
   "",
-  "`data` is open: every other field of the result passes through and is outside this contract. A claim",
-  "and the job context are closed: a field this version does not name is refused. A `contradicted`",
-  "claim is a divergence between a document and the product for a person to triage; it never changes",
-  "the run's exit code. The result carries no run start time.",
-  "",
-  "The claim verdicts are in the emitted envelope only. The persisted `<recording>.result.json` is",
-  "written before the claims are evaluated and does not hold `jobContext` or `claims`.",
+  "A run without `--job-context` carries neither `jobContext` nor `claims`, and its saved result is",
+  "written once, unchanged. The result is open: every other field passes through and is outside this",
+  "contract. A claim and the job context are closed: a field this version does not name is refused. A",
+  "`contradicted` claim is a divergence between a document and the product for a person to triage; it",
+  "never changes the run's exit code. The result carries no run start time.",
   "",
   "## Stability",
   "",
@@ -114,6 +119,7 @@ const readme = [
 ].join("\n");
 write("README.md", readme);
 write("schemas/run-result.schema.json", generatedSchema(RunResultClaimVerdictsEnvelopeSchema, "run-result.schema.json", "Jevitate run result v1 (claim verdicts)"));
+write("schemas/saved-result.schema.json", generatedSchema(SavedRunResultClaimVerdictsSchema, "saved-result.schema.json", "Jevitate saved run result v1 (claim verdicts)"));
 write("schemas/claim.schema.json", generatedSchema(ClaimResultSchema, "claim.schema.json", "Jevitate claim verdict v1"));
 // Every verdict with each basis that can decide it (no-evidence and model-error only decide not_observed).
 write("fixtures/valid/claims.json", envelope({ claims }));
@@ -121,6 +127,12 @@ write("fixtures/valid/claims.json", envelope({ claims }));
 write("fixtures/valid/no-claims.json", envelope({}));
 // `data` is open: the result's other fields pass through.
 write("fixtures/valid/claims-with-other-result-fields.json", envelope({ missionOutcome: "clean", goalOutcome: "succeeded", exitCode: 0, claims: claims.slice(0, 1) }));
+// The saved `<recording>.result.json` of the same runs: the verdict beside the same result fields.
+const saved = (env) => ({ missionOutcome: "clean", exitCode: 0, result: { ...env.data, missionOutcome: "clean", exitCode: 0 } });
+write("fixtures/valid/saved-result.json", saved(envelope({ claims })));
+write("fixtures/valid/saved-result-no-claims.json", saved(envelope({})));
+write("fixtures/invalid/saved-result-claim-unknown-verdict.json", saved(envelope({ claims: [{ ...claims[0], verdict: "partially_confirmed" }] })));
+write("fixtures/invalid/saved-result-unknown-field.json", { ...saved(envelope({ claims })), typo: true });
 write("fixtures/invalid/claim-unknown-verdict.json", envelope({ claims: [{ ...claims[0], verdict: "partially_confirmed" }] }));
 write("fixtures/invalid/claim-missing-basis.json", envelope({ claims: [{ id: claims[0].id, statement: claims[0].statement, verdict: claims[0].verdict }] }));
 write("fixtures/invalid/claim-unknown-field.json", envelope({ claims: [{ ...claims[0], confidence: 0.9 }] }));

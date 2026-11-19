@@ -1,10 +1,11 @@
 import { z } from "zod";
-import { MISSION_RESULT_SCHEMA_VERSION } from "@jevitate/domain";
+import { MISSION_RESULT_SCHEMA_VERSION, RESULT_MISSION_OUTCOMES } from "@jevitate/domain";
 import { CATALOG_ID_RE } from "./catalog-schema.js";
 
 /**
  * #874: the claim-verdict part of a goal run's result — what `explore --job <id> --job-context`
- * adds to the `--json` envelope's `data`, and the source of truth of the published run-result
+ * adds to the `--json` envelope's `data` and to the saved `<recording>.result.json`'s `result` (the
+ * same fields, from one builder), and the source of truth of the published run-result
  * contract v1 (`packages/cli/contracts/jevitate-run-result/v1/`).
  *
  *  - `jobContext` — the catalog job the run was told about (`job`, its id) and the content hash of
@@ -65,5 +66,18 @@ export const RunResultClaimVerdictsEnvelopeSchema = z
     v: z.literal(1),
     ok: z.literal(true),
     data: RunResultClaimVerdictsSchema,
+  })
+  .strict();
+
+/**
+ * The saved `<recording>.result.json` of a run that produced claim verdicts: the verdict beside the
+ * result (`missionOutcome`, `exitCode`) and the result itself, which carries the same claim-verdict
+ * fields as the envelope's `data`.
+ */
+export const SavedRunResultClaimVerdictsSchema = z
+  .object({
+    missionOutcome: z.enum(RESULT_MISSION_OUTCOMES),
+    exitCode: z.number().int().nonnegative(),
+    result: RunResultClaimVerdictsSchema,
   })
   .strict();
